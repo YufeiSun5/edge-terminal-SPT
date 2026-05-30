@@ -1,0 +1,19 @@
+---
+alwaysApply: true
+globs: ["**/*"]
+---
+
+# Core AI Entry
+
+Read root `AGENTS.md` first, then `MEMORY.md` and `AI_BOARD.md`.
+
+`AI_BOARD.md` is the only active collaboration board. Do not put open or blocked work under `.ai/docs/`.
+
+Use `.ai/instructions/` as the source of detailed rules:
+
+- `.ai/instructions/ai-workflow.md`
+- `.ai/instructions/backend-go-edge.md`
+- `.ai/instructions/frontend-electron-react.md`
+- `.ai/instructions/testing-smoke.md`
+
+Historical database sync is handled by external database sync software. Application code owns realtime SSE/WS and method/control RabbitMQ or HTTP boundaries only after confirmation.

@@ -1,0 +1,45 @@
+backend/dist/
+backend/bin/
+backend/tmp/
+backend/logs/
+backend/*.exe
+backend/*.exe~
+*.exe
+*.exe~
+backend/*coverage*
+backend/all-coverage.out
+backend/backend_pid_*.txt
+backend/backend-runtime.*.log
+backend/perfsetup_*.json
+backend/perfstats_*.json
+backend/mqttperf_*.json
+node_modules/
+dist/
+release/
+output/
+desktop/dist/
+desktop/output/
+desktop/release*/
+desktop/tmp-*.log
+.env
+.env.local
+*.log
+*.out
+
+# Local runtime configs with credentials.
+backend/configs/config.json
+backend/configs/config.*.json
+!backend/configs/config.example.json
+
+# Reference or non-edge-terminal projects.
+react-design-prototype/
+runzhong/
+SPD_JGHJ 数据采集与任务/
+CR试验室 智能检测系统 需求文件更新，及向供应商询价。/
+3d模型暂存/
+
+# Raw source/reference documents and archives.
+*.zip
+*.docx
+*.xlsx
+output/

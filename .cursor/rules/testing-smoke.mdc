@@ -1,0 +1,15 @@
+---
+alwaysApply: false
+globs: ["backend/**/*_test.go", "tests/**/*", "scripts/**/*", "*.ps1", "*.bat", "*.md"]
+---
+
+# Testing Smoke
+
+Mother rule: `.ai/instructions/testing-smoke.md`.
+
+Read `MEMORY.md` and `AI_BOARD.md` before editing.
+
+- Record commands and pass/fail/skipped reasons.
+- Do not delete or skip tests to manufacture a pass.
+- Prefer `go test ./...` and `go build ./cmd/edge-backend` for backend gates.
+- Realtime/control changes need smoke evidence or an explicit blocked reason.

@@ -1,0 +1,47 @@
+{
+  "app": {
+    "http_addr": "127.0.0.1:18080",
+    "logic_workers": 8,
+    "store_workers": 4,
+    "history_batch": 100
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "root",
+    "name": "spindle_edge",
+    "auto_migrate": true
+  },
+  "auth": {
+    "jwt_secret": "change-me-before-release",
+    "access_token_ttl_seconds": 1800,
+    "sso_ticket_ttl_seconds": 60,
+    "edge_instance_id": "edge-local",
+    "main_site_url": "",
+    "bootstrap_admin_username": "admin",
+    "bootstrap_admin_password": "change-me-before-release",
+    "service_clients": []
+  },
+  "gateways": [
+    {
+      "id": 1,
+      "name": "default-kingiot-kio",
+      "broker": "tcp://127.0.0.1:1883",
+      "client_id": "edge-local-kio",
+      "username": "",
+      "password": "",
+      "topic": "datachange_S_KIO_Project",
+      "qos": 2,
+      "parser_type": "kingiot_kio",
+      "kio_client_id": "S_KIO_Project",
+      "kio_writer": "edge-test",
+      "kio_write_username": "",
+      "kio_write_password": "",
+      "setdata_topic": "setdata_S_KIO_Project",
+      "write_result_topic": "setdata_result_S_KIO_Project_edge-test",
+      "query_all_topic": "Query_AllKIOTags_S_KIO_Project",
+      "enabled": true
+    }
+  ]
+}

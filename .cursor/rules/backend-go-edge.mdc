@@ -1,0 +1,15 @@
+---
+alwaysApply: false
+globs: ["backend/**/*.go", "backend/**/*.sql", "backend/**/*.json", "backend/**/*.ps1", "backend/docs/**/*.md"]
+---
+
+# Backend Go Edge
+
+Mother rule: `.ai/instructions/backend-go-edge.md`.
+
+Read `MEMORY.md` and `AI_BOARD.md` before editing.
+
+- Keep MQTT callbacks lightweight and channel-based.
+- Keep devices as virtual business groups, not MQTT gateway children.
+- Do not implement application-layer historical sync without confirmed board scope.
+- API, DTO, schema, SSE/WS, RabbitMQ, or HTTP changes must update `AI_BOARD.md`.

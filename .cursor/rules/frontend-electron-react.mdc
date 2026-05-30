@@ -1,0 +1,15 @@
+---
+alwaysApply: false
+globs: ["desktop/**/*", "frontend/**/*", "package.json", "*.config.js", "*.config.ts"]
+---
+
+# Frontend Electron React
+
+Mother rule: `.ai/instructions/frontend-electron-react.md`.
+
+Read `MEMORY.md` and `AI_BOARD.md` before editing.
+
+- Build the edge desktop as an operational shell around the Go sidecar.
+- Do not access MySQL or RabbitMQ directly from frontend code.
+- Login, SSO, autostart, tray, health, page scope, and DTO changes must update `AI_BOARD.md`.
+- Keep user-facing copy ready for Chinese, English, and Japanese.

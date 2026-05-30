@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1347 696" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="centerBg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#1678b8" stop-opacity=".36"/>
+      <stop offset=".5" stop-color="#126da8" stop-opacity=".30"/>
+      <stop offset="1" stop-color="#0b6099" stop-opacity=".28"/>
+    </linearGradient>
+    <filter id="lineGlow" x="-8%" y="-160%" width="116%" height="420%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1347" height="696" fill="url(#centerBg)" opacity=".30"/>
+  <path d="M0 61h520c35 0 59-8 92-25l54-25c20-9 39-13 67-13h614" fill="none" stroke="#0a5f98" stroke-opacity=".28" stroke-width="9"/>
+  <path d="M0 59h520c34 0 59-8 91-25l54-25c20-9 39-13 67-13h615" fill="none" stroke="#24b6ee" stroke-opacity=".92" stroke-width="3" filter="url(#lineGlow)"/>
+  <path d="M0 56h520c34 0 58-7 90-23l54-25c19-9 39-13 67-13h616" fill="none" stroke="#ffffff" stroke-opacity=".62" stroke-width="1.35"/>
+  <path d="M0 64h520c35 0 60-8 93-25l54-25c19-9 39-13 67-13h613" fill="none" stroke="#ffffff" stroke-opacity=".22" stroke-width=".9"/>
+  <line x1="670" y1="88" x2="670" y2="688" stroke="#ffffff" stroke-opacity=".42" stroke-width="1.1"/>
+  <line x1="672" y1="88" x2="672" y2="688" stroke="#0a4d84" stroke-opacity=".12" stroke-width="2"/>
+  <path d="M0 516c76 14 151 37 190 88 30 39 89 67 182 92H0z" fill="#a9ecff" opacity=".14"/>
+  <circle cx="1102" cy="-35" r="118" fill="#b7f8ff" opacity=".12"/>
+  <rect x="1" y="1" width="1345" height="694" fill="none" stroke="#ffffff" stroke-opacity=".24" stroke-width="1"/>
+</svg>
