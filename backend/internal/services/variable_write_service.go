@@ -38,6 +38,7 @@ type VariableWriteInput struct {
 
 type VariableWriteResult struct {
 	VarID            int64           `json:"var_id"`
+	VarIDText        string          `json:"var_id_text"`
 	VarName          string          `json:"var_name"`
 	SourceType       string          `json:"source_type"`
 	ProjectID        *uint           `json:"project_id,omitempty"`
@@ -53,7 +54,7 @@ type VariableWriteResult struct {
 	AllowReentrant   bool            `json:"allow_reentrant"`
 	RequestID        string          `json:"request_id,omitempty"`
 	BrokerAccepted   bool            `json:"broker_accepted,omitempty"`
-	ProjectConfirmed bool            `json:"Project_confirmed,omitempty"`
+	ProjectConfirmed bool            `json:"project_confirmed,omitempty"`
 	KIO              *KIOWriteResult `json:"kio,omitempty"`
 }
 
@@ -110,6 +111,7 @@ func (s *VariableWriteService) Write(ctx context.Context, input VariableWriteInp
 	})
 	result := VariableWriteResult{
 		VarID:            tag.Config.VarID,
+		VarIDText:        strconv.FormatInt(tag.Config.VarID, 10),
 		VarName:          tag.Config.VarName,
 		SourceType:       tag.Config.SourceType,
 		ProjectID:        tag.Config.ProjectID,
@@ -162,6 +164,7 @@ func (s *VariableWriteService) writeVirtual(tag *models.Tag, input VariableWrite
 	}
 	return VariableWriteResult{
 		VarID:          tag.Config.VarID,
+		VarIDText:      strconv.FormatInt(tag.Config.VarID, 10),
 		VarName:        tag.Config.VarName,
 		SourceType:     tag.Config.SourceType,
 		ProjectID:      tag.Config.ProjectID,

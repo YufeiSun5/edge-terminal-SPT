@@ -17,20 +17,20 @@ type StorageRoutesHandler struct {
 }
 
 type storageRouteRequest struct {
-	ProjectID     uint    `json:"project_id"`
-	VarID         int64   `json:"var_id"`
-	RouteCode     string  `json:"route_code"`
-	StorageTarget string  `json:"storage_target"`
-	StorageTable  string  `json:"table_name"`
-	ColumnName    string  `json:"column_name"`
-	ColumnType    string  `json:"column_type"`
-	FormFieldKey  string  `json:"form_field_key"`
-	QueryAlias    string  `json:"query_alias"`
-	TriggerMode   string  `json:"trigger_mode"`
-	CycleMS       int     `json:"cycle_ms"`
-	Deadband      float64 `json:"deadband"`
-	StoreOnStart  *bool   `json:"store_on_start"`
-	Enabled       *bool   `json:"enabled"`
+	ProjectID     uint          `json:"project_id"`
+	VarID         flexibleInt64 `json:"var_id"`
+	RouteCode     string        `json:"route_code"`
+	StorageTarget string        `json:"storage_target"`
+	StorageTable  string        `json:"table_name"`
+	ColumnName    string        `json:"column_name"`
+	ColumnType    string        `json:"column_type"`
+	FormFieldKey  string        `json:"form_field_key"`
+	QueryAlias    string        `json:"query_alias"`
+	TriggerMode   string        `json:"trigger_mode"`
+	CycleMS       int           `json:"cycle_ms"`
+	Deadband      float64       `json:"deadband"`
+	StoreOnStart  *bool         `json:"store_on_start"`
+	Enabled       *bool         `json:"enabled"`
 }
 
 type storageRoutePatchRequest struct {
@@ -102,7 +102,7 @@ func (h *StorageRoutesHandler) create(c *gin.Context) {
 	}
 	route := models.StorageRoute{
 		ProjectID:     req.ProjectID,
-		VarID:         req.VarID,
+		VarID:         req.VarID.Int64(),
 		RouteCode:     req.RouteCode,
 		StorageTarget: req.StorageTarget,
 		StorageTable:  req.StorageTable,

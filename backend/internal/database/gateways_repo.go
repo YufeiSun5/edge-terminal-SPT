@@ -5,6 +5,7 @@ import (
 
 	"spindle-edge/backend/internal/models"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -66,5 +67,12 @@ func (r *Repository) UpdateGatewayConfig(id int, updates map[string]interface{})
 }
 
 func (r *Repository) DeleteGatewayConfig(id int) error {
-	return r.db.Delete(&models.GatewayConfig{}, "id = ?", id).Error
+	result := r.db.Delete(&models.GatewayConfig{}, "id = ?", id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

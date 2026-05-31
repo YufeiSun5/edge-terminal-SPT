@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
 
 type StorageRoute struct {
 	ID            uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
@@ -26,6 +30,17 @@ func (StorageRoute) TableName() string {
 	return "sys_storage_routes"
 }
 
+func (r StorageRoute) MarshalJSON() ([]byte, error) {
+	type alias StorageRoute
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(r),
+		VarIDText: strconv.FormatInt(r.VarID, 10),
+	})
+}
+
 type DetectionRunStorageRoute struct {
 	ID            uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TaskID        uint      `gorm:"column:task_id;index;not null" json:"task_id"`
@@ -49,4 +64,15 @@ type DetectionRunStorageRoute struct {
 
 func (DetectionRunStorageRoute) TableName() string {
 	return "detection_run_storage_routes"
+}
+
+func (r DetectionRunStorageRoute) MarshalJSON() ([]byte, error) {
+	type alias DetectionRunStorageRoute
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(r),
+		VarIDText: strconv.FormatInt(r.VarID, 10),
+	})
 }

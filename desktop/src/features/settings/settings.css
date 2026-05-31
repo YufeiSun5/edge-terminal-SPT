@@ -509,6 +509,12 @@
   gap: 12px;
 }
 
+.settings-log-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .settings-log-preview {
   min-height: 320px;
   max-height: 420px;
@@ -534,6 +540,37 @@
 .settings-log-preview::-webkit-scrollbar-thumb {
   border-radius: 4px;
   background: rgba(148, 163, 184, 0.35);
+}
+
+.settings-log-modal .ant-modal-content {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 18px;
+  background: rgba(248, 252, 255, 0.94);
+  box-shadow: 0 24px 80px rgba(35, 56, 88, 0.22);
+  backdrop-filter: blur(24px);
+}
+
+.settings-log-modal .ant-modal-body {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-log-modal-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.settings-log-preview-modal {
+  min-height: min(60vh, 620px);
+  max-height: min(60vh, 620px);
+  border-color: rgba(15, 23, 42, 0.14);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .settings-audit-card .ant-table {
@@ -678,6 +715,10 @@
   padding: 0 12px 12px;
 }
 
+.settings-variable-form-section > .settings-default-alarm-fields {
+  padding: 0 12px 12px;
+}
+
 .settings-form-grid .settings-form-wide {
   grid-column: 1 / -1;
 }
@@ -715,6 +756,24 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.settings-storage-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) auto max-content;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.64);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.46);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
+}
+
+.settings-storage-toolbar > span {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .settings-gateway-list {
@@ -922,6 +981,37 @@
   overflow: hidden;
 }
 
+.settings-users-layout {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 14px;
+  min-height: 0;
+}
+
+.settings-users-table-card,
+.settings-project-members-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.settings-project-members-card {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.26);
+}
+
+.settings-project-members-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-project-members-toolbar .ant-select {
+  width: 100%;
+}
+
 .settings-user-actions {
   display: flex;
   align-items: center;
@@ -956,6 +1046,16 @@
 
 .settings-modal-alert {
   margin-bottom: 14px;
+}
+
+.settings-apply-running-field {
+  margin: 0 0 10px;
+}
+
+.settings-apply-running-field .ant-checkbox-wrapper {
+  color: #22324a;
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .settings-link-button {
@@ -1141,6 +1241,27 @@
 
 .settings-database-alert {
   margin-top: 8px;
+}
+
+.settings-kio-remap-result {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.settings-kio-remap-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.settings-kio-remap-summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-reserved-box strong {

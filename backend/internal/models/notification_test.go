@@ -1,6 +1,8 @@
 package models
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,7 +22,7 @@ func TestRuntimeNotificationBuilders(t *testing.T) {
 		TestNo:       "T-7",
 		ProjectID:    2,
 		ProjectCode:  "AC-02",
-		VarID:        100,
+		VarID:        9212397624135540842,
 		VarName:      "temp",
 		DisplayName:  "Temperature",
 		AlarmType:    "above_h",
@@ -32,8 +34,15 @@ func TestRuntimeNotificationBuilders(t *testing.T) {
 		LastSeenAt:   at,
 	}
 	alarmNotification := RuntimeNotificationFromAlarm(NotificationAlarmLimitRecover, NotificationLevelInfo, alarm, map[string]any{"status": alarm.Status})
-	if alarmNotification.TargetType != NotificationTargetProject || alarmNotification.TargetID != "2" || alarmNotification.ProjectID != 2 || alarmNotification.TaskID != 7 || alarmNotification.VarID != 100 || alarmNotification.DisplayName != "Temperature" || alarmNotification.OccurredAt != at {
+	if alarmNotification.TargetType != NotificationTargetProject || alarmNotification.TargetID != "2" || alarmNotification.ProjectID != 2 || alarmNotification.TaskID != 7 || alarmNotification.VarID != 9212397624135540842 || alarmNotification.DisplayName != "Temperature" || alarmNotification.OccurredAt != at {
 		t.Fatalf("unexpected alarm notification: %+v", alarmNotification)
+	}
+	encoded, err := json.Marshal(alarmNotification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"var_id_text":"9212397624135540842"`) {
+		t.Fatalf("expected exact runtime notification var_id_text, body=%s", encoded)
 	}
 	enterNotification := RuntimeNotificationFromAlarm(NotificationAlarmLimitEnter, NotificationLevelWarning, alarm, nil)
 	if enterNotification.OccurredAt != firstSeen {

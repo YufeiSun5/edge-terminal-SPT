@@ -3,6 +3,7 @@ package models
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ type StoreTask struct {
 
 type TagSnapshot struct {
 	VarID         int64     `json:"var_id"`
+	VarIDText     string    `json:"var_id_text"`
 	GatewayID     int       `json:"gateway_id"`
 	SourceTopic   string    `json:"source_topic"`
 	SourcePath    string    `json:"source_path"`
@@ -240,6 +242,7 @@ func (t *Tag) Snapshot() TagSnapshot {
 	isString := isStringType(t.Config.DataType)
 	return TagSnapshot{
 		VarID:         t.Config.VarID,
+		VarIDText:     strconv.FormatInt(t.Config.VarID, 10),
 		GatewayID:     t.Config.GatewayID,
 		SourceTopic:   t.Config.SourceTopic,
 		SourcePath:    t.Config.SourcePath,

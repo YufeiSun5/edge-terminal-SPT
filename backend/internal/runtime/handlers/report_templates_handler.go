@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -105,7 +104,7 @@ func (h *ReportTemplatesHandler) patch(c *gin.Context) {
 	}
 	template, err := h.service.Update(id, updates)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, template)
@@ -118,11 +117,7 @@ func (h *ReportTemplatesHandler) delete(c *gin.Context) {
 		return
 	}
 	if err := h.service.Delete(id); err != nil {
-		if errors.Is(err, database.ErrReferenced) {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

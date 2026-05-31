@@ -130,6 +130,9 @@ func TestVariablesServiceBulkRemapKIOProjects(t *testing.T) {
 	if !dryRun.DryRun || dryRun.Matched != 2 || dryRun.Updated != 0 || dryRun.Skipped != 1 {
 		t.Fatalf("unexpected dry run result: %+v", dryRun)
 	}
+	if dryRun.Items[0].VarIDText == "" {
+		t.Fatalf("expected bulk remap result to include var_id_text: %+v", dryRun.Items[0])
+	}
 	if projects, err := repo.ListProjects(); err != nil || len(projects) != 0 {
 		t.Fatalf("dry run should not create projects len=%d err=%v", len(projects), err)
 	}
@@ -274,8 +277,12 @@ func TestVariableWriteServiceVirtualAndKIOPaths(t *testing.T) {
 	})
 	broker := &fakeKIOBroker{config: models.GatewayConfig{ID: 2, QOS: 1, KIOClientID: "client", KIOWriter: "writer", SetDataTopic: "setdata"}}
 	service := NewVariableWriteService(repo, tags, NewKIOWriteService(broker), nil)
-	if _, err := service.Write(context.Background(), VariableWriteInput{VarID: 10, Value: `{"command":"go"}`, Trigger: true}); err != nil {
+	virtualResult, err := service.Write(context.Background(), VariableWriteInput{VarID: 10, Value: `{"command":"go"}`, Trigger: true})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if virtualResult.VarIDText != "10" {
+		t.Fatalf("expected virtual write var_id_text, got %+v", virtualResult)
 	}
 	tag, _ := tags.Get(10)
 	if tag.RuntimeState().StrValue != `{"command":"go"}` {
@@ -284,6 +291,9 @@ func TestVariableWriteServiceVirtualAndKIOPaths(t *testing.T) {
 	result, err := service.Write(context.Background(), VariableWriteInput{VarID: 11, Value: 5.5, WaitAck: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if result.VarIDText != "11" {
+		t.Fatalf("expected kio write var_id_text, got %+v", result)
 	}
 	if !result.BrokerAccepted || !result.ProjectConfirmed || broker.publishedTopic != "setdata" || len(broker.values) != 1 || broker.values[0].Name != "SP" {
 		t.Fatalf("unexpected kio write result=%+v broker=%+v", result, broker)
@@ -481,6 +491,12 @@ func TestDetectionRunsServiceLifecycleAndNotes(t *testing.T) {
 	}
 	if status := HTTPStatusForError(database.ErrProjectAlreadyRunning); status != 409 {
 		t.Fatalf("unexpected status %d", status)
+	}
+	if status := HTTPStatusForError(gorm.ErrRecordNotFound); status != 404 {
+		t.Fatalf("record not found should map to 404, got %d", status)
+	}
+	if status := HTTPStatusForError(database.ErrReferenced); status != 409 {
+		t.Fatalf("referenced resource should map to 409, got %d", status)
 	}
 }
 

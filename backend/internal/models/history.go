@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
 
 type HistoryData struct {
 	ID          uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
@@ -21,4 +25,15 @@ type HistoryData struct {
 
 func (HistoryData) TableName() string {
 	return "rt_history_data"
+}
+
+func (h HistoryData) MarshalJSON() ([]byte, error) {
+	type alias HistoryData
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(h),
+		VarIDText: strconv.FormatInt(h.VarID, 10),
+	})
 }

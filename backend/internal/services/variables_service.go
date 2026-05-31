@@ -91,6 +91,7 @@ type BulkRemapKIOProjectsResult struct {
 
 type BulkRemapKIOProjectsResultItem struct {
 	VarID       int64  `json:"var_id"`
+	VarIDText   string `json:"var_id_text"`
 	RawName     string `json:"raw_name"`
 	OldVarName  string `json:"old_var_name"`
 	NewVarName  string `json:"new_var_name"`
@@ -163,6 +164,7 @@ func (s *VariablesService) BulkRemapKIOProjects(input BulkRemapKIOProjectsInput)
 			result.Skipped++
 			result.Items = append(result.Items, BulkRemapKIOProjectsResultItem{
 				VarID:     tag.VarID,
+				VarIDText: strconv.FormatInt(tag.VarID, 10),
 				RawName:   tag.RawName,
 				ProjectNo: projectNo,
 				Action:    "skipped",
@@ -177,6 +179,7 @@ func (s *VariablesService) BulkRemapKIOProjects(input BulkRemapKIOProjectsInput)
 		result.Matched++
 		item := BulkRemapKIOProjectsResultItem{
 			VarID:       tag.VarID,
+			VarIDText:   strconv.FormatInt(tag.VarID, 10),
 			RawName:     tag.RawName,
 			OldVarName:  tag.VarName,
 			NewVarName:  newVarName,

@@ -34,6 +34,13 @@
   border-radius: 999px;
 }
 
+.task-flows-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .task-flows-grid {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
@@ -209,6 +216,10 @@
   width: 180px;
 }
 
+.task-flow-template-select {
+  width: 260px;
+}
+
 .task-flow-form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -247,6 +258,11 @@
   gap: 8px;
 }
 
+.task-flow-param-list {
+  display: grid;
+  gap: 8px;
+}
+
 .task-flow-var-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 140px auto;
@@ -258,10 +274,109 @@
   margin-bottom: 0;
 }
 
+.task-flow-request-alert {
+  margin-bottom: 12px;
+}
+
+.task-flow-request-watch-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.task-flow-request-config-note {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(24, 144, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(24, 144, 255, 0.06);
+}
+
+.task-flow-request-config-note span {
+  color: rgba(0, 0, 0, 0.62);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-flow-request-row {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+}
+
+.task-flow-request-row.process {
+  grid-template-columns: minmax(160px, 1fr) 130px minmax(180px, 1fr) auto;
+}
+
+.task-flow-request-row.plc {
+  grid-template-columns: minmax(210px, 1.4fr) minmax(190px, 1fr) 110px minmax(140px, 0.8fr) 74px 86px 94px auto;
+}
+
+.task-flow-request-row .ant-form-item {
+  margin-bottom: 0;
+}
+
+.task-flow-param-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.task-flow-param-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.task-flow-param-field.wide {
+  grid-column: 1 / -1;
+}
+
+.task-flow-param-field label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-flow-param-field label span {
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-flow-param-field label b {
+  margin-left: 3px;
+  color: #dc2626;
+}
+
+.task-flow-param-field label small,
+.task-flow-param-field p {
+  margin: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+}
+
+.task-flow-param-control {
+  width: 100%;
+}
+
 .task-flow-code {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.task-flow-request-preview {
+  min-height: 180px;
+  background: rgba(15, 23, 42, 0.03);
 }
 
 .task-flows-page .ant-table-body::-webkit-scrollbar {

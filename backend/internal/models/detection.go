@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
 
 type DetectionTask struct {
 	ID                    uint                       `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
@@ -154,6 +158,17 @@ func (DetectionStandardItem) TableName() string {
 	return "sys_detection_standard_items"
 }
 
+func (i DetectionStandardItem) MarshalJSON() ([]byte, error) {
+	type alias DetectionStandardItem
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(i),
+		VarIDText: strconv.FormatInt(i.VarID, 10),
+	})
+}
+
 type DetectionRunStandardItem struct {
 	ID                             uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TaskID                         uint      `gorm:"column:task_id;index;not null" json:"task_id"`
@@ -193,6 +208,17 @@ type DetectionRunStandardItem struct {
 	DecimalPlaces                  int       `gorm:"column:decimal_places;default:2" json:"decimal_places"`
 	SortOrder                      int       `gorm:"column:sort_order;default:0" json:"sort_order"`
 	CreatedAt                      time.Time `gorm:"column:created_at" json:"created_at"`
+}
+
+func (i DetectionRunStandardItem) MarshalJSON() ([]byte, error) {
+	type alias DetectionRunStandardItem
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(i),
+		VarIDText: strconv.FormatInt(i.VarID, 10),
+	})
 }
 
 func (DetectionRunStandardItem) TableName() string {
@@ -282,8 +308,20 @@ func (DetectionRunFeature) TableName() string {
 	return "detection_run_features"
 }
 
+func (f DetectionRunFeature) MarshalJSON() ([]byte, error) {
+	type alias DetectionRunFeature
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(f),
+		VarIDText: strconv.FormatInt(f.VarID, 10),
+	})
+}
+
 type DetectionLimitAlarm struct {
 	ID             uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	Scope          string     `gorm:"column:scope;size:32;default:detection;index;not null" json:"scope"`
 	TaskID         uint       `gorm:"column:task_id;index;not null" json:"task_id"`
 	TestNo         string     `gorm:"column:test_no;size:128;index" json:"test_no"`
 	ProjectID      uint       `gorm:"column:project_id;index;not null" json:"project_id"`
@@ -317,6 +355,17 @@ type DetectionLimitAlarm struct {
 
 func (DetectionLimitAlarm) TableName() string {
 	return "detection_limit_alarms"
+}
+
+func (a DetectionLimitAlarm) MarshalJSON() ([]byte, error) {
+	type alias DetectionLimitAlarm
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(a),
+		VarIDText: strconv.FormatInt(a.VarID, 10),
+	})
 }
 
 type DetectionLimitAlarmEvent struct {

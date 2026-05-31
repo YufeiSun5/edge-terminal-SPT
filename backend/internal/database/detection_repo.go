@@ -654,9 +654,55 @@ func (r *Repository) UpdateRunningRunItemsVariableDefaults(varID int64, tag mode
 
 func (r *Repository) CreateDetectionLimitAlarm(alarm *models.DetectionLimitAlarm) error {
 	now := time.Now()
+	alarm.Scope = normalizedAlarmScope(alarm.Scope)
 	alarm.CreatedAt = now
 	alarm.UpdatedAt = now
 	return r.db.Create(alarm).Error
+}
+
+func (r *Repository) ListLimitAlarms(filter LimitAlarmFilter) ([]models.DetectionLimitAlarm, int64, error) {
+	query := r.db.Model(&models.DetectionLimitAlarm{})
+	if filter.Scope != "" {
+		query = query.Where("scope = ?", filter.Scope)
+	}
+	if filter.ProjectID != nil {
+		query = query.Where("project_id = ?", *filter.ProjectID)
+	}
+	if filter.TaskID != nil {
+		query = query.Where("task_id = ?", *filter.TaskID)
+	}
+	if filter.TestNo != "" {
+		query = query.Where("test_no = ?", filter.TestNo)
+	}
+	if filter.VarID != nil {
+		query = query.Where("var_id = ?", *filter.VarID)
+	}
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.AlarmType != "" {
+		query = query.Where("alarm_type = ?", filter.AlarmType)
+	}
+	if filter.AlarmLevel != "" {
+		query = query.Where("alarm_level = ?", filter.AlarmLevel)
+	}
+	if filter.From != nil {
+		query = query.Where("first_seen_at >= ?", *filter.From)
+	}
+	if filter.To != nil {
+		query = query.Where("first_seen_at <= ?", *filter.To)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	limit := normalizedLimitAlarmLimit(filter.Limit)
+	offset := normalizedLimitAlarmOffset(filter.Offset)
+	var alarms []models.DetectionLimitAlarm
+	if err := query.Order("last_seen_at DESC, id DESC").Limit(limit).Offset(offset).Find(&alarms).Error; err != nil {
+		return nil, 0, err
+	}
+	return alarms, total, nil
 }
 
 func (r *Repository) CreateDetectionLimitAlarms(alarms []models.DetectionLimitAlarm) error {
@@ -665,6 +711,7 @@ func (r *Repository) CreateDetectionLimitAlarms(alarms []models.DetectionLimitAl
 	}
 	now := time.Now()
 	for i := range alarms {
+		alarms[i].Scope = normalizedAlarmScope(alarms[i].Scope)
 		alarms[i].CreatedAt = now
 		alarms[i].UpdatedAt = now
 	}
@@ -673,6 +720,7 @@ func (r *Repository) CreateDetectionLimitAlarms(alarms []models.DetectionLimitAl
 
 func (r *Repository) RecoverDetectionLimitAlarm(event *models.DetectionLimitAlarmEvent) error {
 	now := time.Now()
+	scope := normalizedAlarmScope(event.Alarm.Scope)
 	updates := map[string]interface{}{
 		"status":        models.DetectionAlarmStatusClosed,
 		"recover_value": event.Alarm.RecoverValue,
@@ -686,8 +734,8 @@ func (r *Repository) RecoverDetectionLimitAlarm(event *models.DetectionLimitAlar
 		updates["peak_value"] = event.Alarm.PeakValue
 	}
 	return r.db.Model(&models.DetectionLimitAlarm{}).
-		Where("task_id = ? AND var_id = ? AND alarm_type = ? AND status = ?",
-			event.Alarm.TaskID, event.Alarm.VarID, event.Alarm.AlarmType, models.DetectionAlarmStatusActive).
+		Where("scope = ? AND task_id = ? AND var_id = ? AND alarm_type = ? AND status = ?",
+			scope, event.Alarm.TaskID, event.Alarm.VarID, event.Alarm.AlarmType, models.DetectionAlarmStatusActive).
 		Updates(updates).Error
 }
 
@@ -696,6 +744,7 @@ func (r *Repository) ChangeDetectionLimitAlarmLevel(event *models.DetectionLimit
 		return nil
 	}
 	now := time.Now()
+	scope := normalizedAlarmScope(event.Alarm.Scope)
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		recoveredAt := event.Alarm.FirstSeenAt
 		if recoveredAt.IsZero() {
@@ -714,16 +763,41 @@ func (r *Repository) ChangeDetectionLimitAlarmLevel(event *models.DetectionLimit
 			updates["peak_value"] = event.Alarm.PeakValue
 		}
 		if err := tx.Model(&models.DetectionLimitAlarm{}).
-			Where("task_id = ? AND var_id = ? AND alarm_type = ? AND status = ?",
-				event.Alarm.TaskID, event.Alarm.VarID, event.PreviousAlarmType, models.DetectionAlarmStatusActive).
+			Where("scope = ? AND task_id = ? AND var_id = ? AND alarm_type = ? AND status = ?",
+				scope, event.Alarm.TaskID, event.Alarm.VarID, event.PreviousAlarmType, models.DetectionAlarmStatusActive).
 			Updates(updates).Error; err != nil {
 			return err
 		}
 		alarm := event.Alarm
+		alarm.Scope = scope
 		alarm.CreatedAt = now
 		alarm.UpdatedAt = now
 		return tx.Create(&alarm).Error
 	})
+}
+
+func normalizedAlarmScope(scope string) string {
+	if scope == models.AlarmScopeDefault {
+		return models.AlarmScopeDefault
+	}
+	return models.AlarmScopeDetection
+}
+
+func normalizedLimitAlarmLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func normalizedLimitAlarmOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func (r *Repository) ListDetectionStandards(filter DetectionStandardFilter) ([]models.DetectionStandard, error) {
@@ -774,10 +848,10 @@ func (r *Repository) SetDetectionStandardFavorite(userID uint, standardID uint, 
 	if userID == 0 {
 		return fmt.Errorf("user_id is required")
 	}
+	if err := r.db.First(&models.DetectionStandard{}, "id = ?", standardID).Error; err != nil {
+		return err
+	}
 	if favorite {
-		if err := r.db.First(&models.DetectionStandard{}, "id = ?", standardID).Error; err != nil {
-			return err
-		}
 		now := time.Now()
 		item := models.DetectionStandardFavorite{UserID: userID, StandardID: standardID, CreatedAt: now, UpdatedAt: now}
 		return r.db.Clauses(clause.OnConflict{
@@ -878,6 +952,9 @@ func (r *Repository) ReplaceDetectionStandardItems(standardID uint, items []mode
 
 func (r *Repository) DeleteDetectionStandard(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&models.DetectionStandard{}, "id = ?", id).Error; err != nil {
+			return err
+		}
 		var refs int64
 		if err := tx.Model(&models.DetectionRunStandardItem{}).Where("standard_id = ?", id).Count(&refs).Error; err != nil {
 			return err
@@ -1000,7 +1077,7 @@ func isValidDetectionEndPolicy(value string) bool {
 }
 
 func customDetectionConfigJSON(opts StartDetectionOptions) string {
-	if len(opts.CustomItems) == 0 {
+	if len(opts.CustomItems) == 0 && opts.ProcessParams == nil && opts.PLCWrites == nil {
 		return ""
 	}
 	items := make([]map[string]interface{}, 0, len(opts.CustomItems))
@@ -1033,9 +1110,17 @@ func customDetectionConfigJSON(opts StartDetectionOptions) string {
 		items = append(items, compact)
 	}
 	out := map[string]interface{}{
-		"source":       "custom_items",
-		"item_count":   len(items),
-		"custom_items": items,
+		"source": "task_params",
+	}
+	if len(items) > 0 {
+		out["item_count"] = len(items)
+		out["custom_items"] = items
+	}
+	if opts.ProcessParams != nil {
+		out["process_params"] = opts.ProcessParams
+	}
+	if opts.PLCWrites != nil {
+		out["plc_writes"] = opts.PLCWrites
 	}
 	raw, _ := json.Marshal(out)
 	return string(raw)

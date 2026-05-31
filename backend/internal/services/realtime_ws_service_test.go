@@ -65,6 +65,9 @@ func TestRealtimeWSServiceMessagesAndFilters(t *testing.T) {
 	if len(payload["topics"].([]string)) != 3 || len(payload["var_ids"].([]int64)) != 1 {
 		t.Fatalf("unexpected payload: %+v", payload)
 	}
+	if texts := payload["var_id_texts"].([]string); len(texts) != 1 || texts[0] != "1" {
+		t.Fatalf("unexpected exact var id payload: %+v", payload)
+	}
 	if NormalizeWSTopic("variables") != "realtime.variables" || NormalizeWSTopic("runs") != "detection.runs" || NormalizeWSTopic("notifications") != "notifications" || NormalizeWSTopic("bad") != "" {
 		t.Fatal("unexpected topic normalization")
 	}

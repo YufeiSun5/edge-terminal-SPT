@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Switch, Table, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Segmented, Select, Space, Switch, Table, Tag, message } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
+  UsersRound,
   UserRound,
 } from 'lucide-react'
 import { queryClient } from '@/app/queryClient'
@@ -31,12 +32,15 @@ import { createUser, deleteUser, getUsers, resetUserPassword, updateUser } from 
 import { useAuthStore } from '@/features/auth/authStore'
 import type {
   AuditLogEntry,
+  BulkRemapKioProjectsResult,
+  BulkRemapKioProjectsResultItem,
   Device,
   GatewayConfig,
   GatewayConfigPayload,
   GatewayStatus,
   DatabaseConfigPayload,
   RoleName,
+  ProjectMemberUpdate,
   DetectionStandard,
   DetectionStandardItemPayload,
   DetectionStandardPayload,
@@ -49,6 +53,7 @@ import type {
   VariableAssignmentPayload,
   VariableConfig,
   VariableCreatePayload,
+  VarIdentifier,
   VariablePatchPayload,
 } from '@/shared/api/types'
 import {
@@ -72,6 +77,7 @@ import {
   getDevices,
   getGatewayConfigs,
   getGateways,
+  getProjectMembers,
   getVariables,
   getDatabaseConfig,
   createDetectionStandard,
@@ -79,10 +85,12 @@ import {
   createStorageRoute,
   deleteStorageRoute,
   replaceDetectionStandardItems,
+  replaceProjectMembers,
   testDatabaseConfig,
   updateGatewayConfig,
   updateDatabaseConfig,
   assignVariable,
+  bulkRemapKioProjects,
   getStorageRoutes,
   updateDetectionStandard,
   updateStorageRoute,
@@ -94,14 +102,31 @@ type GatewayFormValues = GatewayConfigPayload
 type UserFormValues = Partial<UserCreatePayload> & Pick<UserCreatePayload, 'username' | 'role'>
 type PasswordFormValues = UserResetPasswordPayload
 type VariableEditFormValues = VariablePatchPayload
-type VariableAssignFormValues = VariableAssignmentPayload & { device_id: number }
-type VirtualVariableFormValues = VariableCreatePayload & { device_id: number }
+type VariableAssignFormValues = Omit<VariableAssignmentPayload, 'device_id' | 'device_code'> & { project_id: number }
+type VirtualVariableFormValues = Omit<VariableCreatePayload, 'device_id' | 'device_code'> & { project_id: number }
 type DetectionStandardFormValues = DetectionStandardPayload
 type StorageRouteFormValues = StorageRoutePayload
 type DatabaseConfigFormValues = DatabaseConfigPayload
+type KioProjectRemapFormValues = {
+  project_count?: number
+  project_code_prefix?: string
+  project_display_prefix?: string
+  project_en_prefix?: string
+  project_ja_prefix?: string
+  raw_project_prefix?: string
+  var_group?: string
+  var_name_prefix?: string
+  remap_var_name?: boolean
+  enable?: boolean
+}
 type VariableFilter = 'all' | 'known' | 'unknown' | number
+type StorageRouteStatusFilter = 'all' | 'enabled' | 'disabled'
 type SettingsModule = 'variables' | 'standards' | 'storage' | 'realtime' | 'history' | 'system' | 'users'
 const UNASSIGNED_PAGE_SIZE = 48
+
+type ProjectMemberDraft = ProjectMemberUpdate & {
+  draft_key: string
+}
 
 type DatabaseTestFeedback = {
   ok: boolean
@@ -127,6 +152,34 @@ function variableTitle(variable: Pick<VariableConfig, 'display_name' | 'display_
   if (language === 'en') return variable.display_name_en || variable.display_name || variable.raw_name || variable.var_name
   if (language === 'ja') return variable.display_name_ja || variable.display_name || variable.raw_name || variable.var_name
   return variable.display_name || variable.raw_name || variable.var_name
+}
+
+function variableWireId(variable: Pick<VariableConfig, 'var_id' | 'var_id_text'>): string {
+  return variable.var_id_text ?? String(variable.var_id)
+}
+
+function varKey(value?: VarIdentifier | null) {
+  return value === undefined || value === null || value === '' ? '' : String(value)
+}
+
+function sameVarId(left?: VarIdentifier | null, right?: VarIdentifier | null) {
+  return varKey(left) === varKey(right)
+}
+
+function variableProjectId(variable: Pick<VariableConfig, 'project_id' | 'device_id'>) {
+  return variable.project_id ?? variable.device_id
+}
+
+function variableProjectCode(variable: Pick<VariableConfig, 'project_code' | 'device_code'>) {
+  return variable.project_code || variable.device_code
+}
+
+function standardProjectId(standard: Pick<DetectionStandard, 'project_id' | 'device_id'>) {
+  return standard.project_id ?? standard.device_id
+}
+
+function standardProjectCode(standard: Pick<DetectionStandard, 'project_code' | 'device_code'>) {
+  return standard.project_code || standard.device_code
 }
 
 function parseAuditDetail(detail: string): Record<string, unknown> {
@@ -169,6 +222,10 @@ function normalizeVariableWritePayload<T extends VariableEditFormValues | Virtua
     writable: values.writable ?? false,
     rw_mode: values.rw_mode || 'R',
     write_requires_audit: values.write_requires_audit ?? true,
+    default_alarm_enabled: values.default_alarm_enabled ?? false,
+    default_limit_deadband: values.default_limit_deadband ?? 0,
+    default_violation_hold_ms: values.default_violation_hold_ms ?? 0,
+    default_recover_hold_ms: values.default_recover_hold_ms ?? 0,
   }
 }
 
@@ -189,18 +246,26 @@ export function SettingsPage() {
   const [editingUser, setEditingUser] = useState<SystemUser | undefined>()
   const [passwordModalOpen, setPasswordModalOpen] = useState(false)
   const [passwordUser, setPasswordUser] = useState<SystemUser | undefined>()
+  const [memberProjectId, setMemberProjectId] = useState<number | undefined>()
+  const [memberDrafts, setMemberDrafts] = useState<ProjectMemberDraft[]>([])
+  const [memberUserIdToAdd, setMemberUserIdToAdd] = useState<number | undefined>()
   const [variableModalOpen, setVariableModalOpen] = useState(false)
   const [selectedVariable, setSelectedVariable] = useState<VariableConfig | undefined>()
-  const [selectedUnassignedIds, setSelectedUnassignedIds] = useState<number[]>([])
+  const [selectedUnassignedIds, setSelectedUnassignedIds] = useState<VarIdentifier[]>([])
   const [unassignedPage, setUnassignedPage] = useState(1)
   const [batchAssignModalOpen, setBatchAssignModalOpen] = useState(false)
   const [virtualVariableModalOpen, setVirtualVariableModalOpen] = useState(false)
+  const [kioRemapModalOpen, setKioRemapModalOpen] = useState(false)
+  const [kioRemapResult, setKioRemapResult] = useState<BulkRemapKioProjectsResult | undefined>()
   const [standardModalOpen, setStandardModalOpen] = useState(false)
   const [editingStandard, setEditingStandard] = useState<DetectionStandard | undefined>()
   const [standardItems, setStandardItems] = useState<DetectionStandardItemPayload[]>([])
-  const [standardVariableId, setStandardVariableId] = useState<number | undefined>()
+  const [standardVariableId, setStandardVariableId] = useState<VarIdentifier | undefined>()
   const [storageRouteModalOpen, setStorageRouteModalOpen] = useState(false)
   const [editingStorageRoute, setEditingStorageRoute] = useState<StorageRoute | undefined>()
+  const [storageRouteSearch, setStorageRouteSearch] = useState('')
+  const [storageRouteStatus, setStorageRouteStatus] = useState<StorageRouteStatusFilter>('all')
+  const [runtimeLogModalOpen, setRuntimeLogModalOpen] = useState(false)
   const [databaseTestFeedback, setDatabaseTestFeedback] = useState<DatabaseTestFeedback | undefined>()
   const [databaseRestartRequired, setDatabaseRestartRequired] = useState(false)
   const [gatewayForm] = Form.useForm<GatewayFormValues>()
@@ -211,6 +276,7 @@ export function SettingsPage() {
   const [variableAssignForm] = Form.useForm<VariableAssignFormValues>()
   const [batchAssignForm] = Form.useForm<VariableAssignFormValues>()
   const [virtualVariableForm] = Form.useForm<VirtualVariableFormValues>()
+  const [kioRemapForm] = Form.useForm<KioProjectRemapFormValues>()
   const [standardForm] = Form.useForm<DetectionStandardFormValues>()
   const [storageRouteForm] = Form.useForm<StorageRouteFormValues>()
   const [databaseConfigForm] = Form.useForm<DatabaseConfigFormValues>()
@@ -270,6 +336,7 @@ export function SettingsPage() {
       auto_migrate: databaseConfigQuery.data.auto_migrate,
     })
   }, [databaseConfigForm, databaseConfigQuery.data])
+
   const desktopStatusQuery = useQuery({
     queryKey: ['desktop', 'status'],
     queryFn: getDesktopStatus,
@@ -287,13 +354,35 @@ export function SettingsPage() {
     refetchInterval: 30000,
     retry: false,
   })
+  const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data])
+  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data])
+  const activeMemberProjectId = memberProjectId ?? devices[0]?.id
+  const projectMembersQuery = useQuery({
+    queryKey: ['settings', 'project-members', activeMemberProjectId],
+    queryFn: () => getProjectMembers(activeMemberProjectId ?? 0),
+    enabled: canManageUsers && activeModule === 'users' && Boolean(activeMemberProjectId),
+    retry: false,
+  })
+
+  useEffect(() => {
+    if (!projectMembersQuery.data) return
+    const timer = window.setTimeout(() => {
+      const members = projectMembersQuery.data.items ?? []
+      setMemberDrafts(members.map((member) => ({
+        draft_key: String(member.user_id),
+        user_id: member.user_id,
+        member_role: member.member_role || 'member',
+        notify_enabled: member.notify_enabled,
+      })))
+      setMemberUserIdToAdd(undefined)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [projectMembersQuery.data])
 
   const gateways = gatewaysQuery.data ?? []
-  const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data])
   const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
   const standards = standardsQuery.data ?? []
-  const storageRoutes = storageRoutesQuery.data ?? []
-  const users = usersQuery.data ?? []
+  const storageRoutes = useMemo(() => storageRoutesQuery.data ?? [], [storageRoutesQuery.data])
   const desktopStatus = desktopStatusQuery.data
   const sidecarStatus = sidecarQuery.data
   const sidecarState = sidecarStatus?.state ?? 'unavailable'
@@ -315,21 +404,21 @@ export function SettingsPage() {
   const filteredVariables = useMemo(() => {
     return variables.filter((variable) => {
       if (variableFilter === 'all') return true
-      if (variableFilter === 'known') return Boolean(variable.device_id)
-      if (variableFilter === 'unknown') return !variable.device_id
-      return variable.device_id === variableFilter
+      if (variableFilter === 'known') return Boolean(variableProjectId(variable))
+      if (variableFilter === 'unknown') return !variableProjectId(variable)
+      return variableProjectId(variable) === variableFilter
     })
   }, [variableFilter, variables])
   const isUnassignedView = variableFilter === 'unknown'
   const unassignedVariables = useMemo(
-    () => filteredVariables.filter((variable) => !variable.device_id),
+    () => filteredVariables.filter((variable) => !variableProjectId(variable)),
     [filteredVariables],
   )
   const selectedUnassignedVariables = useMemo(
-    () => unassignedVariables.filter((variable) => selectedUnassignedIds.includes(variable.var_id)),
+    () => unassignedVariables.filter((variable) => selectedUnassignedIds.some((id) => sameVarId(id, variableWireId(variable)))),
     [selectedUnassignedIds, unassignedVariables],
   )
-  const selectedUnassignedIdSet = useMemo(() => new Set(selectedUnassignedIds), [selectedUnassignedIds])
+  const selectedUnassignedIdSet = useMemo(() => new Set(selectedUnassignedIds.map(varKey)), [selectedUnassignedIds])
   const unassignedPageCount = Math.max(1, Math.ceil(unassignedVariables.length / UNASSIGNED_PAGE_SIZE))
   const safeUnassignedPage = Math.min(unassignedPage, unassignedPageCount)
   const visibleUnassignedVariables = useMemo(() => {
@@ -350,9 +439,60 @@ export function SettingsPage() {
     })
     return Array.from(byName.values()).sort((left, right) => variableTitle(left, i18n.resolvedLanguage).localeCompare(variableTitle(right, i18n.resolvedLanguage), i18n.resolvedLanguage))
   }, [i18n.resolvedLanguage, variables])
-  const assignedVariables = useMemo(() => variables.filter((variable) => variable.device_id), [variables])
-  const variableById = useMemo(() => new Map(variables.map((variable) => [variable.var_id, variable])), [variables])
+  const assignedVariables = useMemo(() => variables.filter((variable) => variableProjectId(variable)), [variables])
+  const variableById = useMemo(() => {
+    const entries: Array<[string, VariableConfig]> = []
+    variables.forEach((variable) => {
+      entries.push([String(variable.var_id), variable])
+      if (variable.var_id_text) entries.push([variable.var_id_text, variable])
+    })
+    return new Map(entries)
+  }, [variables])
   const deviceById = useMemo(() => new Map(devices.map((device) => [device.id, device])), [devices])
+  const userById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users])
+  const memberProject = activeMemberProjectId ? deviceById.get(activeMemberProjectId) : undefined
+  const projectMemberRows = useMemo(() => memberDrafts.map((draft) => ({
+    ...draft,
+    user: userById.get(draft.user_id),
+  })), [memberDrafts, userById])
+  const availableMemberUsers = useMemo(
+    () => users.filter((user) => !memberDrafts.some((member) => member.user_id === user.id)),
+    [memberDrafts, users],
+  )
+  const filteredStorageRoutes = useMemo(() => {
+    const keyword = storageRouteSearch.trim().toLowerCase()
+    return storageRoutes.filter((route) => {
+      if (storageRouteStatus === 'enabled' && !route.enabled) return false
+      if (storageRouteStatus === 'disabled' && route.enabled) return false
+      if (!keyword) return true
+      const variable = variableById.get(route.var_id_text ?? String(route.var_id))
+      const project = deviceById.get(route.project_id)
+      const haystack = [
+        route.route_code,
+        route.storage_target,
+        route.table_name,
+        route.column_name,
+        route.column_type,
+        route.trigger_mode,
+        route.query_alias,
+        route.form_field_key,
+        variable?.var_name,
+        variable?.raw_name,
+        variable?.display_name,
+        variable?.display_name_en,
+        variable?.display_name_ja,
+        project?.device_code,
+        project?.display_name,
+        project?.display_name_en,
+        project?.display_name_ja,
+        project?.name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(keyword)
+    })
+  }, [deviceById, storageRouteSearch, storageRouteStatus, storageRoutes, variableById])
 
   const saveGatewayMutation = useMutation({
     mutationFn: (payload: GatewayFormValues) => {
@@ -381,7 +521,7 @@ export function SettingsPage() {
   })
 
   const toggleVariableMutation = useMutation({
-    mutationFn: (variable: VariableConfig) => updateVariable(variable.var_id, { enabled: !variable.enabled }),
+    mutationFn: (variable: VariableConfig) => updateVariable(variableWireId(variable), { enabled: !variable.enabled }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings', 'variables'] })
     },
@@ -401,7 +541,7 @@ export function SettingsPage() {
       if (payload.writable && !payload.write_data_type?.trim()) {
         throw new Error(t('settings.variables.writeDataTypeRequired'))
       }
-      return updateVariable(selectedVariable.var_id, payload)
+      return updateVariable(variableWireId(selectedVariable), payload)
     },
     onSuccess: async () => {
       setVariableModalOpen(false)
@@ -415,8 +555,8 @@ export function SettingsPage() {
 
   const createVirtualVariableMutation = useMutation({
     mutationFn: (values: VirtualVariableFormValues) => {
-      const device = devices.find((item) => item.id === values.device_id)
-      if (!device) throw new Error(t('settings.messages.selectVariableDevice'))
+      const project = devices.find((item) => item.id === values.project_id)
+      if (!project) throw new Error(t('settings.messages.selectVariableDevice'))
       const payload = normalizeVariableWritePayload(values)
       if (payload.writable && payload.rw_mode !== 'W' && payload.rw_mode !== 'RW') {
         throw new Error(t('settings.variables.writeModeRequired'))
@@ -437,8 +577,8 @@ export function SettingsPage() {
         source_path: payload.var_name,
         raw_name: payload.var_name,
         json_path: payload.var_name,
-        device_id: device.id,
-        device_code: device.device_code,
+        project_id: project.id,
+        project_code: project.device_code,
         var_group: '',
         scale_factor: payload.scale_factor ?? 1,
         offset_val: payload.offset_val ?? 0,
@@ -454,14 +594,37 @@ export function SettingsPage() {
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
   })
 
+  const kioRemapMutation = useMutation({
+    mutationFn: ({ values, dryRun }: { values: KioProjectRemapFormValues; dryRun: boolean }) =>
+      bulkRemapKioProjects({
+        ...values,
+        project_count: values.project_count ?? 12,
+        remap_var_name: values.remap_var_name ?? true,
+        enable: values.enable ?? true,
+        dry_run: dryRun,
+      }),
+    onSuccess: async (result) => {
+      setKioRemapResult(result)
+      messageApi.success(result.dry_run ? t('settings.variables.kioRemapDryRunDone') : t('settings.variables.kioRemapDone', { count: result.updated }))
+      if (!result.dry_run) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['settings', 'devices'] }),
+          queryClient.invalidateQueries({ queryKey: ['settings', 'variables'] }),
+          queryClient.invalidateQueries({ queryKey: ['settings', 'storage-routes'] }),
+        ])
+      }
+    },
+    onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
+  })
+
   const assignVariableMutation = useMutation({
     mutationFn: (values: VariableAssignFormValues) => {
       if (!selectedVariable) throw new Error(t('settings.variables.noVariable'))
-      const device = devices.find((item) => item.id === values.device_id)
-      if (!device) throw new Error(t('settings.messages.selectVariableDevice'))
-      return assignVariable(selectedVariable.var_id, {
-        device_id: device.id,
-        device_code: device.device_code,
+      const project = devices.find((item) => item.id === values.project_id)
+      if (!project) throw new Error(t('settings.messages.selectVariableDevice'))
+      return assignVariable(variableWireId(selectedVariable), {
+        project_id: project.id,
+        project_code: project.device_code,
         var_group: values.var_group ?? '',
         enabled: values.enabled,
       })
@@ -478,13 +641,13 @@ export function SettingsPage() {
 
   const batchAssignVariableMutation = useMutation({
     mutationFn: async (values: VariableAssignFormValues) => {
-      const device = devices.find((item) => item.id === values.device_id)
-      if (!device || selectedUnassignedVariables.length === 0) throw new Error(t('settings.messages.selectVariableDevice'))
+      const project = devices.find((item) => item.id === values.project_id)
+      if (!project || selectedUnassignedVariables.length === 0) throw new Error(t('settings.messages.selectVariableDevice'))
       await Promise.all(
         selectedUnassignedVariables.map((variable) =>
-          assignVariable(variable.var_id, {
-            device_id: device.id,
-            device_code: device.device_code,
+          assignVariable(variableWireId(variable), {
+            project_id: project.id,
+            project_code: project.device_code,
             var_group: values.var_group ?? '',
             enabled: values.enabled,
           }),
@@ -504,10 +667,10 @@ export function SettingsPage() {
 
   const saveStandardMutation = useMutation({
     mutationFn: async (values: DetectionStandardFormValues) => {
-      const device = devices.find((item) => item.id === values.device_id)
+      const project = devices.find((item) => item.id === values.project_id)
       const payload: DetectionStandardPayload = {
         ...values,
-        device_code: device?.device_code ?? values.device_code ?? '',
+        project_code: project?.device_code ?? values.project_code ?? '',
         mode: values.mode || 'standard',
         version: editingStandard?.version ?? 1,
         enabled: values.enabled ?? true,
@@ -661,6 +824,22 @@ export function SettingsPage() {
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
   })
 
+  const saveProjectMembersMutation = useMutation({
+    mutationFn: () => {
+      if (!activeMemberProjectId) throw new Error(t('settings.projectMembers.selectProject'))
+      return replaceProjectMembers(activeMemberProjectId, memberDrafts.map((member) => ({
+        user_id: member.user_id,
+        member_role: member.member_role || 'member',
+        notify_enabled: member.notify_enabled ?? true,
+      })))
+    },
+    onSuccess: async () => {
+      messageApi.success(t('settings.messages.projectMembersSaved'))
+      await queryClient.invalidateQueries({ queryKey: ['settings', 'project-members', activeMemberProjectId] })
+    },
+    onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
+  })
+
   const setAutostartMutation = useMutation({
     mutationFn: (enabled: boolean) => setAutostart(enabled),
     onSuccess: async () => {
@@ -740,9 +919,31 @@ export function SettingsPage() {
     setPasswordModalOpen(true)
   }
 
+  function addProjectMember() {
+    if (!memberUserIdToAdd || memberDrafts.some((member) => member.user_id === memberUserIdToAdd)) return
+    setMemberDrafts((items) => [
+      ...items,
+      {
+        draft_key: String(memberUserIdToAdd),
+        user_id: memberUserIdToAdd,
+        member_role: 'member',
+        notify_enabled: true,
+      },
+    ])
+    setMemberUserIdToAdd(undefined)
+  }
+
+  function patchProjectMember(userId: number, patch: Partial<ProjectMemberUpdate>) {
+    setMemberDrafts((items) => items.map((member) => member.user_id === userId ? { ...member, ...patch } : member))
+  }
+
+  function removeProjectMember(userId: number) {
+    setMemberDrafts((items) => items.filter((member) => member.user_id !== userId))
+  }
+
   function openVariableModal(variable: VariableConfig) {
     setSelectedVariable(variable)
-    if (variable.device_id) {
+    if (variableProjectId(variable)) {
       variableEditForm.setFieldsValue({
         var_name: variable.var_name,
         display_name: variable.display_name,
@@ -766,13 +967,22 @@ export function SettingsPage() {
         debounce_threshold: variable.debounce_threshold,
         debounce_ms: variable.debounce_ms,
         deadband: variable.deadband,
+        default_alarm_enabled: variable.default_alarm_enabled,
+        default_limit_ll: variable.default_limit_ll,
+        default_limit_l: variable.default_limit_l,
+        default_limit_h: variable.default_limit_h,
+        default_limit_hh: variable.default_limit_hh,
+        default_limit_deadband: variable.default_limit_deadband,
+        default_violation_hold_ms: variable.default_violation_hold_ms,
+        default_recover_hold_ms: variable.default_recover_hold_ms,
+        apply_to_running: false,
         var_group: variable.var_group,
         enabled: variable.enabled,
       })
     } else {
       variableAssignForm.setFieldsValue({
-        device_id: undefined as unknown as number,
-        device_code: '',
+        project_id: undefined as unknown as number,
+        project_code: '',
         var_group: '',
         enabled: true,
       })
@@ -780,9 +990,9 @@ export function SettingsPage() {
     setVariableModalOpen(true)
   }
 
-  function toggleUnassignedSelection(variableId: number) {
+  function toggleUnassignedSelection(variableId: VarIdentifier) {
     setSelectedUnassignedIds((ids) =>
-      ids.includes(variableId) ? ids.filter((id) => id !== variableId) : [...ids, variableId],
+      ids.some((id) => sameVarId(id, variableId)) ? ids.filter((id) => !sameVarId(id, variableId)) : [...ids, variableId],
     )
   }
 
@@ -793,8 +1003,8 @@ export function SettingsPage() {
 
   function openBatchAssignModal() {
     batchAssignForm.setFieldsValue({
-      device_id: undefined as unknown as number,
-      device_code: '',
+      project_id: undefined as unknown as number,
+      project_code: '',
       var_group: '',
       enabled: true,
     })
@@ -813,9 +1023,35 @@ export function SettingsPage() {
       write_requires_audit: true,
       debounce_ms: 0,
       deadband: 0,
+      default_alarm_enabled: false,
+      default_limit_deadband: 0,
+      default_violation_hold_ms: 0,
+      default_recover_hold_ms: 0,
       enabled: true,
     })
     setVirtualVariableModalOpen(true)
+  }
+
+  function openKioRemapModal() {
+    kioRemapForm.setFieldsValue({
+      project_count: 12,
+      project_code_prefix: 'AC',
+      project_display_prefix: '项目',
+      project_en_prefix: 'Project ',
+      project_ja_prefix: 'プロジェクト',
+      raw_project_prefix: '台',
+      var_group: 'KIO变量',
+      var_name_prefix: 'kio',
+      remap_var_name: true,
+      enable: true,
+    })
+    setKioRemapResult(undefined)
+    setKioRemapModalOpen(true)
+  }
+
+  async function submitKioRemap(dryRun: boolean) {
+    const values = await kioRemapForm.validateFields()
+    kioRemapMutation.mutate({ values, dryRun })
   }
 
   async function openStandardModal(standard?: DetectionStandard) {
@@ -829,15 +1065,15 @@ export function SettingsPage() {
         display_name: detail.display_name,
         display_name_en: detail.display_name_en,
         display_name_ja: detail.display_name_ja,
-        device_id: detail.device_id,
-        device_code: detail.device_code,
+        project_id: standardProjectId(detail),
+        project_code: standardProjectCode(detail),
         mode: detail.mode,
         version: detail.version,
         enabled: detail.enabled,
         remark: detail.remark,
       })
       setStandardItems((detail.items ?? []).map((item) => ({
-        var_id: item.var_id,
+        var_id: item.var_id_text ?? item.var_id,
         var_name: item.var_name,
         display_name: item.display_name,
         display_name_en: item.display_name_en,
@@ -875,13 +1111,14 @@ export function SettingsPage() {
   function openStorageRouteModal(route?: StorageRoute) {
     setEditingStorageRoute(route)
     if (route) {
-      storageRouteForm.setFieldsValue(route)
+      storageRouteForm.setFieldsValue({ ...route, var_id: route.var_id_text ?? route.var_id })
     } else {
       const firstVariable = assignedVariables[0]
-      const firstDevice = firstVariable?.device_id ? deviceById.get(firstVariable.device_id) : devices[0]
+      const firstProjectId = firstVariable ? variableProjectId(firstVariable) : undefined
+      const firstDevice = firstProjectId ? deviceById.get(firstProjectId) : devices[0]
       storageRouteForm.setFieldsValue({
         project_id: firstDevice?.id,
-        var_id: firstVariable?.var_id,
+        var_id: firstVariable ? variableWireId(firstVariable) : undefined,
         route_code: `route-${Date.now().toString().slice(-6)}`,
         storage_target: 'wide_table',
         table_name: firstDevice ? `rt_project_${firstDevice.id}_data` : '',
@@ -899,14 +1136,14 @@ export function SettingsPage() {
     setStorageRouteModalOpen(true)
   }
 
-  function addStandardItem(variableId?: number) {
+  function addStandardItem(variableId?: VarIdentifier) {
     if (!variableId) return
-    const variable = standardVariables.find((item) => item.var_id === variableId)
+    const variable = standardVariables.find((item) => sameVarId(variableWireId(item), variableId))
     if (!variable || standardItems.some((item) => item.var_name === variable.var_name)) return
     setStandardItems((items) => [
       ...items,
       {
-        var_id: variable.var_id,
+        var_id: variableWireId(variable),
         var_name: variable.var_name,
         display_name: variable.display_name || variable.raw_name || variable.var_name,
         display_name_en: variable.display_name_en,
@@ -932,18 +1169,25 @@ export function SettingsPage() {
     setStandardVariableId(undefined)
   }
 
-  function patchStandardItem(varId: number, patch: Partial<DetectionStandardItemPayload>) {
-    setStandardItems((items) => items.map((item) => item.var_id === varId ? { ...item, ...patch } : item))
+  function patchStandardItem(varId: VarIdentifier, patch: Partial<DetectionStandardItemPayload>) {
+    setStandardItems((items) => items.map((item) => sameVarId(item.var_id, varId) ? { ...item, ...patch } : item))
   }
 
-  function removeStandardItem(varId: number) {
-    setStandardItems((items) => items.filter((item) => item.var_id !== varId).map((item, index) => ({ ...item, sort_order: index + 1 })))
+  function removeStandardItem(varId: VarIdentifier) {
+    setStandardItems((items) => items.filter((item) => !sameVarId(item.var_id, varId)).map((item, index) => ({ ...item, sort_order: index + 1 })))
   }
 
   const roleOptions = [
     { label: t('settings.users.roles.guest'), value: 'guest' },
     { label: t('settings.users.roles.admin'), value: 'admin' },
     { label: t('settings.users.roles.developer'), value: 'developer' },
+  ]
+
+  const memberRoleOptions = [
+    { label: t('settings.projectMembers.roles.owner'), value: 'owner' },
+    { label: t('settings.projectMembers.roles.operator'), value: 'operator' },
+    { label: t('settings.projectMembers.roles.member'), value: 'member' },
+    { label: t('settings.projectMembers.roles.viewer'), value: 'viewer' },
   ]
 
   const variableColumns: TableColumnsType<VariableConfig> = [
@@ -970,35 +1214,35 @@ export function SettingsPage() {
       dataIndex: 'data_type',
       key: 'data_type',
       width: 90,
-      render: (value, record) => record.device_id ? value : <span className="settings-muted">{t('settings.variables.readonly')}</span>,
+      render: (value, record) => variableProjectId(record) ? value : <span className="settings-muted">{t('settings.variables.readonly')}</span>,
     },
     {
       title: t('settings.variables.unit'),
       dataIndex: 'unit',
       key: 'unit',
       width: 90,
-      render: (value, record) => record.device_id ? value : <span className="settings-muted">-</span>,
+      render: (value, record) => variableProjectId(record) ? value : <span className="settings-muted">-</span>,
     },
     {
       title: t('settings.variables.device'),
-      dataIndex: 'device_code',
-      key: 'device_code',
+      dataIndex: 'project_code',
+      key: 'project_code',
       width: 140,
-      render: (value, record) => record.device_id ? value : <Tag>{t('settings.variables.unassigned')}</Tag>,
+      render: (_, record) => variableProjectId(record) ? variableProjectCode(record) : <Tag>{t('settings.variables.unassigned')}</Tag>,
     },
     {
       title: t('settings.variables.group'),
       dataIndex: 'var_group',
       key: 'var_group',
       width: 130,
-      render: (value, record) => record.device_id ? value : <span className="settings-muted">-</span>,
+      render: (value, record) => variableProjectId(record) ? value : <span className="settings-muted">-</span>,
     },
     {
       title: t('settings.variables.writeMode'),
       dataIndex: 'rw_mode',
       key: 'rw_mode',
       width: 120,
-      render: (value, record) => record.device_id ? (
+      render: (value, record) => variableProjectId(record) ? (
         <Tag color={record.writable ? 'processing' : 'default'}>{record.writable ? value : 'R'}</Tag>
       ) : <span className="settings-muted">-</span>,
     },
@@ -1009,7 +1253,7 @@ export function SettingsPage() {
       width: 90,
       fixed: 'right',
       render: (_, record) => (
-        record.device_id ? (
+        variableProjectId(record) ? (
           <Switch
             size="small"
             checked={record.enabled}
@@ -1027,10 +1271,10 @@ export function SettingsPage() {
       render: (_, record) => (
         <Button
           size="small"
-          icon={record.device_id ? <Edit3 size={13} /> : <SlidersHorizontal size={13} />}
+          icon={variableProjectId(record) ? <Edit3 size={13} /> : <SlidersHorizontal size={13} />}
           onClick={() => openVariableModal(record)}
         >
-          {record.device_id ? t('settings.variables.edit') : t('settings.variables.assign')}
+          {variableProjectId(record) ? t('settings.variables.edit') : t('settings.variables.assign')}
         </Button>
       ),
     },
@@ -1142,6 +1386,66 @@ export function SettingsPage() {
     },
   ]
 
+  const projectMemberColumns: TableColumnsType<ProjectMemberDraft & { user?: SystemUser }> = [
+    {
+      title: t('settings.projectMembers.user'),
+      key: 'user',
+      width: 220,
+      render: (_, record) => (
+        <div className="settings-user-name">
+          <strong>{record.user?.username ?? `#${record.user_id}`}</strong>
+          <span>{record.user ? t(`settings.users.roles.${record.user.role}`, { defaultValue: record.user.role }) : `ID ${record.user_id}`}</span>
+        </div>
+      ),
+    },
+    {
+      title: t('settings.projectMembers.memberRole'),
+      dataIndex: 'member_role',
+      key: 'member_role',
+      width: 190,
+      render: (_, record) => (
+        <Select
+          size="small"
+          value={record.member_role || 'member'}
+          options={memberRoleOptions}
+          onChange={(value) => patchProjectMember(record.user_id, { member_role: value })}
+          style={{ width: '100%' }}
+        />
+      ),
+    },
+    {
+      title: t('settings.projectMembers.notifyEnabled'),
+      dataIndex: 'notify_enabled',
+      key: 'notify_enabled',
+      width: 150,
+      render: (_, record) => (
+        <Switch
+          size="small"
+          checked={record.notify_enabled ?? true}
+          onChange={(checked) => patchProjectMember(record.user_id, { notify_enabled: checked })}
+        />
+      ),
+    },
+    {
+      title: t('settings.users.enabled'),
+      key: 'user_enabled',
+      width: 110,
+      render: (_, record) => (
+        <Tag color={record.user?.enabled ? 'success' : 'default'}>
+          {record.user?.enabled ? t('status.online') : t('status.offline')}
+        </Tag>
+      ),
+    },
+    {
+      title: t('settings.users.actions'),
+      key: 'actions',
+      width: 90,
+      render: (_, record) => (
+        <Button danger size="small" icon={<Trash2 size={13} />} aria-label={t('settings.users.delete')} onClick={() => removeProjectMember(record.user_id)} />
+      ),
+    },
+  ]
+
   const auditLogColumns: TableColumnsType<AuditLogEntry> = [
     {
       title: t('settings.system.auditTime'),
@@ -1234,10 +1538,10 @@ export function SettingsPage() {
     },
     {
       title: t('settings.variables.device'),
-      dataIndex: 'device_code',
-      key: 'device_code',
+      dataIndex: 'project_code',
+      key: 'project_code',
       width: 150,
-      render: (value, record) => record.device_id ? value : <Tag>{t('settings.standards.global')}</Tag>,
+      render: (_, record) => standardProjectId(record) ? standardProjectCode(record) : <Tag>{t('settings.standards.global')}</Tag>,
     },
     { title: t('settings.standards.mode'), dataIndex: 'mode', key: 'mode', width: 110 },
     { title: t('settings.standards.version'), dataIndex: 'version', key: 'version', width: 90 },
@@ -1285,7 +1589,7 @@ export function SettingsPage() {
       key: 'route_code',
       width: 180,
       render: (_, record) => {
-        const variable = variableById.get(record.var_id)
+        const variable = variableById.get(record.var_id_text ?? String(record.var_id))
         return (
           <div className="settings-variable-name">
             <strong>{record.route_code}</strong>
@@ -1562,15 +1866,15 @@ export function SettingsPage() {
                 </div>
                 <div className="settings-device-list">
                   <FilterButton active={variableFilter === 'all'} label={t('settings.groups.allVariables')} count={variables.length} onClick={() => setVariableFilterWithReset('all')} />
-                  <FilterButton active={variableFilter === 'known'} label={t('settings.variables.known')} count={variables.filter((item) => item.device_id).length} onClick={() => setVariableFilterWithReset('known')} />
-                  <FilterButton active={variableFilter === 'unknown'} label={t('settings.variables.unknown')} count={variables.filter((item) => !item.device_id).length} onClick={() => setVariableFilterWithReset('unknown')} />
+                  <FilterButton active={variableFilter === 'known'} label={t('settings.variables.known')} count={variables.filter((item) => variableProjectId(item)).length} onClick={() => setVariableFilterWithReset('known')} />
+                  <FilterButton active={variableFilter === 'unknown'} label={t('settings.variables.unknown')} count={variables.filter((item) => !variableProjectId(item)).length} onClick={() => setVariableFilterWithReset('unknown')} />
                   {devices.map((device) => (
                     <FilterButton
                       key={device.id}
                       active={variableFilter === device.id}
                       label={displayDeviceName(device)}
                       note={device.device_code}
-                      count={variables.filter((item) => item.device_id === device.id).length}
+                      count={variables.filter((item) => variableProjectId(item) === device.id).length}
                       onClick={() => setVariableFilterWithReset(device.id)}
                     />
                   ))}
@@ -1583,6 +1887,9 @@ export function SettingsPage() {
                     <h2>{t('settings.variables.allInfo')}</h2>
                   </div>
                   <div className="settings-head-actions">
+                    <Button size="small" icon={<RotateCcw size={14} />} onClick={openKioRemapModal}>
+                      {t('settings.variables.kioRemap')}
+                    </Button>
                     <Button size="small" icon={<Plus size={14} />} onClick={openVirtualVariableModal}>
                       {t('settings.variables.createVirtual')}
                     </Button>
@@ -1609,7 +1916,7 @@ export function SettingsPage() {
                       <div className="settings-unassigned-actions">
                         <Button
                           size="small"
-                          onClick={() => setSelectedUnassignedIds(unassignedVariables.map((variable) => variable.var_id))}
+                          onClick={() => setSelectedUnassignedIds(unassignedVariables.map(variableWireId))}
                           disabled={unassignedVariables.length === 0}
                         >
                           {t('settings.variables.selectAll')}
@@ -1630,22 +1937,23 @@ export function SettingsPage() {
                     </div>
                     <div className="settings-unassigned-grid">
                       {visibleUnassignedVariables.map((variable) => {
-                        const checked = selectedUnassignedIdSet.has(variable.var_id)
+                        const id = variableWireId(variable)
+                        const checked = selectedUnassignedIdSet.has(id)
                         return (
                           <div
-                            key={variable.var_id}
+                            key={id}
                             role="button"
                             tabIndex={0}
                             className={checked ? 'settings-unassigned-card selected' : 'settings-unassigned-card'}
-                            onClick={() => toggleUnassignedSelection(variable.var_id)}
+                            onClick={() => toggleUnassignedSelection(id)}
                             onKeyDown={(event) => {
                               if (event.key === 'Enter' || event.key === ' ') {
                                 event.preventDefault()
-                                toggleUnassignedSelection(variable.var_id)
+                                toggleUnassignedSelection(id)
                               }
                             }}
                           >
-                            <Checkbox checked={checked} onChange={() => toggleUnassignedSelection(variable.var_id)} onClick={(event) => event.stopPropagation()} />
+                            <Checkbox checked={checked} onChange={() => toggleUnassignedSelection(id)} onClick={(event) => event.stopPropagation()} />
                             <div className="settings-unassigned-card-main">
                               <strong>{variable.raw_name || variable.var_name}</strong>
                               <span>{variable.source_path || variable.json_path || '-'}</span>
@@ -1729,12 +2037,32 @@ export function SettingsPage() {
                 showIcon
                 message={t('settings.storage.routeHint')}
               />
+              <div className="settings-storage-toolbar">
+                <Input
+                  allowClear
+                  prefix={<Search size={14} />}
+                  value={storageRouteSearch}
+                  onChange={(event) => setStorageRouteSearch(event.target.value)}
+                  placeholder={t('settings.storage.searchPlaceholder')}
+                />
+                <Segmented
+                  size="small"
+                  value={storageRouteStatus}
+                  onChange={(value) => setStorageRouteStatus(value as StorageRouteStatusFilter)}
+                  options={[
+                    { label: t('settings.storage.statusAll'), value: 'all' },
+                    { label: t('settings.storage.statusEnabled'), value: 'enabled' },
+                    { label: t('settings.storage.statusDisabled'), value: 'disabled' },
+                  ]}
+                />
+                <span>{t('settings.storage.filteredCount', { count: filteredStorageRoutes.length })}</span>
+              </div>
               <Table
                 size="small"
                 rowKey="id"
                 loading={storageRoutesQuery.isFetching}
                 columns={storageRouteColumns}
-                dataSource={storageRoutes}
+                dataSource={filteredStorageRoutes}
                 scroll={{ x: 1260, y: 520 }}
                 pagination={{ pageSize: 20, showSizeChanger: true, size: 'small' }}
               />
@@ -1989,9 +2317,24 @@ export function SettingsPage() {
                       {runtimeLogsQuery.data?.size ? `${Math.ceil(runtimeLogsQuery.data.size / 1024)} KB` : t('status.unavailable')}
                     </Tag>
                   </div>
-                  <pre className="settings-log-preview">
-                    {runtimeLogsQuery.data?.content || t('settings.system.logEmpty')}
-                  </pre>
+                  <div className="settings-log-preview-actions">
+                    <Button
+                      size="small"
+                      icon={<Clipboard size={14} />}
+                      loading={runtimeLogsQuery.isFetching}
+                      onClick={() => setRuntimeLogModalOpen(true)}
+                    >
+                      {t('settings.system.logPreview')}
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<RefreshCw size={14} />}
+                      loading={runtimeLogsQuery.isFetching}
+                      onClick={() => runtimeLogsQuery.refetch()}
+                    >
+                      {t('settings.system.refreshLogs')}
+                    </Button>
+                  </div>
                 </div>
                 <div className="settings-system-card settings-audit-card">
                   <div className="settings-log-preview-head">
@@ -2029,24 +2372,97 @@ export function SettingsPage() {
 
           {activeModule === 'users' && canManageUsers ? (
             <section className="settings-panel settings-full-module settings-users-module">
-              <div className="settings-panel-head">
-                <div>
-                  <span className="settings-eyebrow">{t('settings.users.subtitle')}</span>
-                  <h2>{t('settings.users.title')}</h2>
+              <div className="settings-users-layout">
+                <div className="settings-users-table-card">
+                  <div className="settings-panel-head">
+                    <div>
+                      <span className="settings-eyebrow">{t('settings.users.subtitle')}</span>
+                      <h2>{t('settings.users.title')}</h2>
+                    </div>
+                    <Button size="small" icon={<Plus size={14} />} onClick={() => openUserModal()}>
+                      {t('settings.users.create')}
+                    </Button>
+                  </div>
+                  <Table
+                    size="small"
+                    rowKey="id"
+                    loading={usersQuery.isFetching}
+                    columns={userColumns}
+                    dataSource={users}
+                    scroll={{ x: 1700, y: 410 }}
+                    pagination={{ pageSize: 20, showSizeChanger: true, size: 'small' }}
+                  />
                 </div>
-                <Button size="small" icon={<Plus size={14} />} onClick={() => openUserModal()}>
-                  {t('settings.users.create')}
-                </Button>
+                <div className="settings-project-members-card">
+                  <div className="settings-panel-head">
+                    <div>
+                      <span className="settings-eyebrow">{t('settings.projectMembers.subtitle')}</span>
+                      <h2>{t('settings.projectMembers.title')}</h2>
+                    </div>
+                    <Tag icon={<UsersRound size={13} />}>{projectMembersQuery.data?.count ?? memberDrafts.length}</Tag>
+                  </div>
+                  <div className="settings-project-members-toolbar">
+                    <Select
+                      showSearch
+                      value={activeMemberProjectId}
+                      placeholder={t('settings.projectMembers.selectProject')}
+                      optionFilterProp="label"
+                      onChange={(value) => setMemberProjectId(value)}
+                      options={devices.map((device) => ({
+                        value: device.id,
+                        label: `${displayDeviceName(device)} · ${device.device_code}`,
+                      }))}
+                    />
+                    <Button size="small" icon={<RefreshCw size={14} />} loading={projectMembersQuery.isFetching} onClick={() => projectMembersQuery.refetch()}>
+                      {t('actions.refresh')}
+                    </Button>
+                  </div>
+                  <Alert
+                    className="settings-database-alert"
+                    type="info"
+                    showIcon
+                    message={t('settings.projectMembers.hint')}
+                    description={memberProject ? `${displayDeviceName(memberProject)} · ${memberProject.device_code}` : t('settings.projectMembers.selectProject')}
+                  />
+                  <div className="settings-project-members-toolbar">
+                    <Select
+                      showSearch
+                      allowClear
+                      value={memberUserIdToAdd}
+                      placeholder={t('settings.projectMembers.addUser')}
+                      optionFilterProp="label"
+                      onChange={(value) => setMemberUserIdToAdd(value)}
+                      options={availableMemberUsers.map((user) => ({
+                        value: user.id,
+                        label: `${user.username} · ${t(`settings.users.roles.${user.role}`, { defaultValue: user.role })}`,
+                      }))}
+                    />
+                    <Button size="small" icon={<Plus size={14} />} disabled={!memberUserIdToAdd} onClick={addProjectMember}>
+                      {t('settings.projectMembers.add')}
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<Save size={14} />}
+                      disabled={!activeMemberProjectId}
+                      loading={saveProjectMembersMutation.isPending}
+                      onClick={() => saveProjectMembersMutation.mutate()}
+                    >
+                      {t('settings.projectMembers.save')}
+                    </Button>
+                  </div>
+                  <Table
+                    size="small"
+                    rowKey="draft_key"
+                    loading={projectMembersQuery.isFetching}
+                    columns={projectMemberColumns}
+                    dataSource={projectMemberRows}
+                    scroll={{ x: 760, y: 310 }}
+                    pagination={false}
+                    locale={{ emptyText: t('settings.projectMembers.empty') }}
+                  />
+                </div>
               </div>
-              <Table
-                size="small"
-                rowKey="id"
-                loading={usersQuery.isFetching}
-                columns={userColumns}
-                dataSource={users}
-                scroll={{ x: 1700, y: 560 }}
-                pagination={{ pageSize: 20, showSizeChanger: true, size: 'small' }}
-              />
             </section>
           ) : null}
         </main>
@@ -2168,7 +2584,7 @@ export function SettingsPage() {
         <Form form={virtualVariableForm} layout="vertical" onFinish={(values) => createVirtualVariableMutation.mutate(values)}>
           <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.virtualHint')} />
           <div className="settings-form-grid modal-grid">
-            <Form.Item name="device_id" label={t('settings.variables.selectDevice')} rules={[{ required: true }]}>
+            <Form.Item name="project_id" label={t('settings.variables.selectDevice')} rules={[{ required: true }]}>
               <Select
                 options={devices.map((device) => ({ label: `${displayDeviceName(device)} · ${device.device_code}`, value: device.id }))}
               />
@@ -2198,6 +2614,7 @@ export function SettingsPage() {
               <Switch />
             </Form.Item>
           </div>
+          <VariableDefaultAlarmFields />
           <div className="settings-form-actions">
             <Button type="primary" htmlType="submit" icon={<Save size={15} />} loading={createVirtualVariableMutation.isPending}>
               {t('settings.variables.createVirtual')}
@@ -2207,7 +2624,85 @@ export function SettingsPage() {
       </Modal>
 
       <Modal
-        title={selectedVariable?.device_id ? t('settings.variables.edit') : t('settings.variables.assignTitle')}
+        title={t('settings.variables.kioRemapTitle')}
+        open={kioRemapModalOpen}
+        width={1040}
+        onCancel={() => {
+          setKioRemapModalOpen(false)
+          setKioRemapResult(undefined)
+        }}
+        footer={null}
+      >
+        <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.kioRemapHint')} />
+        <Form form={kioRemapForm} layout="vertical">
+          <div className="settings-form-grid modal-grid">
+            <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}>
+              <InputNumber min={1} max={99} />
+            </Form.Item>
+            <Form.Item name="project_code_prefix" label={t('settings.variables.kioProjectCodePrefix')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="project_display_prefix" label={t('settings.variables.kioProjectDisplayPrefix')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="raw_project_prefix" label={t('settings.variables.kioRawProjectPrefix')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="var_group" label={t('settings.variables.group')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="var_name_prefix" label={t('settings.variables.kioVarNamePrefix')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="remap_var_name" label={t('settings.variables.kioRemapVarName')} valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item name="enable" label={t('settings.variables.enabled')} valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </div>
+          <div className="settings-form-actions">
+            <Button loading={kioRemapMutation.isPending} onClick={() => void submitKioRemap(true)}>
+              {t('settings.variables.kioDryRun')}
+            </Button>
+            <Popconfirm
+              title={t('settings.variables.kioExecuteConfirm')}
+              onConfirm={() => void submitKioRemap(false)}
+            >
+              <Button type="primary" danger icon={<RotateCcw size={15} />} loading={kioRemapMutation.isPending}>
+                {t('settings.variables.kioExecute')}
+              </Button>
+            </Popconfirm>
+          </div>
+        </Form>
+        {kioRemapResult ? (
+          <div className="settings-kio-remap-result">
+            <div className="settings-kio-remap-summary">
+              <Tag color={kioRemapResult.dry_run ? 'processing' : 'success'}>
+                {kioRemapResult.dry_run ? t('settings.variables.kioDryRun') : t('settings.variables.kioExecuted')}
+              </Tag>
+              <span>{t('settings.variables.kioResultSummary', kioRemapResult)}</span>
+            </div>
+            <Table<BulkRemapKioProjectsResultItem>
+              size="small"
+              rowKey={(record) => `${record.var_id_text ?? record.var_id}-${record.action}-${record.raw_name}`}
+              columns={[
+                { title: t('settings.variables.rawName'), dataIndex: 'raw_name', key: 'raw_name', width: 140 },
+                { title: t('settings.variables.varName'), dataIndex: 'new_var_name', key: 'new_var_name', width: 150 },
+                { title: t('settings.storage.project'), dataIndex: 'project_code', key: 'project_code', width: 120 },
+                { title: t('settings.variables.kioAction'), dataIndex: 'action', key: 'action', width: 110, render: (value) => <Tag>{String(value)}</Tag> },
+                { title: t('settings.variables.kioReason'), dataIndex: 'reason', key: 'reason', ellipsis: true },
+              ]}
+              dataSource={kioRemapResult.items.slice(0, 80)}
+              pagination={false}
+              scroll={{ x: 760, y: 260 }}
+            />
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        title={selectedVariable && variableProjectId(selectedVariable) ? t('settings.variables.edit') : t('settings.variables.assignTitle')}
         open={variableModalOpen}
         width={1120}
         onCancel={() => {
@@ -2237,7 +2732,7 @@ export function SettingsPage() {
               </div>
             </div>
 
-            {selectedVariable.device_id ? (
+            {variableProjectId(selectedVariable) ? (
               <Form form={variableEditForm} layout="vertical" onFinish={(values) => saveVariableMutation.mutate(values)}>
                 <VariableFormSection title={t('settings.variables.basicSection')} description={t('settings.variables.basicSectionHint')} defaultOpen>
                   <div className="settings-form-grid modal-grid">
@@ -2323,6 +2818,9 @@ export function SettingsPage() {
                     </Form.Item>
                   </div>
                 </VariableFormSection>
+                <VariableFormSection title={t('settings.variables.defaultAlarmSection')} description={t('settings.variables.defaultAlarmSectionHint')}>
+                  <VariableDefaultAlarmFields includeApplyToRunning />
+                </VariableFormSection>
                 <div className="settings-form-actions">
                   <Button type="primary" htmlType="submit" icon={<Save size={15} />} loading={saveVariableMutation.isPending}>
                     {t('settings.variables.save')}
@@ -2333,7 +2831,7 @@ export function SettingsPage() {
               <Form form={variableAssignForm} layout="vertical" onFinish={(values) => assignVariableMutation.mutate(values)}>
                 <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.unassignedReadonly')} />
                 <div className="settings-form-grid modal-grid">
-                  <Form.Item name="device_id" label={t('settings.variables.selectDevice')} rules={[{ required: true }]}>
+                  <Form.Item name="project_id" label={t('settings.variables.selectDevice')} rules={[{ required: true }]}>
                     <Select
                       options={devices.map((device) => ({ label: `${displayDeviceName(device)} · ${device.device_code}`, value: device.id }))}
                     />
@@ -2368,7 +2866,7 @@ export function SettingsPage() {
             message={t('settings.variables.batchAssignHint', { count: selectedUnassignedVariables.length })}
           />
           <div className="settings-form-grid modal-grid">
-            <Form.Item name="device_id" label={t('settings.variables.selectDevice')} rules={[{ required: true }]}>
+            <Form.Item name="project_id" label={t('settings.variables.selectDevice')} rules={[{ required: true }]}>
               <Select
                 options={devices.map((device) => ({ label: `${displayDeviceName(device)} · ${device.device_code}`, value: device.id }))}
               />
@@ -2402,10 +2900,10 @@ export function SettingsPage() {
           onFinish={(values) => saveStorageRouteMutation.mutate(values)}
           onValuesChange={(changed) => {
             if (!('var_id' in changed)) return
-            const variable = typeof changed.var_id === 'number' ? variableById.get(changed.var_id) : undefined
+            const variable = variableById.get(varKey(changed.var_id))
             if (!variable) return
             storageRouteForm.setFieldsValue({
-              project_id: variable.device_id,
+              project_id: variableProjectId(variable),
               column_name: variable.var_name,
               form_field_key: variable.var_name,
               query_alias: variable.var_name,
@@ -2420,7 +2918,7 @@ export function SettingsPage() {
                 optionFilterProp="label"
                 options={assignedVariables.map((variable) => ({
                   label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
-                  value: variable.var_id,
+                  value: variableWireId(variable),
                 }))}
               />
             </Form.Item>
@@ -2518,7 +3016,7 @@ export function SettingsPage() {
             <Form.Item name="name" label={t('settings.standards.internalName')}>
               <Input />
             </Form.Item>
-            <Form.Item name="device_id" label={t('settings.variables.selectDevice')}>
+            <Form.Item name="project_id" label={t('settings.variables.selectDevice')}>
               <Select
                 allowClear
                 options={devices.map((device) => ({ label: `${displayDeviceName(device)} · ${device.device_code}`, value: device.id }))}
@@ -2549,7 +3047,7 @@ export function SettingsPage() {
                 onChange={setStandardVariableId}
                 options={standardVariables.map((variable) => ({
                   label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
-                  value: variable.var_id,
+                  value: variableWireId(variable),
                 }))}
               />
               <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId}>
@@ -2635,6 +3133,50 @@ export function SettingsPage() {
         </Form>
       </Modal>
 
+      <Modal
+        title={t('settings.system.logPreview')}
+        open={runtimeLogModalOpen}
+        width="min(1120px, calc(100vw - 48px))"
+        centered
+        className="settings-log-modal"
+        onCancel={() => setRuntimeLogModalOpen(false)}
+        footer={[
+          <Button
+            key="refresh"
+            icon={<RefreshCw size={14} />}
+            loading={runtimeLogsQuery.isFetching}
+            onClick={() => runtimeLogsQuery.refetch()}
+          >
+            {t('settings.system.refreshLogs')}
+          </Button>,
+          <Button
+            key="open"
+            icon={<FolderOpen size={14} />}
+            loading={openLogsMutation.isPending}
+            onClick={() => openLogsMutation.mutate()}
+          >
+            {t('actions.openLogs')}
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setRuntimeLogModalOpen(false)}>
+            {t('actions.cancel')}
+          </Button>,
+        ]}
+      >
+        <div className="settings-log-modal-meta">
+          <span>
+            {runtimeLogsQuery.data?.updatedAt
+              ? t('settings.system.logUpdatedAt', { time: new Date(runtimeLogsQuery.data.updatedAt).toLocaleString() })
+              : t('settings.system.logPreviewDesc')}
+          </span>
+          <Tag color={runtimeLogsQuery.data?.size ? 'processing' : 'default'}>
+            {runtimeLogsQuery.data?.size ? `${Math.ceil(runtimeLogsQuery.data.size / 1024)} KB` : t('status.unavailable')}
+          </Tag>
+        </div>
+        <pre className="settings-log-preview settings-log-preview-modal">
+          {runtimeLogsQuery.data?.content || t('settings.system.logEmpty')}
+        </pre>
+      </Modal>
+
       {backendUnavailable ? (
         <Alert
           className="settings-floating-alert"
@@ -2694,6 +3236,65 @@ function VariableFormSection({
       </summary>
       {children}
     </details>
+  )
+}
+
+function VariableDefaultAlarmFields({ includeApplyToRunning = false }: { includeApplyToRunning?: boolean }) {
+  const { t } = useTranslation()
+  return (
+    <div className="settings-default-alarm-fields">
+      <Alert
+        className="settings-modal-alert"
+        showIcon
+        type="info"
+        message={t('settings.variables.defaultAlarmHint')}
+      />
+      <div className="settings-form-grid modal-grid">
+        <Form.Item name="default_alarm_enabled" label={t('settings.variables.defaultAlarmEnabled')} valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item name="default_limit_ll" label={t('settings.variables.defaultLimitLL')}>
+          <InputNumber step={0.1} />
+        </Form.Item>
+        <Form.Item name="default_limit_l" label={t('settings.variables.defaultLimitL')}>
+          <InputNumber step={0.1} />
+        </Form.Item>
+        <Form.Item name="default_limit_h" label={t('settings.variables.defaultLimitH')}>
+          <InputNumber step={0.1} />
+        </Form.Item>
+        <Form.Item name="default_limit_hh" label={t('settings.variables.defaultLimitHH')}>
+          <InputNumber step={0.1} />
+        </Form.Item>
+        <Form.Item name="default_limit_deadband" label={t('settings.variables.defaultLimitDeadband')}>
+          <InputNumber min={0} step={0.1} />
+        </Form.Item>
+        <Form.Item name="default_violation_hold_ms" label={t('settings.variables.defaultViolationHold')}>
+          <InputNumber min={0} />
+        </Form.Item>
+        <Form.Item name="default_recover_hold_ms" label={t('settings.variables.defaultRecoverHold')}>
+          <InputNumber min={0} />
+        </Form.Item>
+      </div>
+      {includeApplyToRunning ? (
+        <>
+          <Form.Item name="apply_to_running" valuePropName="checked" className="settings-apply-running-field">
+            <Checkbox>{t('settings.variables.applyToRunning')}</Checkbox>
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, current) => prev.apply_to_running !== current.apply_to_running}>
+            {({ getFieldValue }) =>
+              getFieldValue('apply_to_running') ? (
+                <Alert
+                  className="settings-modal-alert"
+                  showIcon
+                  type="warning"
+                  message={t('settings.variables.applyToRunningWarning')}
+                />
+              ) : null
+            }
+          </Form.Item>
+        </>
+      ) : null}
+    </div>
   )
 }
 

@@ -10,6 +10,7 @@ import (
 	"spindle-edge/backend/internal/auth"
 	"spindle-edge/backend/internal/database"
 	"spindle-edge/backend/internal/models"
+	"spindle-edge/backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -54,30 +55,30 @@ type detectionStandardItemsReplaceRequest struct {
 }
 
 type detectionStandardItemRequest struct {
-	VarID           int64    `json:"var_id" binding:"required"`
-	VarName         string   `json:"var_name" binding:"required"`
-	DisplayName     string   `json:"display_name"`
-	DisplayNameEN   string   `json:"display_name_en"`
-	DisplayNameJA   string   `json:"display_name_ja"`
-	CheckEnabled    *bool    `json:"check_enabled"`
-	AlarmEnabled    *bool    `json:"alarm_enabled"`
-	StoreEnabled    *bool    `json:"store_enabled"`
-	CheckCycleMS    int      `json:"check_cycle_ms"`
-	CheckOnStart    *bool    `json:"check_on_start"`
-	Required        bool     `json:"required"`
-	CheckMethod     string   `json:"check_method"`
-	TargetValue     string   `json:"target_value"`
-	LimitLL         *float64 `json:"limit_ll"`
-	LimitL          *float64 `json:"limit_l"`
-	LimitH          *float64 `json:"limit_h"`
-	LimitHH         *float64 `json:"limit_hh"`
-	LimitDeadband   float64  `json:"limit_deadband"`
-	ViolationHoldMS int      `json:"violation_hold_ms"`
-	RecoverHoldMS   int      `json:"recover_hold_ms"`
-	QualityPolicy   string   `json:"quality_policy"`
-	Unit            string   `json:"unit"`
-	DecimalPlaces   int      `json:"decimal_places"`
-	SortOrder       int      `json:"sort_order"`
+	VarID           flexibleInt64 `json:"var_id" binding:"required"`
+	VarName         string        `json:"var_name" binding:"required"`
+	DisplayName     string        `json:"display_name"`
+	DisplayNameEN   string        `json:"display_name_en"`
+	DisplayNameJA   string        `json:"display_name_ja"`
+	CheckEnabled    *bool         `json:"check_enabled"`
+	AlarmEnabled    *bool         `json:"alarm_enabled"`
+	StoreEnabled    *bool         `json:"store_enabled"`
+	CheckCycleMS    int           `json:"check_cycle_ms"`
+	CheckOnStart    *bool         `json:"check_on_start"`
+	Required        bool          `json:"required"`
+	CheckMethod     string        `json:"check_method"`
+	TargetValue     string        `json:"target_value"`
+	LimitLL         *float64      `json:"limit_ll"`
+	LimitL          *float64      `json:"limit_l"`
+	LimitH          *float64      `json:"limit_h"`
+	LimitHH         *float64      `json:"limit_hh"`
+	LimitDeadband   float64       `json:"limit_deadband"`
+	ViolationHoldMS int           `json:"violation_hold_ms"`
+	RecoverHoldMS   int           `json:"recover_hold_ms"`
+	QualityPolicy   string        `json:"quality_policy"`
+	Unit            string        `json:"unit"`
+	DecimalPlaces   int           `json:"decimal_places"`
+	SortOrder       int           `json:"sort_order"`
 }
 
 func NewDetectionStandardsHandler(repo *database.Repository) *DetectionStandardsHandler {
@@ -174,7 +175,7 @@ func (h *DetectionStandardsHandler) setFavorite(c *gin.Context, favorite bool) {
 		return
 	}
 	if err := h.repo.SetDetectionStandardFavorite(principal.UserID, standardID, favorite); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "favorite": favorite})
@@ -240,7 +241,7 @@ func (h *DetectionStandardsHandler) patch(c *gin.Context) {
 	}
 	standard, err := h.repo.UpdateDetectionStandard(standardID, updates)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, standard)
@@ -264,7 +265,7 @@ func (h *DetectionStandardsHandler) replaceItems(c *gin.Context) {
 	}
 	standard, err := h.repo.ReplaceDetectionStandardItems(standardID, items)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, standard)
@@ -281,7 +282,7 @@ func (h *DetectionStandardsHandler) delete(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -404,7 +405,7 @@ func detectionStandardItemsFromRequests(requests []detectionStandardItemRequest)
 			decimalPlaces = 2
 		}
 		items = append(items, models.DetectionStandardItem{
-			VarID:           req.VarID,
+			VarID:           req.VarID.Int64(),
 			VarName:         req.VarName,
 			DisplayName:     req.DisplayName,
 			DisplayNameEN:   req.DisplayNameEN,

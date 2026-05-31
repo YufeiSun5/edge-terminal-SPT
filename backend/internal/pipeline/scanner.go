@@ -13,6 +13,7 @@ func StartCycleScanner(channels *Channels, tags *TagManager, tasks *TaskManager)
 		for now := range ticker.C {
 			for _, tag := range tags.All() {
 				enqueueAlarmEvents(channels, tasks.EvaluateLimitAlarm(tag, now, false), -1)
+				enqueueAlarmEvents(channels, tasks.EvaluateDefaultLimitAlarm(tag, now), -1)
 				task := buildStoreTaskForTrigger(tag, tasks, 0, "cycle", now, "on_cycle", false, false)
 				if task == nil {
 					continue

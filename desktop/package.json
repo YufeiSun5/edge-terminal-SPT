@@ -15,6 +15,7 @@
     "package": "npm run backend:build && npm run build && electron-builder",
     "lint": "eslint .",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "smoke:settings": "node scripts/smoke-settings.mjs",
     "test": "vitest run",
     "format": "prettier --write ."
   },

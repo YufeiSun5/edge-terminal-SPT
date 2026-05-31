@@ -2,6 +2,8 @@ package database
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"spindle-edge/backend/internal/models"
@@ -80,4 +82,72 @@ func (r *Repository) EnsureProjectDisplayNameFallbacks() error {
 	return r.db.Model(&models.Project{}).
 		Where("(display_name = '' OR display_name IS NULL) AND name <> ''").
 		Update("display_name", gorm.Expr("name")).Error
+}
+
+func (r *Repository) ListProjectMembers(projectID uint) ([]models.ProjectMemberView, error) {
+	if projectID == 0 {
+		return nil, fmt.Errorf("project_id is required")
+	}
+	var members []models.ProjectMemberView
+	err := r.db.Table("sys_project_members AS pm").
+		Select("pm.id, pm.project_id, pm.user_id, u.username, u.role AS user_role, u.enabled AS user_enabled, pm.member_role, pm.notify_enabled, pm.created_at, pm.updated_at").
+		Joins("JOIN sys_users AS u ON u.id = pm.user_id").
+		Where("pm.project_id = ?", projectID).
+		Order("pm.id ASC").
+		Scan(&members).Error
+	if members == nil {
+		members = []models.ProjectMemberView{}
+	}
+	return members, err
+}
+
+func (r *Repository) ReplaceProjectMembers(projectID uint, members []models.SysProjectMember) ([]models.ProjectMemberView, error) {
+	if projectID == 0 {
+		return nil, fmt.Errorf("project_id is required")
+	}
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var project models.Project
+		if err := tx.First(&project, "id = ?", projectID).Error; err != nil {
+			return err
+		}
+		seen := make(map[uint]struct{}, len(members))
+		now := time.Now()
+		cleaned := make([]models.SysProjectMember, 0, len(members))
+		for _, member := range members {
+			if member.UserID == 0 {
+				return fmt.Errorf("user_id is required")
+			}
+			if _, ok := seen[member.UserID]; ok {
+				return fmt.Errorf("duplicate project member user_id: %d", member.UserID)
+			}
+			seen[member.UserID] = struct{}{}
+			var user models.SysUser
+			if err := tx.First(&user, "id = ?", member.UserID).Error; err != nil {
+				return err
+			}
+			role := strings.TrimSpace(member.MemberRole)
+			if role == "" {
+				role = "member"
+			}
+			cleaned = append(cleaned, models.SysProjectMember{
+				ProjectID:     projectID,
+				UserID:        member.UserID,
+				MemberRole:    role,
+				NotifyEnabled: member.NotifyEnabled,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			})
+		}
+		if err := tx.Where("project_id = ?", projectID).Delete(&models.SysProjectMember{}).Error; err != nil {
+			return err
+		}
+		if len(cleaned) == 0 {
+			return nil
+		}
+		return tx.Select("ProjectID", "UserID", "MemberRole", "NotifyEnabled", "CreatedAt", "UpdatedAt").Create(&cleaned).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return r.ListProjectMembers(projectID)
 }

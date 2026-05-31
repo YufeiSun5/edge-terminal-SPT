@@ -40,6 +40,21 @@ type DetectionTaskFilter struct {
 	Limit     int
 }
 
+type LimitAlarmFilter struct {
+	Scope      string
+	ProjectID  *uint
+	TaskID     *uint
+	TestNo     string
+	VarID      *int64
+	Status     string
+	AlarmType  string
+	AlarmLevel string
+	From       *time.Time
+	To         *time.Time
+	Limit      int
+	Offset     int
+}
+
 type StorageRouteFilter struct {
 	ProjectID *uint
 	VarID     *int64
@@ -52,6 +67,8 @@ type StartDetectionOptions struct {
 	Mode              string
 	StandardID        *uint
 	CustomItems       []models.DetectionStandardItem
+	ProcessParams     any
+	PLCWrites         any
 	LimitCheckEnabled *bool
 	EndPolicy         string
 	DurationSec       int

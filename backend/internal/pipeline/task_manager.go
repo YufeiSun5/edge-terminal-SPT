@@ -9,10 +9,11 @@ import (
 )
 
 type TaskManager struct {
-	mu          sync.RWMutex
-	byProject   map[uint]models.ActiveTask
-	alarmStates map[uint]map[int64]*limitAlarmState
-	ruleIndex   TaskRuleIndex
+	mu                 sync.RWMutex
+	byProject          map[uint]models.ActiveTask
+	alarmStates        map[uint]map[int64]*limitAlarmState
+	defaultAlarmStates map[int64]*limitAlarmState
+	ruleIndex          TaskRuleIndex
 }
 
 type limitAlarmState struct {
@@ -33,9 +34,10 @@ type limitAlarmState struct {
 
 func NewTaskManager() *TaskManager {
 	return &TaskManager{
-		byProject:   make(map[uint]models.ActiveTask),
-		alarmStates: make(map[uint]map[int64]*limitAlarmState),
-		ruleIndex:   NewTaskRuleIndex(nil),
+		byProject:          make(map[uint]models.ActiveTask),
+		alarmStates:        make(map[uint]map[int64]*limitAlarmState),
+		defaultAlarmStates: make(map[int64]*limitAlarmState),
+		ruleIndex:          NewTaskRuleIndex(nil),
 	}
 }
 
@@ -48,6 +50,7 @@ func (tm *TaskManager) Load(tasks []models.DetectionTask) {
 	tm.mu.Lock()
 	tm.byProject = next
 	tm.alarmStates = make(map[uint]map[int64]*limitAlarmState)
+	tm.defaultAlarmStates = make(map[int64]*limitAlarmState)
 	tm.mu.Unlock()
 }
 
@@ -218,6 +221,7 @@ func (tm *TaskManager) EvaluateLimitAlarm(tag *models.Tag, at time.Time, onStart
 		alarmState.PendingSince = time.Time{}
 		value := state.Value
 		alarm := models.DetectionLimitAlarm{
+			Scope:          models.AlarmScopeDetection,
 			TaskID:         active.ID,
 			TestNo:         active.TestNo,
 			ProjectID:      active.ProjectID,
@@ -260,6 +264,7 @@ func (tm *TaskManager) EvaluateLimitAlarm(tag *models.Tag, at time.Time, onStart
 		alarmState.RecoverPendingSince = time.Time{}
 		value := state.Value
 		alarm := models.DetectionLimitAlarm{
+			Scope:          models.AlarmScopeDetection,
 			TaskID:         active.ID,
 			TestNo:         active.TestNo,
 			ProjectID:      active.ProjectID,
@@ -303,19 +308,35 @@ func (tm *TaskManager) EvaluateLimitAlarm(tag *models.Tag, at time.Time, onStart
 
 	recoverValue := state.Value
 	peakValue := alarmState.PeakValue
+	recoverLimitValue := alarmState.LimitValue
 	recoveredAt := at
 	durationMS := at.Sub(alarmState.StartedAt).Milliseconds()
 	alarm := models.DetectionLimitAlarm{
-		TaskID:       active.ID,
-		VarID:        tag.Config.VarID,
-		AlarmType:    alarmState.AlarmType,
-		Status:       models.DetectionAlarmStatusClosed,
-		PeakValue:    &peakValue,
-		RecoverValue: &recoverValue,
-		Quality:      state.Quality,
-		LastSeenAt:   at,
-		RecoveredAt:  &recoveredAt,
-		DurationMS:   durationMS,
+		Scope:          models.AlarmScopeDetection,
+		TaskID:         active.ID,
+		TestNo:         active.TestNo,
+		ProjectID:      active.ProjectID,
+		ProjectCode:    active.ProjectCode,
+		StandardID:     active.StandardID,
+		StandardItemID: item.StandardItemID,
+		RunStandardID:  item.ID,
+		VarID:          item.VarID,
+		VarName:        item.VarName,
+		DisplayName:    item.DisplayName,
+		DisplayNameEN:  item.DisplayNameEN,
+		DisplayNameJA:  item.DisplayNameJA,
+		CheckMethod:    item.CheckMethod,
+		AlarmType:      alarmState.AlarmType,
+		AlarmLevel:     alarmState.AlarmLevel,
+		Status:         models.DetectionAlarmStatusClosed,
+		PeakValue:      &peakValue,
+		RecoverValue:   &recoverValue,
+		LimitValue:     &recoverLimitValue,
+		LimitDeadband:  item.LimitDeadband,
+		Quality:        state.Quality,
+		LastSeenAt:     at,
+		RecoveredAt:    &recoveredAt,
+		DurationMS:     durationMS,
 	}
 	alarmState.Active = false
 	alarmState.AlarmType = ""
@@ -326,6 +347,154 @@ func (tm *TaskManager) EvaluateLimitAlarm(tag *models.Tag, at time.Time, onStart
 	alarmState.Muted = false
 	alarmState.RecoverPendingSince = time.Time{}
 	return []*models.DetectionLimitAlarmEvent{{Action: models.DetectionAlarmActionRecover, Alarm: alarm}}
+}
+
+func (tm *TaskManager) EvaluateDefaultLimitAlarm(tag *models.Tag, at time.Time) []*models.DetectionLimitAlarmEvent {
+	if tag.Config.ProjectID == nil || !tag.Config.DefaultAlarmEnabled {
+		return nil
+	}
+	state := tag.RuntimeState()
+	if !state.Initialized || state.IsString || state.Quality != 1 {
+		return nil
+	}
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if tm.defaultAlarmStates == nil {
+		tm.defaultAlarmStates = make(map[int64]*limitAlarmState)
+	}
+	alarmState := tm.defaultAlarmStates[tag.Config.VarID]
+	if alarmState == nil {
+		alarmState = &limitAlarmState{}
+		tm.defaultAlarmStates[tag.Config.VarID] = alarmState
+	}
+
+	alarmType, alarmLevel, limitValue, violated := defaultLimitAlarmForValue(state.Value, tag.Config)
+	if !alarmState.Active {
+		if !violated {
+			alarmState.PendingAlarmType = ""
+			alarmState.PendingSince = time.Time{}
+			return nil
+		}
+		if tag.Config.DefaultViolationHoldMS > 0 {
+			if alarmState.PendingAlarmType != alarmType || alarmState.PendingLimitValue != limitValue {
+				alarmState.PendingAlarmType = alarmType
+				alarmState.PendingAlarmLevel = alarmLevel
+				alarmState.PendingLimitValue = limitValue
+				alarmState.PendingSince = at
+				return nil
+			}
+			if at.Sub(alarmState.PendingSince) < time.Duration(tag.Config.DefaultViolationHoldMS)*time.Millisecond {
+				return nil
+			}
+		}
+		alarmState.Active = true
+		alarmState.AlarmType = alarmType
+		alarmState.AlarmLevel = alarmLevel
+		alarmState.LimitValue = limitValue
+		alarmState.StartedAt = at
+		alarmState.PeakValue = state.Value
+		alarmState.RecoverPendingSince = time.Time{}
+		alarmState.PendingAlarmType = ""
+		alarmState.PendingSince = time.Time{}
+		value := state.Value
+		alarm := defaultLimitAlarm(tag, alarmType, alarmLevel, limitValue, value, state.Quality, at, models.DetectionAlarmStatusActive)
+		return []*models.DetectionLimitAlarmEvent{{Action: models.DetectionAlarmActionEnter, Alarm: alarm}}
+	}
+
+	if alarmState.isMoreSeverePeak(state.Value) {
+		alarmState.PeakValue = state.Value
+	}
+	if violated && alarmType != alarmState.AlarmType && alarmSeverity(alarmType) > alarmSeverity(alarmState.AlarmType) {
+		oldType := alarmState.AlarmType
+		alarmState.Active = true
+		alarmState.AlarmType = alarmType
+		alarmState.AlarmLevel = alarmLevel
+		alarmState.LimitValue = limitValue
+		alarmState.StartedAt = at
+		alarmState.PeakValue = state.Value
+		alarmState.RecoverPendingSince = time.Time{}
+		value := state.Value
+		alarm := defaultLimitAlarm(tag, alarmType, alarmLevel, limitValue, value, state.Quality, at, models.DetectionAlarmStatusActive)
+		alarm.Message = "level_change"
+		return []*models.DetectionLimitAlarmEvent{{Action: models.DetectionAlarmActionLevelChange, PreviousAlarmType: oldType, Alarm: alarm}}
+	}
+	if !recoveredFromLimitAlarm(state.Value, alarmState, tag.Config.DefaultLimitDeadband) {
+		alarmState.RecoverPendingSince = time.Time{}
+		return nil
+	}
+	if tag.Config.DefaultRecoverHoldMS > 0 {
+		if alarmState.RecoverPendingSince.IsZero() {
+			alarmState.RecoverPendingSince = at
+			return nil
+		}
+		if at.Sub(alarmState.RecoverPendingSince) < time.Duration(tag.Config.DefaultRecoverHoldMS)*time.Millisecond {
+			return nil
+		}
+	}
+
+	recoverValue := state.Value
+	peakValue := alarmState.PeakValue
+	recoverLimitValue := alarmState.LimitValue
+	recoveredAt := at
+	durationMS := at.Sub(alarmState.StartedAt).Milliseconds()
+	alarm := models.DetectionLimitAlarm{
+		Scope:         models.AlarmScopeDefault,
+		TaskID:        0,
+		ProjectID:     *tag.Config.ProjectID,
+		ProjectCode:   tag.Config.ProjectCode,
+		VarID:         tag.Config.VarID,
+		VarName:       tag.Config.VarName,
+		DisplayName:   tag.Config.DisplayName,
+		DisplayNameEN: tag.Config.DisplayNameEN,
+		DisplayNameJA: tag.Config.DisplayNameJA,
+		CheckMethod:   models.CheckMethodNumericRange,
+		AlarmType:     alarmState.AlarmType,
+		AlarmLevel:    alarmState.AlarmLevel,
+		Status:        models.DetectionAlarmStatusClosed,
+		PeakValue:     &peakValue,
+		RecoverValue:  &recoverValue,
+		LimitValue:    &recoverLimitValue,
+		LimitDeadband: tag.Config.DefaultLimitDeadband,
+		Quality:       state.Quality,
+		LastSeenAt:    at,
+		RecoveredAt:   &recoveredAt,
+		DurationMS:    durationMS,
+	}
+	alarmState.Active = false
+	alarmState.AlarmType = ""
+	alarmState.AlarmLevel = ""
+	alarmState.LimitValue = 0
+	alarmState.StartedAt = time.Time{}
+	alarmState.PeakValue = 0
+	alarmState.RecoverPendingSince = time.Time{}
+	return []*models.DetectionLimitAlarmEvent{{Action: models.DetectionAlarmActionRecover, Alarm: alarm}}
+}
+
+func defaultLimitAlarm(tag *models.Tag, alarmType string, alarmLevel string, limitValue float64, value float64, quality int, at time.Time, status string) models.DetectionLimitAlarm {
+	return models.DetectionLimitAlarm{
+		Scope:         models.AlarmScopeDefault,
+		TaskID:        0,
+		ProjectID:     *tag.Config.ProjectID,
+		ProjectCode:   tag.Config.ProjectCode,
+		VarID:         tag.Config.VarID,
+		VarName:       tag.Config.VarName,
+		DisplayName:   tag.Config.DisplayName,
+		DisplayNameEN: tag.Config.DisplayNameEN,
+		DisplayNameJA: tag.Config.DisplayNameJA,
+		CheckMethod:   models.CheckMethodNumericRange,
+		AlarmType:     alarmType,
+		AlarmLevel:    alarmLevel,
+		Status:        status,
+		StartValue:    &value,
+		PeakValue:     &value,
+		LimitValue:    &limitValue,
+		LimitDeadband: tag.Config.DefaultLimitDeadband,
+		Quality:       quality,
+		FirstSeenAt:   at,
+		LastSeenAt:    at,
+	}
 }
 
 func (s *limitAlarmState) isMoreSeverePeak(value float64) bool {
@@ -351,6 +520,22 @@ func limitAlarmForValue(value float64, item models.DetectionRunStandardItem) (st
 	}
 	if item.LimitL != nil && value < *item.LimitL {
 		return "below_l", "L", *item.LimitL, true
+	}
+	return "", "", 0, false
+}
+
+func defaultLimitAlarmForValue(value float64, tag models.TagConfig) (string, string, float64, bool) {
+	if tag.DefaultLimitHH != nil && value > *tag.DefaultLimitHH {
+		return "above_hh", "HH", *tag.DefaultLimitHH, true
+	}
+	if tag.DefaultLimitH != nil && value > *tag.DefaultLimitH {
+		return "above_h", "H", *tag.DefaultLimitH, true
+	}
+	if tag.DefaultLimitLL != nil && value < *tag.DefaultLimitLL {
+		return "below_ll", "LL", *tag.DefaultLimitLL, true
+	}
+	if tag.DefaultLimitL != nil && value < *tag.DefaultLimitL {
+		return "below_l", "L", *tag.DefaultLimitL, true
 	}
 	return "", "", 0, false
 }

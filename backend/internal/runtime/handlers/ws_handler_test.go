@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,7 +29,7 @@ func TestRealtimeWSHandlerClientMessages(t *testing.T) {
 		Topics:     []string{"variables", "notifications"},
 		SourceType: models.TagSourceMQTT,
 		GatewayID:  intPtrForHandlerTest(1),
-		VarIDs:     []int64{10},
+		VarIDs:     flexibleInt64List{10},
 	}, principal)
 	if len(responses) != 1 || responses[0].Type != services.WSTypeSubscriptionUpdated || !next.Wants("realtime.variables") || !next.Wants("notifications") || next.Wants("detection.runs") || next.SourceType != models.TagSourceMQTT || !next.VarIDs[10] {
 		t.Fatalf("unexpected subscribe result next=%+v responses=%+v", next, responses)
@@ -49,6 +50,31 @@ func TestRealtimeWSHandlerClientMessages(t *testing.T) {
 	_, responses = handler.handleClientMessage(next, wsClientMessage{Type: "ping"}, principal)
 	if len(responses) != 1 || responses[0].Type != services.WSTypeHeartbeat {
 		t.Fatalf("unexpected ping response: %+v", responses)
+	}
+}
+
+func TestRealtimeWSHandlerSubscriptionAcceptsStringVarIDs(t *testing.T) {
+	var msg wsClientMessage
+	if err := json.Unmarshal([]byte(`{"type":"subscribe","request_id":"req-big","topics":["variables"],"var_ids":["9212397624135540849",10]}`), &msg); err != nil {
+		t.Fatalf("expected string var_ids to decode: %v", err)
+	}
+	service := services.NewRealtimeWSService(pipeline.NewTagManager(), pipeline.NewTaskManager())
+	handler := NewRealtimeWSHandler(service, nil, nil)
+	next, responses := handler.handleClientMessage(services.DefaultRealtimeSubscription(), msg, auth.Principal{AuthType: "user", UserID: 1, Role: auth.RoleAdmin})
+	if len(responses) != 1 || responses[0].Type != services.WSTypeSubscriptionUpdated || !next.VarIDs[9212397624135540849] || !next.VarIDs[10] {
+		t.Fatalf("unexpected subscribe response next=%+v responses=%+v", next, responses)
+	}
+	payload, ok := responses[0].Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected subscription payload map, got %#v", responses[0].Payload)
+	}
+	texts, ok := payload["var_id_texts"].([]string)
+	if !ok || len(texts) != 2 || texts[1] != "9212397624135540849" {
+		t.Fatalf("expected exact var_id_texts, got %#v", payload["var_id_texts"])
+	}
+
+	if err := json.Unmarshal([]byte(`{"type":"subscribe","var_ids":["not-an-id"]}`), &msg); err == nil {
+		t.Fatal("expected invalid string var_id to fail")
 	}
 }
 
@@ -110,9 +136,10 @@ func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 	db := newHandlerTestDB(t)
 	repo := database.NewRepository(db)
 	projectID := uint(9)
+	varID := int64(9212397624135540849)
 	tags := pipeline.NewTagManager()
 	tags.Load([]models.TagConfig{{
-		VarID:       900,
+		VarID:       varID,
 		SourceType:  models.TagSourceVirtual,
 		GatewayID:   0,
 		SourceTopic: "virtual",
@@ -143,7 +170,7 @@ func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 		Vars: []models.TaskFlowVar{{
 			FlowID:    901,
 			ProjectID: projectID,
-			VarID:     900,
+			VarID:     varID,
 			Role:      models.TaskFlowVarRoleWatch,
 		}},
 	}})
@@ -157,12 +184,20 @@ func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 		Type:      "command.write_variable",
 		RequestID: "req-write",
 		CommandID: "cmd-write",
-		Payload:   []byte(`{"var_id":900,"value":"{\"command\":\"start\"}"}`),
+		Payload:   []byte(`{"var_id":"9212397624135540849","value":"{\"command\":\"start\"}"}`),
 	}, auth.Principal{AuthType: "user", UserID: 1, Username: "admin", Role: auth.RoleAdmin})
 	if len(responses) != 1 || responses[0].Type != services.WSTypeCommandAck {
 		t.Fatalf("unexpected write response: %+v", responses)
 	}
-	tag, ok := tags.Get(900)
+	payload, ok := responses[0].Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected command payload map, got %#v", responses[0].Payload)
+	}
+	result, ok := payload["result"].(services.VariableWriteResult)
+	if !ok || result.VarIDText != "9212397624135540849" {
+		t.Fatalf("expected exact write result var_id_text, got %#v", payload["result"])
+	}
+	tag, ok := tags.Get(varID)
 	if !ok || tag.RuntimeState().StrValue != `{"command":"start"}` {
 		t.Fatalf("expected virtual variable write, ok=%v tag=%+v", ok, tag)
 	}

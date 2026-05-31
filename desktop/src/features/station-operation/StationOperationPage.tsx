@@ -25,7 +25,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Button, Form, Input, InputNumber, Modal, Select, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Segmented, Select, Table, Tag, message } from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
@@ -42,14 +42,25 @@ import {
   Waves,
   Wind,
   AlertTriangle,
+  Database,
 } from 'lucide-react'
-import type { DetectionRunStartPayload, TagSnapshot } from '@/shared/api/types'
+import type {
+  DetectionRunStandardItem,
+  DetectionRunStartPayload,
+  DetectionRunStorageRoute,
+  LimitAlarm,
+  LimitAlarmScope,
+  TagSnapshot,
+} from '@/shared/api/types'
 import { useAuthStore } from '@/features/auth/authStore'
 import {
   abnormalStopDetectionRun,
   getActiveDetectionRuns,
+  getDetectionRun,
+  getDetectionRunStorageRoutes,
   getDetectionStandards,
   getDevices,
+  getLimitAlarms,
   getRealtimeVariables,
   getReportTemplates,
   startDetectionRun,
@@ -75,7 +86,7 @@ type MetricCard = {
 }
 
 type StartDetectionFormValues = {
-  device_id: number
+  project_id: number
   test_no: string
   mode: string
   standard_id?: number
@@ -83,6 +94,8 @@ type StartDetectionFormValues = {
   duration_min?: number
   operator_note?: string
 }
+
+type AlarmScopeFilter = 'all' | LimitAlarmScope
 
 const chartData: TrendPoint[] = [
   { time: '08:00', value: 44 },
@@ -111,6 +124,26 @@ function valueFromSnapshot(tags: TagSnapshot[], index: number, fallback: number)
   return tag.value
 }
 
+function formatAlarmValue(value?: number | null) {
+  return value === undefined || value === null ? '-' : Number(value).toFixed(3).replace(/\.?0+$/, '')
+}
+
+function formatAlarmTime(value?: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+function alarmDisplayName(
+  alarm: Pick<LimitAlarm, 'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name'>,
+  language?: string,
+) {
+  if (language === 'en') return alarm.display_name_en || alarm.display_name || alarm.var_name
+  if (language === 'ja') return alarm.display_name_ja || alarm.display_name || alarm.var_name
+  return alarm.display_name || alarm.var_name
+}
+
 export function StationOperationPage() {
   const { t, i18n } = useTranslation()
   const [searchParams] = useSearchParams()
@@ -119,14 +152,18 @@ export function StationOperationPage() {
   const [messageApi, messageContext] = message.useMessage()
   const [startForm] = Form.useForm<StartDetectionFormValues>()
   const [startModalOpen, setStartModalOpen] = useState(false)
+  const [alarmModalOpen, setAlarmModalOpen] = useState(false)
+  const [storageSnapshotOpen, setStorageSnapshotOpen] = useState(false)
+  const [runSnapshotOpen, setRunSnapshotOpen] = useState(false)
+  const [alarmScope, setAlarmScope] = useState<AlarmScopeFilter>('all')
   const hasPermission = useAuthStore((state) => state.hasPermission)
   const canStartDetection = hasPermission('start_detection')
   const canStopDetection = hasPermission('stop_detection')
-  const selectedDeviceId = Number(searchParams.get('device_id'))
-  const validSelectedDeviceId = Number.isFinite(selectedDeviceId) && selectedDeviceId > 0 ? selectedDeviceId : undefined
+  const selectedProjectId = Number(searchParams.get('project_id') ?? searchParams.get('device_id'))
+  const validSelectedProjectId = Number.isFinite(selectedProjectId) && selectedProjectId > 0 ? selectedProjectId : undefined
   const variablesQuery = useQuery({
-    queryKey: ['edge', 'realtime-variables', validSelectedDeviceId],
-    queryFn: () => getRealtimeVariables(validSelectedDeviceId ? { project_id: validSelectedDeviceId } : {}),
+    queryKey: ['edge', 'realtime-variables', validSelectedProjectId],
+    queryFn: () => getRealtimeVariables(validSelectedProjectId ? { project_id: validSelectedProjectId } : {}),
     refetchInterval: 2000,
     retry: false,
   })
@@ -154,38 +191,63 @@ export function StationOperationPage() {
     staleTime: 30000,
     retry: false,
   })
-
+  const alarmsQuery = useQuery({
+    queryKey: ['station', 'limit-alarms', validSelectedProjectId, alarmScope],
+    queryFn: () =>
+      getLimitAlarms({
+        limit: 100,
+        ...(validSelectedProjectId ? { project_id: validSelectedProjectId } : {}),
+        ...(alarmScope === 'all' ? {} : { scope: alarmScope }),
+      }),
+    enabled: alarmModalOpen,
+    refetchInterval: alarmModalOpen ? 5000 : false,
+    retry: false,
+  })
   const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
   const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data])
-  const selectedDevice = useMemo(
-    () => devices.find((device) => device.id === validSelectedDeviceId),
-    [devices, validSelectedDeviceId],
+  const selectedProject = useMemo(
+    () => devices.find((device) => device.id === validSelectedProjectId),
+    [devices, validSelectedProjectId],
   )
   const stationVariables = useMemo(
     () =>
-      validSelectedDeviceId
-        ? variables.filter((variable) => variable.device_id === validSelectedDeviceId)
+      validSelectedProjectId
+        ? variables.filter((variable) => variable.project_id === validSelectedProjectId || variable.device_id === validSelectedProjectId)
         : variables,
-    [validSelectedDeviceId, variables],
+    [validSelectedProjectId, variables],
   )
   const activeRun =
-    activeRunsQuery.data?.find((run) => run.device_id === validSelectedDeviceId) ?? activeRunsQuery.data?.[0]
-  const selectedRunDeviceId = activeRun?.device_id ?? validSelectedDeviceId
+    activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId || run.device_id === validSelectedProjectId) ?? activeRunsQuery.data?.[0]
+  const storageSnapshotQuery = useQuery({
+    queryKey: ['station', 'run-storage-routes', activeRun?.id],
+    queryFn: () => getDetectionRunStorageRoutes(activeRun!.id),
+    enabled: storageSnapshotOpen && activeRun !== undefined,
+    refetchInterval: storageSnapshotOpen ? 10000 : false,
+    retry: false,
+  })
+  const runSnapshotQuery = useQuery({
+    queryKey: ['station', 'run-snapshot', activeRun?.id],
+    queryFn: () => getDetectionRun(activeRun!.id),
+    enabled: runSnapshotOpen && activeRun !== undefined,
+    refetchInterval: runSnapshotOpen ? 10000 : false,
+    retry: false,
+  })
+  const selectedRunProjectId = activeRun?.project_id ?? activeRun?.device_id ?? validSelectedProjectId
   const standards = useMemo(() => standardsQuery.data ?? [], [standardsQuery.data])
   const reportTemplates = useMemo(() => reportTemplatesQuery.data ?? [], [reportTemplatesQuery.data])
   const availableStandards = useMemo(
     () =>
       standards.filter(
-        (standard) => !selectedRunDeviceId || !standard.device_id || standard.device_id === selectedRunDeviceId,
+        (standard) => !selectedRunProjectId || !standard.project_id || standard.project_id === selectedRunProjectId || standard.device_id === selectedRunProjectId,
       ),
-    [selectedRunDeviceId, standards],
+    [selectedRunProjectId, standards],
   )
-  const selectedDeviceName = useMemo(() => {
-    if (!selectedDevice) return undefined
-    if (i18n.resolvedLanguage === 'en') return selectedDevice.display_name_en || selectedDevice.display_name || selectedDevice.name || selectedDevice.device_code
-    if (i18n.resolvedLanguage === 'ja') return selectedDevice.display_name_ja || selectedDevice.display_name || selectedDevice.name || selectedDevice.device_code
-    return selectedDevice.display_name || selectedDevice.name || selectedDevice.device_code
-  }, [i18n.resolvedLanguage, selectedDevice])
+  const selectedProjectName = useMemo(() => {
+    if (!selectedProject) return undefined
+    if (i18n.resolvedLanguage === 'en') return selectedProject.display_name_en || selectedProject.display_name || selectedProject.name || selectedProject.device_code
+    if (i18n.resolvedLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.display_name || selectedProject.name || selectedProject.device_code
+    return selectedProject.display_name || selectedProject.name || selectedProject.device_code
+  }, [i18n.resolvedLanguage, selectedProject])
   const [cardOrder, setCardOrder] = useState(metricSeed.map((item) => item.id))
   const [isStatusCollapsed, setStatusCollapsed] = useState(false)
   const [pinnedRows, setPinnedRows] = useState<string[]>([])
@@ -257,7 +319,7 @@ export function StationOperationPage() {
   const startRunMutation = useMutation({
     mutationFn: (values: StartDetectionFormValues) => {
       const payload: DetectionRunStartPayload = {
-        device_id: values.device_id,
+        project_id: values.project_id,
         test_no: values.test_no.trim(),
         mode: values.mode,
         standard_id: values.standard_id,
@@ -294,9 +356,9 @@ export function StationOperationPage() {
   }
 
   function openStartModal() {
-    const targetDevice = selectedDevice ?? devices[0]
+    const targetProject = selectedProject ?? devices[0]
     startForm.setFieldsValue({
-      device_id: targetDevice?.id,
+      project_id: targetProject?.id,
       test_no: `RUN-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}`,
       mode: availableStandards[0]?.mode ?? 'standard',
       standard_id: availableStandards[0]?.id,
@@ -327,17 +389,230 @@ export function StationOperationPage() {
     if (!activeRun) return
     const params = new URLSearchParams({
       task_id: String(activeRun.id),
-      device_id: String(activeRun.device_id),
+      project_id: String(activeRun.project_id ?? activeRun.device_id),
       test_no: activeRun.test_no,
     })
     navigate(`/history?${params.toString()}`)
   }
 
-  const statusDevice = selectedDevice?.device_code ?? activeRun?.device_code ?? 'SN-20230912'
-  const statusProject = selectedDeviceName ?? activeRun?.test_no ?? t('station.status.mockProject')
-  const statusConfig = selectedDevice?.model_name || activeRun?.mode || 'A'
+  const statusProjectCode = selectedProject?.device_code ?? activeRun?.project_code ?? activeRun?.device_code ?? 'SN-20230912'
+  const statusProject = selectedProjectName ?? activeRun?.test_no ?? t('station.status.mockProject')
+  const statusConfig = selectedProject?.model_name || activeRun?.mode || 'A'
   const statusTask = activeRun?.test_no ?? t('station.run.idle')
   const selectedStandardLabel = activeRun?.standard_code || availableStandards[0]?.standard_code || '--'
+  const alarmRows = alarmsQuery.data?.items ?? []
+  const alarmScopeOptions = useMemo(
+    () => [
+      { label: t('station.alarms.scopeAll'), value: 'all' },
+      { label: t('station.alarms.scopeDefault'), value: 'default' },
+      { label: t('station.alarms.scopeDetection'), value: 'detection' },
+    ],
+    [t],
+  )
+  const alarmColumns = useMemo(
+    () => [
+      {
+        title: t('station.alarms.scope'),
+        dataIndex: 'scope',
+        key: 'scope',
+        width: 110,
+        render: (scope: string) => (
+          <Tag color={scope === 'default' ? 'cyan' : 'volcano'}>
+            {scope === 'default' ? t('station.alarms.scopeDefault') : t('station.alarms.scopeDetection')}
+          </Tag>
+        ),
+      },
+      {
+        title: t('station.alarms.variable'),
+        key: 'variable',
+        width: 180,
+        render: (_: unknown, record: LimitAlarm) => (
+          <div className="station-alarm-variable">
+            <strong>{alarmDisplayName(record, i18n.resolvedLanguage)}</strong>
+            <span>{record.var_name}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.alarms.level'),
+        dataIndex: 'alarm_level',
+        key: 'alarm_level',
+        width: 84,
+        render: (level: string) => <Tag color={level === 'HH' || level === 'LL' ? 'red' : 'orange'}>{level}</Tag>,
+      },
+      {
+        title: t('station.alarms.status'),
+        dataIndex: 'status',
+        key: 'status',
+        width: 92,
+        render: (status: string) => (
+          <span className={status === 'active' ? 'status-ng' : 'status-ok'}>
+            <span />
+            {status === 'active' ? t('station.alarms.active') : t('station.alarms.closed')}
+          </span>
+        ),
+      },
+      {
+        title: t('station.alarms.values'),
+        key: 'values',
+        width: 170,
+        render: (_: unknown, record: LimitAlarm) => (
+          <div className="station-alarm-values">
+            <span>{t('station.alarms.startValue')}: {formatAlarmValue(record.start_value)}</span>
+            <span>{t('station.alarms.limitValue')}: {formatAlarmValue(record.limit_value)}</span>
+            <span>{t('station.alarms.recoverValue')}: {formatAlarmValue(record.recover_value)}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.alarms.firstSeenAt'),
+        dataIndex: 'first_seen_at',
+        key: 'first_seen_at',
+        width: 170,
+        render: formatAlarmTime,
+      },
+      {
+        title: t('station.alarms.lastSeenAt'),
+        dataIndex: 'last_seen_at',
+        key: 'last_seen_at',
+        width: 170,
+        render: formatAlarmTime,
+      },
+    ],
+    [i18n.resolvedLanguage, t],
+  )
+  const storageRouteColumns = useMemo(
+    () => [
+      {
+        title: t('station.storage.route'),
+        dataIndex: 'route_code',
+        key: 'route_code',
+        width: 170,
+        render: (value: string, record: DetectionRunStorageRoute) => (
+          <div className="station-alarm-variable">
+            <strong>{value}</strong>
+            <span>var_id: {record.var_id_text ?? record.var_id}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.storage.target'),
+        dataIndex: 'storage_target',
+        key: 'storage_target',
+        width: 132,
+        render: (value: string) => <Tag color={value === 'wide_table' ? 'blue' : 'default'}>{value}</Tag>,
+      },
+      {
+        title: t('station.storage.tableColumn'),
+        key: 'tableColumn',
+        width: 260,
+        render: (_: unknown, record: DetectionRunStorageRoute) => (
+          <div className="station-alarm-values">
+            <span>{record.table_name || '--'}</span>
+            <span>{record.column_name || '--'} / {record.column_type || '--'}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.storage.trigger'),
+        dataIndex: 'trigger_mode',
+        key: 'trigger_mode',
+        width: 132,
+      },
+      {
+        title: t('station.storage.cycle'),
+        dataIndex: 'cycle_ms',
+        key: 'cycle_ms',
+        width: 110,
+        render: (value: number) => (value > 0 ? `${value} ms` : '--'),
+      },
+      {
+        title: t('station.storage.deadband'),
+        dataIndex: 'deadband',
+        key: 'deadband',
+        width: 110,
+        render: (value: number) => String(value ?? 0),
+      },
+      {
+        title: t('station.storage.storeOnStart'),
+        dataIndex: 'store_on_start',
+        key: 'store_on_start',
+        width: 110,
+        render: (value: boolean) => <Tag color={value ? 'green' : 'default'}>{value ? t('station.storage.yes') : t('station.storage.no')}</Tag>,
+      },
+    ],
+    [t],
+  )
+  const runSnapshotColumns = useMemo(
+    () => [
+      {
+        title: t('station.snapshot.variable'),
+        key: 'variable',
+        width: 210,
+        render: (_: unknown, record: DetectionRunStandardItem) => (
+          <div className="station-alarm-variable">
+            <strong>{alarmDisplayName(record, i18n.resolvedLanguage)}</strong>
+            <span>{record.var_name}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.snapshot.detectionLimit'),
+        key: 'detectionLimit',
+        width: 210,
+        render: (_: unknown, record: DetectionRunStandardItem) => (
+          <div className="station-alarm-values">
+            <span>LL/L: {formatAlarmValue(record.limit_ll)} / {formatAlarmValue(record.limit_l)}</span>
+            <span>H/HH: {formatAlarmValue(record.limit_h)} / {formatAlarmValue(record.limit_hh)}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.snapshot.defaultAlarm'),
+        key: 'defaultAlarm',
+        width: 130,
+        render: (_: unknown, record: DetectionRunStandardItem) => (
+          <Tag color={record.variable_default_alarm_enabled ? 'cyan' : 'default'}>
+            {record.variable_default_alarm_enabled ? t('station.storage.yes') : t('station.storage.no')}
+          </Tag>
+        ),
+      },
+      {
+        title: t('station.snapshot.defaultLimit'),
+        key: 'defaultLimit',
+        width: 230,
+        render: (_: unknown, record: DetectionRunStandardItem) => (
+          <div className="station-alarm-values">
+            <span>LL/L: {formatAlarmValue(record.variable_default_limit_ll ?? undefined)} / {formatAlarmValue(record.variable_default_limit_l ?? undefined)}</span>
+            <span>H/HH: {formatAlarmValue(record.variable_default_limit_h ?? undefined)} / {formatAlarmValue(record.variable_default_limit_hh ?? undefined)}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.snapshot.policy'),
+        key: 'policy',
+        width: 220,
+        render: (_: unknown, record: DetectionRunStandardItem) => (
+          <div className="station-alarm-values">
+            <span>{t('station.snapshot.deadband')}: {formatAlarmValue(record.variable_default_limit_deadband)}</span>
+            <span>{t('station.snapshot.hold')}: {record.variable_default_violation_hold_ms} / {record.variable_default_recover_hold_ms} ms</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.snapshot.check'),
+        key: 'check',
+        width: 180,
+        render: (_: unknown, record: DetectionRunStandardItem) => (
+          <div className="station-alarm-values">
+            <span>{record.alarm_enabled ? t('station.snapshot.alarmOn') : t('station.snapshot.alarmOff')}</span>
+            <span>{record.check_on_start ? t('station.snapshot.checkOnStart') : t('station.snapshot.checkByCycle')} / {record.check_cycle_ms} ms</span>
+          </div>
+        ),
+      },
+    ],
+    [i18n.resolvedLanguage, t],
+  )
 
   return (
     <div className="station-page">
@@ -354,7 +629,7 @@ export function StationOperationPage() {
             {isStatusCollapsed ? (
               <>
                 <div className="status-collapsed-left">
-                  <strong>{statusDevice}</strong>
+                  <strong>{statusProjectCode}</strong>
                   <span>{statusProject}</span>
                   <span>{activeRun ? activeRun.test_no : t('station.run.idle')}</span>
                 </div>
@@ -366,7 +641,7 @@ export function StationOperationPage() {
                   <div className="station-status-main">
                     <div>
                       <span className="eyebrow">{t('station.status.device')}</span>
-                      <strong>{statusDevice}</strong>
+                      <strong>{statusProjectCode}</strong>
                     </div>
                     <div>
                       <span className="eyebrow">{t('station.status.project')}</span>
@@ -403,7 +678,9 @@ export function StationOperationPage() {
             <Button icon={<Settings size={15} />}>{t('station.actions.config')}</Button>
             <Button>{t('station.actions.pid')}</Button>
             <Button>{t('station.actions.mute')}</Button>
-            <Button className={alarmOn ? 'alarm-active' : undefined}>{t('station.actions.alarmLog')}</Button>
+            <Button className={alarmOn ? 'alarm-active' : undefined} onClick={() => setAlarmModalOpen(true)}>
+              {t('station.actions.alarmLog')}
+            </Button>
             {activeRun ? (
               <>
                 <Button
@@ -411,6 +688,18 @@ export function StationOperationPage() {
                   onClick={openHistoryForActiveRun}
                 >
                   {t('station.actions.history')}
+                </Button>
+                <Button
+                  icon={<Database size={15} />}
+                  onClick={() => setStorageSnapshotOpen(true)}
+                >
+                  {t('station.actions.storageSnapshot')}
+                </Button>
+                <Button
+                  icon={<Database size={15} />}
+                  onClick={() => setRunSnapshotOpen(true)}
+                >
+                  {t('station.actions.runSnapshot')}
                 </Button>
                 <Button
                   icon={<Square size={14} />}
@@ -498,7 +787,7 @@ export function StationOperationPage() {
       >
         <Form form={startForm} layout="vertical" onFinish={(values) => startRunMutation.mutate(values)}>
           <div className="station-run-form-grid">
-            <Form.Item name="device_id" label={t('station.run.device')} rules={[{ required: true }]}>
+            <Form.Item name="project_id" label={t('station.run.device')} rules={[{ required: true }]}>
               <Select
                 options={devices.map((device) => ({
                   label: `${device.display_name || device.name || device.device_code} / ${device.device_code}`,
@@ -551,6 +840,108 @@ export function StationOperationPage() {
             </Button>
           </div>
         </Form>
+      </Modal>
+      <Modal
+        className="station-alarm-modal"
+        title={t('station.alarms.title')}
+        open={alarmModalOpen}
+        onCancel={() => setAlarmModalOpen(false)}
+        footer={null}
+        centered
+        width="min(1120px, calc(100vw - 48px))"
+        destroyOnHidden
+      >
+        <div className="station-alarm-toolbar">
+          <Segmented
+            size="small"
+            value={alarmScope}
+            options={alarmScopeOptions}
+            onChange={(value) => setAlarmScope(value as AlarmScopeFilter)}
+          />
+          <div className="station-alarm-toolbar-right">
+            <span>
+              {validSelectedProjectId ? t('station.alarms.currentProject', { name: selectedProjectName ?? statusProjectCode }) : t('station.alarms.allProjects')}
+            </span>
+            <Button size="small" onClick={() => alarmsQuery.refetch()} loading={alarmsQuery.isFetching}>
+              {t('actions.refresh')}
+            </Button>
+          </div>
+        </div>
+        <Table<LimitAlarm>
+          rowKey="id"
+          size="small"
+          columns={alarmColumns}
+          dataSource={alarmRows}
+          loading={alarmsQuery.isFetching}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          scroll={{ x: 980, y: 480 }}
+        />
+      </Modal>
+      <Modal
+        className="station-alarm-modal"
+        title={t('station.snapshot.title')}
+        open={runSnapshotOpen}
+        onCancel={() => setRunSnapshotOpen(false)}
+        footer={null}
+        centered
+        width="min(1240px, calc(100vw - 48px))"
+        destroyOnHidden
+      >
+        <div className="station-alarm-toolbar">
+          <span>
+            {activeRun
+              ? t('station.snapshot.currentRun', { testNo: activeRun.test_no })
+              : t('station.run.idle')}
+          </span>
+          <div className="station-alarm-toolbar-right">
+            <span>{t('station.snapshot.count', { count: runSnapshotQuery.data?.standard_items?.length ?? 0 })}</span>
+            <Button size="small" onClick={() => runSnapshotQuery.refetch()} loading={runSnapshotQuery.isFetching}>
+              {t('actions.refresh')}
+            </Button>
+          </div>
+        </div>
+        <Table<DetectionRunStandardItem>
+          rowKey={(record) => `${record.task_id}-${record.standard_item_id}-${record.var_id_text ?? record.var_id}`}
+          size="small"
+          columns={runSnapshotColumns}
+          dataSource={runSnapshotQuery.data?.standard_items ?? []}
+          loading={runSnapshotQuery.isFetching}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          scroll={{ x: 1180, y: 480 }}
+        />
+      </Modal>
+      <Modal
+        className="station-alarm-modal"
+        title={t('station.storage.title')}
+        open={storageSnapshotOpen}
+        onCancel={() => setStorageSnapshotOpen(false)}
+        footer={null}
+        centered
+        width="min(1120px, calc(100vw - 48px))"
+        destroyOnHidden
+      >
+        <div className="station-alarm-toolbar">
+          <span>
+            {activeRun
+              ? t('station.storage.currentRun', { testNo: activeRun.test_no })
+              : t('station.run.idle')}
+          </span>
+          <div className="station-alarm-toolbar-right">
+            <span>{t('station.storage.count', { count: storageSnapshotQuery.data?.count ?? 0 })}</span>
+            <Button size="small" onClick={() => storageSnapshotQuery.refetch()} loading={storageSnapshotQuery.isFetching}>
+              {t('actions.refresh')}
+            </Button>
+          </div>
+        </div>
+        <Table<DetectionRunStorageRoute>
+          rowKey={(record) => `${record.task_id}-${record.route_id}-${record.var_id_text ?? record.var_id}`}
+          size="small"
+          columns={storageRouteColumns}
+          dataSource={storageSnapshotQuery.data?.items ?? []}
+          loading={storageSnapshotQuery.isFetching}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          scroll={{ x: 980, y: 480 }}
+        />
       </Modal>
     </div>
   )

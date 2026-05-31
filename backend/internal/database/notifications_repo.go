@@ -98,9 +98,23 @@ func (r *Repository) CreateRuntimeNotification(notification *models.RuntimeNotif
 func (r *Repository) notificationRecipientUsers(tx *gorm.DB, targetType string, targetID string) ([]models.SysUser, error) {
 	query := tx.Select("id").Where("enabled = ?", true)
 	switch strings.ToLower(strings.TrimSpace(targetType)) {
-	case "", models.NotificationTargetAll, models.NotificationTargetProject:
-		// Project-specific membership is not modeled yet. Until it exists, project
-		// notifications remain visible to all enabled local edge users.
+	case "", models.NotificationTargetAll:
+	case models.NotificationTargetProject:
+		projectID, err := strconv.ParseUint(strings.TrimSpace(targetID), 10, 64)
+		if err != nil || projectID == 0 {
+			return nil, nil
+		}
+		var memberCount int64
+		if err := tx.Model(&models.SysProjectMember{}).Where("project_id = ?", uint(projectID)).Count(&memberCount).Error; err != nil {
+			return nil, err
+		}
+		if memberCount == 0 {
+			break
+		}
+		query = tx.Table("sys_users").
+			Select("sys_users.id").
+			Joins("JOIN sys_project_members AS pm ON pm.user_id = sys_users.id").
+			Where("sys_users.enabled = ? AND pm.project_id = ? AND pm.notify_enabled = ?", true, uint(projectID), true)
 	case models.NotificationTargetUser:
 		userID, err := strconv.ParseUint(strings.TrimSpace(targetID), 10, 64)
 		if err != nil || userID == 0 {

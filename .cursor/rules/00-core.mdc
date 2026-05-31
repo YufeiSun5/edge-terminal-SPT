@@ -7,7 +7,7 @@ globs: ["**/*"]
 
 Read root `AGENTS.md` first, then `MEMORY.md` and `AI_BOARD.md`.
 
-`AI_BOARD.md` is the only active collaboration board. Do not put open or blocked work under `.ai/docs/`.
+`AI_BOARD.md` is the only active collaboration board. Keep every open or blocked item there. Move closed conclusions, implementation notes, and test evidence to `.ai/docs/`, module docs, or `.ai/docs/archive/`.
 
 Use `.ai/instructions/` as the source of detailed rules:
 

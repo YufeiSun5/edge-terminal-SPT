@@ -10,12 +10,12 @@ import {
   deleteDetectionStandard,
   getDetectionStandard,
   getDetectionStandards,
-  getDevices,
+  getDevices as getProjects,
   getVariables,
   replaceDetectionStandardItems,
   updateDetectionStandard,
 } from '@/features/edge-status/api'
-import type { DetectionStandard, DetectionStandardItemPayload, DetectionStandardPayload, Device, VariableConfig } from '@/shared/api/types'
+import type { DetectionStandard, DetectionStandardItemPayload, DetectionStandardPayload, Device as Project, VarIdentifier, VariableConfig } from '@/shared/api/types'
 import '@/features/settings/settings.css'
 import './detection-config.css'
 
@@ -55,13 +55,37 @@ function standardItemTitle(item: DetectionStandardItemPayload, language?: string
   return item.display_name || item.var_name
 }
 
+function variableWireId(variable: Pick<VariableConfig, 'var_id' | 'var_id_text'>): string {
+  return variable.var_id_text ?? String(variable.var_id)
+}
+
+function varKey(value?: VarIdentifier | null) {
+  return value === undefined || value === null || value === '' ? '' : String(value)
+}
+
+function sameVarId(left?: VarIdentifier | null, right?: VarIdentifier | null) {
+  return varKey(left) === varKey(right)
+}
+
+function standardProjectId(standard: Pick<DetectionStandard, 'project_id' | 'device_id'>) {
+  return standard.project_id ?? standard.device_id
+}
+
+function standardProjectCode(standard: Pick<DetectionStandard, 'project_code' | 'device_code'>) {
+  return standard.project_code || standard.device_code
+}
+
+function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
+  return project?.project_code || project?.device_code || ''
+}
+
 export function DetectionConfigPage() {
   const { t, i18n } = useTranslation()
   const [messageApi, contextHolder] = message.useMessage()
   const [selectedStandardId, setSelectedStandardId] = useState<number | undefined>()
   const [editingStandard, setEditingStandard] = useState<DetectionStandard | undefined>()
   const [standardItems, setStandardItems] = useState<DetectionStandardItemPayload[]>([])
-  const [standardVariableId, setStandardVariableId] = useState<number | undefined>()
+  const [standardVariableId, setStandardVariableId] = useState<VarIdentifier | undefined>()
   const [standardModalOpen, setStandardModalOpen] = useState(false)
   const [standardForm] = Form.useForm<DetectionStandardFormValues>()
 
@@ -70,9 +94,9 @@ export function DetectionConfigPage() {
     queryFn: () => getDetectionStandards(),
     retry: false,
   })
-  const devicesQuery = useQuery({
-    queryKey: ['detection-config', 'devices'],
-    queryFn: getDevices,
+  const projectsQuery = useQuery({
+    queryKey: ['detection-config', 'projects'],
+    queryFn: getProjects,
     retry: false,
   })
   const variablesQuery = useQuery({
@@ -82,7 +106,7 @@ export function DetectionConfigPage() {
   })
 
   const standards = useMemo(() => standardsQuery.data ?? [], [standardsQuery.data])
-  const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data])
+  const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
   const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
   const standardVariables = useMemo(() => {
     const byName = new Map<string, VariableConfig>()
@@ -107,10 +131,11 @@ export function DetectionConfigPage() {
   })
   const selectedStandardDetail = selectedStandardDetailQuery.data ?? selectedStandard
 
-  const displayDeviceName = (device: Device) => {
-    if (i18n.resolvedLanguage === 'en') return device.display_name_en || device.display_name || device.name || device.device_code
-    if (i18n.resolvedLanguage === 'ja') return device.display_name_ja || device.display_name || device.name || device.device_code
-    return device.display_name || device.name || device.device_code
+  const displayProjectName = (project: Project) => {
+    const code = projectCode(project)
+    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || code
+    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || code
+    return project.display_name || project.name || code
   }
 
   const displayStandardName = (standard: DetectionStandard) => {
@@ -130,15 +155,15 @@ export function DetectionConfigPage() {
         display_name: detail.display_name,
         display_name_en: detail.display_name_en,
         display_name_ja: detail.display_name_ja,
-        device_id: detail.device_id,
-        device_code: detail.device_code,
+        project_id: standardProjectId(detail),
+        project_code: standardProjectCode(detail),
         mode: detail.mode,
         version: detail.version,
         enabled: detail.enabled,
         remark: detail.remark,
       })
       setStandardItems((detail.items ?? []).map((item) => ({
-        var_id: item.var_id,
+        var_id: item.var_id_text ?? item.var_id,
         var_name: item.var_name,
         display_name: item.display_name,
         display_name_en: item.display_name_en,
@@ -173,14 +198,14 @@ export function DetectionConfigPage() {
     setStandardModalOpen(true)
   }
 
-  function addStandardItem(variableId?: number) {
+  function addStandardItem(variableId?: VarIdentifier) {
     if (!variableId) return
-    const variable = standardVariables.find((item) => item.var_id === variableId)
+    const variable = standardVariables.find((item) => sameVarId(variableWireId(item), variableId))
     if (!variable || standardItems.some((item) => item.var_name === variable.var_name)) return
     setStandardItems((items) => [
       ...items,
       {
-        var_id: variable.var_id,
+        var_id: variableWireId(variable),
         var_name: variable.var_name,
         display_name: variable.display_name || variable.raw_name || variable.var_name,
         display_name_en: variable.display_name_en,
@@ -206,20 +231,20 @@ export function DetectionConfigPage() {
     setStandardVariableId(undefined)
   }
 
-  function patchStandardItem(varId: number, patch: Partial<DetectionStandardItemPayload>) {
-    setStandardItems((items) => items.map((item) => item.var_id === varId ? { ...item, ...patch } : item))
+  function patchStandardItem(varId: VarIdentifier, patch: Partial<DetectionStandardItemPayload>) {
+    setStandardItems((items) => items.map((item) => sameVarId(item.var_id, varId) ? { ...item, ...patch } : item))
   }
 
-  function removeStandardItem(varId: number) {
-    setStandardItems((items) => items.filter((item) => item.var_id !== varId).map((item, index) => ({ ...item, sort_order: index + 1 })))
+  function removeStandardItem(varId: VarIdentifier) {
+    setStandardItems((items) => items.filter((item) => !sameVarId(item.var_id, varId)).map((item, index) => ({ ...item, sort_order: index + 1 })))
   }
 
   const saveStandardMutation = useMutation({
     mutationFn: async (values: DetectionStandardFormValues) => {
-      const device = devices.find((item) => item.id === values.device_id)
+      const project = projects.find((item) => item.id === values.project_id)
       const payload: DetectionStandardPayload = {
         ...values,
-        device_code: device?.device_code ?? values.device_code ?? '',
+        project_code: projectCode(project) || values.project_code || '',
         mode: values.mode || 'standard',
         version: editingStandard?.version ?? 1,
         enabled: values.enabled ?? true,
@@ -270,10 +295,10 @@ export function DetectionConfigPage() {
     },
     {
       title: t('settings.variables.device'),
-      dataIndex: 'device_code',
-      key: 'device_code',
+      dataIndex: 'project_code',
+      key: 'project_code',
       width: 130,
-      render: (value, record) => record.device_id ? value : <Tag>{t('settings.standards.global')}</Tag>,
+      render: (_, record) => standardProjectId(record) ? standardProjectCode(record) : <Tag>{t('settings.standards.global')}</Tag>,
     },
     { title: t('settings.standards.mode'), dataIndex: 'mode', key: 'mode', width: 110 },
     { title: t('settings.standards.version'), dataIndex: 'version', key: 'version', width: 80 },
@@ -525,7 +550,7 @@ export function DetectionConfigPage() {
             <div className="detection-summary-strip">
               <div>
                 <span>{t('settings.variables.device')}</span>
-                <strong>{selectedStandardDetail.device_id ? selectedStandardDetail.device_code : t('settings.standards.global')}</strong>
+                <strong>{standardProjectId(selectedStandardDetail) ? standardProjectCode(selectedStandardDetail) : t('settings.standards.global')}</strong>
               </div>
               <div>
                 <span>{t('settings.standards.items')}</span>
@@ -545,7 +570,7 @@ export function DetectionConfigPage() {
           <Table
             className="detection-config-table"
             size="small"
-            rowKey="var_id"
+            rowKey={(record) => record.var_id_text ?? String(record.var_id)}
             loading={standardsQuery.isFetching || selectedStandardDetailQuery.isFetching}
             columns={itemColumns}
             dataSource={selectedStandardDetail?.items ?? []}
@@ -600,8 +625,8 @@ export function DetectionConfigPage() {
             <Form.Item name="name" label={t('settings.standards.internalName')}>
               <Input />
             </Form.Item>
-            <Form.Item name="device_id" label={t('settings.variables.selectDevice')}>
-              <Select allowClear options={devices.map((device) => ({ label: `${displayDeviceName(device)} · ${device.device_code}`, value: device.id }))} />
+            <Form.Item name="project_id" label={t('settings.variables.selectDevice')}>
+              <Select allowClear options={projects.map((project) => ({ label: `${displayProjectName(project)} · ${projectCode(project)}`, value: project.id }))} />
             </Form.Item>
             <Form.Item name="mode" label={t('settings.standards.mode')}>
               <Input />
@@ -626,7 +651,7 @@ export function DetectionConfigPage() {
                 placeholder={t('settings.standards.addVariable')}
                 optionFilterProp="label"
                 onChange={setStandardVariableId}
-                options={standardVariables.map((variable) => ({ label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`, value: variable.var_id }))}
+                options={standardVariables.map((variable) => ({ label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`, value: variableWireId(variable) }))}
               />
               <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId}>
                 {t('settings.standards.add')}
@@ -636,7 +661,7 @@ export function DetectionConfigPage() {
           <Table
             className="settings-standard-items-table"
             size="small"
-            rowKey="var_id"
+            rowKey={(record) => varKey(record.var_id)}
             columns={editableItemColumns}
             dataSource={standardItems}
             scroll={{ x: 1650, y: 320 }}

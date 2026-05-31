@@ -45,6 +45,20 @@ CREATE TABLE IF NOT EXISTS sys_projects (
   INDEX idx_projects_blocked (blocked)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS sys_project_members (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  project_id BIGINT UNSIGNED NOT NULL,
+  user_id BIGINT UNSIGNED NOT NULL,
+  member_role VARCHAR(32) DEFAULT 'member',
+  notify_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_project_member (project_id, user_id),
+  INDEX idx_project_members_project_id (project_id),
+  INDEX idx_project_members_user_id (user_id),
+  INDEX idx_project_members_notify_enabled (notify_enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS sys_tags (
   var_id BIGINT PRIMARY KEY,
   gateway_id INT NOT NULL,
@@ -493,6 +507,7 @@ CREATE TABLE IF NOT EXISTS detection_run_storage_routes (
 
 CREATE TABLE IF NOT EXISTS detection_limit_alarms (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  scope VARCHAR(32) NOT NULL DEFAULT 'detection',
   task_id BIGINT UNSIGNED NOT NULL,
   test_no VARCHAR(128) DEFAULT '',
   project_id BIGINT UNSIGNED NOT NULL,
@@ -522,6 +537,7 @@ CREATE TABLE IF NOT EXISTS detection_limit_alarms (
   message VARCHAR(512) DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
+  INDEX idx_limit_alarms_scope (scope),
   INDEX idx_limit_alarms_task_id (task_id),
   INDEX idx_limit_alarms_test_no (test_no),
   INDEX idx_limit_alarms_project_id (project_id),

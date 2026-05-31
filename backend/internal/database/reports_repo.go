@@ -101,7 +101,14 @@ func (r *Repository) DeleteReportTemplate(id uint) error {
 				return ErrReferenced
 			}
 		}
-		return tx.Delete(&models.ReportTemplate{}, "id = ?", id).Error
+		result := tx.Delete(&models.ReportTemplate{}, "id = ?", id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
 	})
 }
 

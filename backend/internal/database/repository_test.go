@@ -241,6 +241,76 @@ func TestRepositoryNotificationMethods(t *testing.T) {
 	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{ID: "event-invalid-target", Type: models.NotificationDetectionRunResumed, Level: models.NotificationLevelInfo, TargetType: models.NotificationTargetUser, TargetID: "bad", Message: "bad target", OccurredAt: occurredAt}); err != nil {
 		t.Fatal(err)
 	}
+
+	project := &models.Project{ProjectCode: "AC-NOTIFY", Name: "Notify Project", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	members, err := repo.ReplaceProjectMembers(project.ID, []models.SysProjectMember{
+		{UserID: admin.ID, MemberRole: "owner", NotifyEnabled: true},
+		{UserID: operator.ID, MemberRole: "member", NotifyEnabled: false},
+	})
+	if err != nil || len(members) != 2 {
+		t.Fatalf("replace project members len=%d err=%v", len(members), err)
+	}
+	if members[0].Username == "" || members[0].ProjectID != project.ID {
+		t.Fatalf("unexpected project members: %+v", members)
+	}
+	if _, err := repo.MarkAllNotificationsRead(admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MarkAllNotificationsRead(operator.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:          "event-project-member-admin",
+		Type:        models.NotificationDetectionRunStarted,
+		Level:       models.NotificationLevelInfo,
+		ProjectID:   project.ID,
+		ProjectCode: project.ProjectCode,
+		Message:     "project target",
+		OccurredAt:  occurredAt.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unread, err := repo.CountUnreadNotifications(admin.ID); err != nil || unread != 1 {
+		t.Fatalf("admin should receive project member notification unread=%d err=%v", unread, err)
+	}
+	if unread, err := repo.CountUnreadNotifications(operator.ID); err != nil || unread != 0 {
+		t.Fatalf("operator has notify disabled unread=%d err=%v", unread, err)
+	}
+	members, err = repo.ReplaceProjectMembers(project.ID, []models.SysProjectMember{
+		{UserID: operator.ID, MemberRole: "operator", NotifyEnabled: true},
+	})
+	if err != nil || len(members) != 1 || members[0].UserID != operator.ID {
+		t.Fatalf("replace project members to operator failed members=%+v err=%v", members, err)
+	}
+	if _, err := repo.MarkAllNotificationsRead(admin.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MarkAllNotificationsRead(operator.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:          "event-project-member-operator",
+		Type:        models.NotificationDetectionRunStopped,
+		Level:       models.NotificationLevelInfo,
+		ProjectID:   project.ID,
+		ProjectCode: project.ProjectCode,
+		Message:     "project target updated",
+		OccurredAt:  occurredAt.Add(4 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unread, err := repo.CountUnreadNotifications(admin.ID); err != nil || unread != 0 {
+		t.Fatalf("admin should no longer receive project notification unread=%d err=%v", unread, err)
+	}
+	if unread, err := repo.CountUnreadNotifications(operator.ID); err != nil || unread != 1 {
+		t.Fatalf("operator should receive project notification unread=%d err=%v", unread, err)
+	}
+	if _, err := repo.ReplaceProjectMembers(project.ID, []models.SysProjectMember{{UserID: admin.ID}, {UserID: admin.ID}}); err == nil {
+		t.Fatal("expected duplicate project member error")
+	}
 }
 
 func TestRepositoryTaskRuleMethods(t *testing.T) {
@@ -566,6 +636,15 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err := repo.DeleteDetectionStandard(standard.ID); !errors.Is(err, ErrReferenced) {
 		t.Fatalf("expected referenced standard delete protection, got %v", err)
 	}
+	if err := repo.DeleteDetectionStandard(standard.ID + 999); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected missing standard delete to return record not found, got %v", err)
+	}
+	if err := repo.SetDetectionStandardFavorite(1, standard.ID+999, true); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected missing standard favorite to return record not found, got %v", err)
+	}
+	if err := repo.SetDetectionStandardFavorite(1, standard.ID+999, false); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected missing standard unfavorite to return record not found, got %v", err)
+	}
 	if err := repo.SetDetectionStandardFavorite(1, standard.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -638,6 +717,9 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err := repo.DeleteReportTemplate(template.ID); !errors.Is(err, ErrReferenced) {
 		t.Fatalf("expected referenced template delete protection, got %v", err)
 	}
+	if err := repo.DeleteReportTemplate(template.ID + 999); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected missing template delete to return record not found, got %v", err)
+	}
 
 	if err := repo.CreateDetectionRunNote(&models.DetectionRunNote{TaskID: task.ID, Content: "note", NoteType: "memo"}); err != nil {
 		t.Fatal(err)
@@ -656,6 +738,9 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}
 	if !db.Migrator().HasTable(&models.DetectionLimitAlarm{}) {
 		t.Fatal("expected detection limit alarm table to be auto migrated")
+	}
+	if !db.Migrator().HasColumn(&models.DetectionLimitAlarm{}, "scope") {
+		t.Fatal("expected detection limit alarm scope column to be auto migrated")
 	}
 	if !db.Migrator().HasTable(&models.StorageRoute{}) || !db.Migrator().HasTable(&models.DetectionRunStorageRoute{}) {
 		t.Fatal("expected storage route tables to be auto migrated")
@@ -716,8 +801,70 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err := db.First(&alarm, "task_id = ? AND var_id = ? AND alarm_type = ?", task.ID, 100, "above_h").Error; err != nil {
 		t.Fatal(err)
 	}
-	if alarm.Status != models.DetectionAlarmStatusClosed || alarm.RecoverValue == nil || *alarm.RecoverValue != recoverValue {
+	if alarm.Scope != models.AlarmScopeDetection || alarm.Status != models.DetectionAlarmStatusClosed || alarm.RecoverValue == nil || *alarm.RecoverValue != recoverValue {
 		t.Fatalf("expected recovered detection limit alarm, got %+v", alarm)
+	}
+	defaultStartValue := 5.0
+	defaultLimitValue := 10.0
+	if err := repo.CreateDetectionLimitAlarm(&models.DetectionLimitAlarm{
+		Scope:         models.AlarmScopeDefault,
+		TaskID:        0,
+		ProjectID:     Project.ID,
+		ProjectCode:   Project.ProjectCode,
+		VarID:         101,
+		VarName:       "pressure",
+		CheckMethod:   models.CheckMethodNumericRange,
+		AlarmType:     "below_l",
+		AlarmLevel:    "L",
+		Status:        models.DetectionAlarmStatusActive,
+		StartValue:    &defaultStartValue,
+		PeakValue:     &defaultStartValue,
+		LimitValue:    &defaultLimitValue,
+		Quality:       1,
+		FirstSeenAt:   startedAt,
+		LastSeenAt:    startedAt,
+		LimitDeadband: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defaultRecoverValue := 11.5
+	if err := repo.RecoverDetectionLimitAlarm(&models.DetectionLimitAlarmEvent{
+		Action: models.DetectionAlarmActionRecover,
+		Alarm: models.DetectionLimitAlarm{
+			Scope:        models.AlarmScopeDefault,
+			TaskID:       0,
+			VarID:        101,
+			AlarmType:    "below_l",
+			PeakValue:    &defaultStartValue,
+			RecoverValue: &defaultRecoverValue,
+			Quality:      1,
+			LastSeenAt:   recoveredAt,
+			RecoveredAt:  &recoveredAt,
+			DurationMS:   1000,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var defaultAlarm models.DetectionLimitAlarm
+	if err := db.First(&defaultAlarm, "scope = ? AND task_id = ? AND var_id = ?", models.AlarmScopeDefault, 0, 101).Error; err != nil {
+		t.Fatal(err)
+	}
+	if defaultAlarm.Status != models.DetectionAlarmStatusClosed || defaultAlarm.RecoverValue == nil || *defaultAlarm.RecoverValue != defaultRecoverValue {
+		t.Fatalf("expected recovered default limit alarm, got %+v", defaultAlarm)
+	}
+	defaultAlarms, total, err := repo.ListLimitAlarms(LimitAlarmFilter{Scope: models.AlarmScopeDefault, ProjectID: &Project.ID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(defaultAlarms) != 1 || defaultAlarms[0].Scope != models.AlarmScopeDefault || defaultAlarms[0].TaskID != 0 {
+		t.Fatalf("unexpected default alarm list total=%d items=%+v", total, defaultAlarms)
+	}
+	detectionAlarms, detectionTotal, err := repo.ListLimitAlarms(LimitAlarmFilter{Scope: models.AlarmScopeDetection, TaskID: &task.ID, Status: models.DetectionAlarmStatusClosed, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detectionTotal != 1 || len(detectionAlarms) != 1 || detectionAlarms[0].TaskID != task.ID {
+		t.Fatalf("unexpected detection alarm list total=%d items=%+v", detectionTotal, detectionAlarms)
 	}
 	summary, err := repo.RefreshDetectionRunSummary(task.ID)
 	if err != nil {

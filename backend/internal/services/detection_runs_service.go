@@ -10,6 +10,8 @@ import (
 	"spindle-edge/backend/internal/database"
 	"spindle-edge/backend/internal/models"
 	"spindle-edge/backend/internal/pipeline"
+
+	"gorm.io/gorm"
 )
 
 type DetectionRunsService struct {
@@ -362,6 +364,9 @@ func detectionEventNotificationType(eventType string) string {
 func HTTPStatusForError(err error) int {
 	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) {
 		return 409
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 404
 	}
 	return 400
 }

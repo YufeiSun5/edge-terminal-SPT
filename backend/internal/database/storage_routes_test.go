@@ -1,10 +1,13 @@
 package database
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"spindle-edge/backend/internal/models"
+
+	"gorm.io/gorm"
 )
 
 func TestNormalizeStorageColumnNameAndValidation(t *testing.T) {
@@ -316,5 +319,8 @@ func TestCreateStorageRouteAllowsCustomTableAndRouteOwnedTiming(t *testing.T) {
 	}
 	if !db.Migrator().HasTable("custom_flow_data") || !db.Migrator().HasColumn("custom_flow_data", "flow_value") {
 		t.Fatal("expected custom storage table schema")
+	}
+	if err := repo.DeleteStorageRoute(route.ID + 999); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected missing storage route delete to return record not found, got %v", err)
 	}
 }

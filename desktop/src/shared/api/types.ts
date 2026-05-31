@@ -99,7 +99,8 @@ export type UserNotification = {
   project_code?: string;
   task_id?: number;
   test_no?: string;
-  var_id?: number;
+  var_id?: VarIdentifier;
+  var_id_text?: string;
   var_name?: string;
   display_name?: string;
   message: string;
@@ -127,6 +128,68 @@ export type NotificationListResponse = {
 
 export type NotificationUnreadCount = {
   unread: number;
+};
+
+export type VarIdentifier = number | string;
+
+export type LimitAlarmScope = "default" | "detection";
+
+export type LimitAlarm = {
+  id: number;
+  scope: LimitAlarmScope | string;
+  task_id: number;
+  test_no?: string;
+  project_id: number;
+  project_code?: string;
+  standard_id?: number;
+  standard_item_id: number;
+  run_standard_item_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
+  var_name: string;
+  display_name?: string;
+  display_name_en?: string;
+  display_name_ja?: string;
+  check_method: string;
+  alarm_type: string;
+  alarm_level: string;
+  status: string;
+  start_value?: number;
+  peak_value?: number;
+  recover_value?: number;
+  limit_value?: number;
+  limit_deadband: number;
+  quality: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  recovered_at?: string;
+  duration_ms: number;
+  message?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LimitAlarmListParams = {
+  scope?: LimitAlarmScope;
+  project_id?: number;
+  task_id?: number;
+  test_no?: string;
+  var_id?: VarIdentifier;
+  status?: string;
+  alarm_type?: string;
+  level?: string;
+  alarm_level?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type LimitAlarmListResponse = {
+  items: LimitAlarm[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type GatewayConfig = {
@@ -157,7 +220,8 @@ export type GatewayConfigPayload = Partial<
 };
 
 export type VariableConfig = {
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   gateway_id: number;
   source_topic: string;
   source_path: string;
@@ -331,7 +395,8 @@ export type BulkRemapKioProjectsPayload = Partial<{
 }>;
 
 export type BulkRemapKioProjectsResultItem = {
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   raw_name: string;
   old_var_name: string;
   new_var_name: string;
@@ -409,13 +474,14 @@ export type VariableAssignmentPayload = {
   project_id?: number;
   project_code?: string;
   device_id?: number;
-  device_code: string;
+  device_code?: string;
   var_group: string;
   enabled: boolean;
 };
 
 export type TagSnapshot = {
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   gateway_id: number;
   source_topic: string;
   source_path: string;
@@ -480,7 +546,8 @@ export type DetectionRunStorageRoute = {
   project_id: number;
   project_code: string;
   device_id: number;
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   route_id: number;
   route_code: string;
   storage_target: "none" | "history_eav" | "detection_form" | "report_field" | "wide_table" | string;
@@ -496,11 +563,17 @@ export type DetectionRunStorageRoute = {
   created_at: string;
 };
 
+export type DetectionRunStorageRoutesResponse = {
+  items: DetectionRunStorageRoute[];
+  count: number;
+};
+
 export type StorageRoute = {
   id: number;
   project_id: number;
   device_id: number;
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   route_code: string;
   storage_target: "none" | "wide_table" | string;
   table_name: string;
@@ -541,7 +614,7 @@ export type StorageRoutePayload = Partial<
 export type StorageRouteListParams = {
   project_id?: number;
   device_id?: number;
-  var_id?: number;
+  var_id?: VarIdentifier;
   enabled?: boolean;
 };
 
@@ -662,9 +735,9 @@ export type DetectionRunListResponse = {
 };
 
 export type DetectionRunStartPayload = {
-  project_id?: number;
+  project_id: number;
   project_code?: string;
-  device_id: number;
+  device_id?: number;
   test_no: string;
   mode: string;
   standard_id?: number;
@@ -697,7 +770,8 @@ export type DetectionRunEventsResponse = {
 export type DetectionStandardItem = {
   id: number;
   standard_id: number;
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   var_name: string;
   display_name: string;
   display_name_en: string;
@@ -747,7 +821,8 @@ export type DetectionStandard = {
 };
 
 export type DetectionStandardItemPayload = {
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   var_name: string;
   display_name?: string;
   display_name_en?: string;
@@ -834,7 +909,8 @@ export type RealtimeWebSocketSubscription = {
   gateway_id?: number;
   project_id?: number;
   device_id?: number;
-  var_ids?: number[];
+  var_ids?: VarIdentifier[];
+  var_id_texts?: string[];
 };
 
 export type RealtimeVariableListParams = {
@@ -842,7 +918,7 @@ export type RealtimeVariableListParams = {
   gateway_id?: number;
   project_id?: number;
   device_id?: number;
-  var_id?: number | number[];
+  var_id?: VarIdentifier | VarIdentifier[];
 };
 
 export type RealtimeVariablesSnapshotPayload = {
@@ -863,7 +939,8 @@ export type RuntimeNotification = {
   project_code?: string;
   task_id?: number;
   test_no?: string;
-  var_id?: number;
+  var_id?: VarIdentifier;
+  var_id_text?: string;
   var_name?: string;
   display_name?: string;
   message: string;
@@ -876,10 +953,33 @@ export type RealtimeWebSocketCommand<TPayload = unknown> = {
     | "command.detection.start"
     | "command.detection.stop"
     | "command.detection.abnormal_stop"
+    | "command.write_variable"
     | string;
   request_id: string;
   command_id: string;
   payload: TPayload;
+};
+
+export type VariableWriteResult = {
+  var_id: VarIdentifier;
+  var_id_text: string;
+  var_name: string;
+  source_type: "mqtt" | "virtual" | "manual" | string;
+  project_id?: number;
+  value?: unknown;
+  quality?: number;
+  updated_at?: string;
+  triggered?: number;
+  origin_flow_id?: number;
+  origin_run_id?: number;
+  depth?: number;
+  next_depth?: number;
+  max_depth?: number;
+  allow_reentrant?: boolean;
+  request_id?: string;
+  broker_accepted?: boolean;
+  project_confirmed?: boolean;
+  kio?: unknown;
 };
 
 export type HistoryDataItem = {
@@ -890,7 +990,8 @@ export type HistoryDataItem = {
   device_id: number;
   task_id: number;
   test_no: string;
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   var_name: string;
   project_code: string;
   device_code: string;
@@ -1002,7 +1103,8 @@ export type TaskFlowVar = {
   id?: number;
   flow_id?: number;
   project_id?: number;
-  var_id: number;
+  var_id: VarIdentifier;
+  var_id_text?: string;
   var_name: string;
   role: TaskFlowVarRole;
   created_at?: string;
@@ -1023,6 +1125,7 @@ export type TaskFlow = {
   timeout_ms: number;
   cooldown_ms: number;
   hold_ms: number;
+  schedule_interval_ms?: number;
   priority: number;
   remark: string;
   vars?: TaskFlowVar[];
@@ -1046,6 +1149,7 @@ export type TaskFlowPayload = Partial<
     | "timeout_ms"
     | "cooldown_ms"
     | "hold_ms"
+    | "schedule_interval_ms"
     | "priority"
     | "remark"
   >
@@ -1069,7 +1173,8 @@ export type TaskFlowRun = {
   flow_code: string;
   project_id: number;
   trigger_type: string;
-  trigger_var_id: number;
+  trigger_var_id: VarIdentifier;
+  trigger_var_id_text?: string;
   origin_flow_id: number;
   origin_run_id: number;
   depth: number;
@@ -1089,7 +1194,7 @@ export type TaskFlowRunListParams = {
   project_id?: number;
   flow_id?: number;
   trigger_type?: string;
-  trigger_var_id?: number;
+  trigger_var_id?: VarIdentifier;
   origin_flow_id?: number;
   status?: string;
   from?: string;
@@ -1186,4 +1291,28 @@ export type UserPatchPayload = Partial<{
 
 export type UserResetPasswordPayload = {
   password: string;
+};
+
+export type ProjectMember = {
+  id: number;
+  project_id: number;
+  user_id: number;
+  username: string;
+  user_role: string;
+  user_enabled: boolean;
+  member_role: string;
+  notify_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectMemberUpdate = {
+  user_id: number;
+  member_role?: string;
+  notify_enabled?: boolean;
+};
+
+export type ProjectMembersResponse = {
+  items: ProjectMember[];
+  count: number;
 };

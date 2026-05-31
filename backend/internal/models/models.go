@@ -61,6 +61,8 @@ const (
 	DetectionAlarmActionLevelChange = "level_change"
 	DetectionAlarmStatusActive      = "active"
 	DetectionAlarmStatusClosed      = "recovered"
+	AlarmScopeDetection             = "detection"
+	AlarmScopeDefault               = "default"
 
 	NotificationLevelInfo    = "info"
 	NotificationLevelSuccess = "success"

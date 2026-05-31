@@ -74,6 +74,7 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&models.GatewayConfig{},
 		&models.Project{},
+		&models.SysProjectMember{},
 		&models.TagConfig{},
 		&models.StorageRoute{},
 		&models.TaskRule{},

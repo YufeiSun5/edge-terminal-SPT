@@ -17,7 +17,7 @@ applyTo: "backend/**/*.go,backend/**/*.sql,backend/**/*.json,backend/**/*.ps1,ba
 
 1. Keep MQTT callbacks lightweight; enqueue into channels and do not write MySQL directly.
 2. Keep `gateway_id + source_path` as the discovered variable identity.
-3. Keep devices as virtual business groups; do not make MQTT gateways device parents.
+3. Keep projects as virtual business groups; do not make MQTT gateways project parents. Legacy `device` names are historical aliases only and must not expand outside explicit compatibility layers.
 4. Realtime state remains memory-first through `TagManager`; persist history only during running detection tasks.
 5. Business APIs stay under `/api/v1` and preserve stable JSON field names.
 6. Do not implement application-layer historical sync to the main server unless `AI_BOARD.md` records a confirmed scope change.

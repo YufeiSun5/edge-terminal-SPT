@@ -35,15 +35,15 @@ type RealtimeWSHandler struct {
 }
 
 type wsClientMessage struct {
-	Type       string          `json:"type"`
-	RequestID  string          `json:"request_id"`
-	CommandID  string          `json:"command_id"`
-	Topics     []string        `json:"topics"`
-	SourceType string          `json:"source_type"`
-	GatewayID  *int            `json:"gateway_id"`
-	ProjectID  *uint           `json:"project_id"`
-	VarIDs     []int64         `json:"var_ids"`
-	Payload    json.RawMessage `json:"payload"`
+	Type       string            `json:"type"`
+	RequestID  string            `json:"request_id"`
+	CommandID  string            `json:"command_id"`
+	Topics     []string          `json:"topics"`
+	SourceType string            `json:"source_type"`
+	GatewayID  *int              `json:"gateway_id"`
+	ProjectID  *uint             `json:"project_id"`
+	VarIDs     flexibleInt64List `json:"var_ids"`
+	Payload    json.RawMessage   `json:"payload"`
 }
 
 type wsAuditStore interface {
@@ -216,8 +216,9 @@ func (h *RealtimeWSHandler) handleClientMessage(current services.RealtimeSubscri
 		next.SourceType = strings.TrimSpace(msg.SourceType)
 		next.GatewayID = msg.GatewayID
 		next.ProjectID = msg.ProjectID
-		next.VarIDs = make(map[int64]bool, len(msg.VarIDs))
-		for _, id := range msg.VarIDs {
+		varIDs := msg.VarIDs.Int64s()
+		next.VarIDs = make(map[int64]bool, len(varIDs))
+		for _, id := range varIDs {
 			next.VarIDs[id] = true
 		}
 		return next, []services.WSMessage{h.service.SubscriptionMessage(msg.RequestID, next)}
@@ -331,22 +332,23 @@ func (h *RealtimeWSHandler) writeVariableFromWS(msg wsClientMessage) (services.V
 		return services.VariableWriteResult{}, wsCommandError{code: "unsupported_command", message: "variable write service is not available"}
 	}
 	var req struct {
-		VarID          int64  `json:"var_id"`
-		Value          any    `json:"value"`
-		Quality        int    `json:"quality"`
-		Trigger        *bool  `json:"trigger"`
-		WaitAck        bool   `json:"wait_ack"`
-		AckTimeoutSec  int    `json:"ack_timeout_sec"`
-		OriginFlowID   uint64 `json:"origin_flow_id"`
-		OriginRunID    uint64 `json:"origin_run_id"`
-		Depth          int    `json:"depth"`
-		MaxDepth       int    `json:"max_depth"`
-		AllowReentrant bool   `json:"allow_reentrant"`
+		VarID          flexibleInt64 `json:"var_id"`
+		Value          any           `json:"value"`
+		Quality        int           `json:"quality"`
+		Trigger        *bool         `json:"trigger"`
+		WaitAck        bool          `json:"wait_ack"`
+		AckTimeoutSec  int           `json:"ack_timeout_sec"`
+		OriginFlowID   uint64        `json:"origin_flow_id"`
+		OriginRunID    uint64        `json:"origin_run_id"`
+		Depth          int           `json:"depth"`
+		MaxDepth       int           `json:"max_depth"`
+		AllowReentrant bool          `json:"allow_reentrant"`
 	}
 	if err := decodeWSPayload(msg.Payload, &req); err != nil {
 		return services.VariableWriteResult{}, err
 	}
-	if req.VarID == 0 {
+	varID := req.VarID.Int64()
+	if varID == 0 {
 		return services.VariableWriteResult{}, wsCommandError{code: "invalid_payload", message: "var_id is required"}
 	}
 	trigger := true
@@ -356,7 +358,7 @@ func (h *RealtimeWSHandler) writeVariableFromWS(msg wsClientMessage) (services.V
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, err := h.variables.Write(ctx, services.VariableWriteInput{
-		VarID:          req.VarID,
+		VarID:          varID,
 		Value:          req.Value,
 		Quality:        req.Quality,
 		Trigger:        trigger,

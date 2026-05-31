@@ -1,7 +1,9 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -230,6 +232,66 @@ func TestTaskFlowJavaScriptRealtimeMultiVariableAndAuditedWrite(t *testing.T) {
 	}
 }
 
+func TestTaskFlowJavaScriptRealtimeAPIAcceptsStringVarIDs(t *testing.T) {
+	db := newTaskFlowTestDB(t)
+	repo := database.NewRepository(db)
+	channels := NewChannels()
+	tags := NewTagManager()
+	tasks := NewTaskManager()
+	projectID := uint(12)
+	sourceVarID := int64(9212397624135540848)
+	statusVarID := int64(9212397624135540849)
+	tags.Load([]models.TagConfig{
+		{VarID: sourceVarID, GatewayID: 1, SourceTopic: "topic", VarName: "precise_temp", JSONPath: "precise_temp", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
+		{VarID: statusVarID, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", VarName: "precise_status", JSONPath: "precise_status", DataType: "STRING", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
+	})
+	sourceTag, ok := tags.Get(sourceVarID)
+	if !ok {
+		t.Fatal("expected source tag")
+	}
+	sourceTag.UpdateNumeric(42.5, time.Now(), 1)
+	executor := NewTaskFlowExecutor(repo, tags, tasks, channels)
+	flow := models.TaskFlow{
+		ID:          121,
+		ProjectID:   projectID,
+		FlowCode:    "js-string-var-id",
+		Name:        "JS String Var ID",
+		Enabled:     true,
+		TriggerType: models.TaskFlowTriggerDataChange,
+		ActionType:  models.TaskFlowActionJavaScript,
+		ActionScript: `
+			const point = realtime.get("9212397624135540848");
+			const many = realtime.getMany(["9212397624135540848"]);
+			const write = realtime.write("9212397624135540849", "qualified", {request_id: "js-write-big"});
+			({
+				point_text: point.var_id_text,
+				many_text: many[0].var_id_text,
+				write_text: write.var_id_text,
+				trigger_text: trigger.var_id_text,
+				context_text: context["trigger_var_id_text"]
+			});
+		`,
+		TimeoutMS: 3000,
+	}
+	result := executor.runFlow(flow, TaskFlowEvent{TriggerType: models.TaskFlowTriggerDataChange, ProjectID: projectID, TriggerVarID: sourceVarID, TriggerValue: 1, At: time.Now()}, 121001)
+	if result.Status != models.TaskFlowStatusSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	contextMap := result.Result["context"].(map[string]any)
+	for _, key := range []string{"default.point_text", "default.many_text", "default.trigger_text", "default.context_text"} {
+		if contextMap[key] != "9212397624135540848" {
+			t.Fatalf("expected %s to keep exact source var id, context=%+v", key, contextMap)
+		}
+	}
+	if contextMap["default.write_text"] != "9212397624135540849" {
+		t.Fatalf("expected write result to keep exact var id, context=%+v", contextMap)
+	}
+	statusTag, ok := tags.Get(statusVarID)
+	if !ok || statusTag.RuntimeState().StrValue != "qualified" {
+		t.Fatalf("expected string-id realtime.write to update virtual tag, ok=%v tag=%+v", ok, statusTag)
+	}
+}
+
 func TestTaskFlowStepsUseTriggerVariableParamsAndContext(t *testing.T) {
 	db := newTaskFlowTestDB(t)
 	repo := database.NewRepository(db)
@@ -375,6 +437,16 @@ func TestTaskFlowStepsAcceptSingleObjectJSON(t *testing.T) {
 	}
 	if len(steps) != 1 || steps[0].Code != "write" || steps[0].Module != models.TaskFlowActionBuiltinWriteVariable {
 		t.Fatalf("unexpected single-object steps: %+v", steps)
+	}
+}
+
+func TestTaskFlowStepsRejectDuplicateCode(t *testing.T) {
+	_, err := taskFlowSteps(models.TaskFlow{
+		FlowCode:  "duplicate-step-code",
+		StepsJSON: `[{"code":"same","module":"builtin.context_set","params":{"a":1}},{"code":" same ","module":"builtin.context_set","params":{"b":2}}]`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate task flow step code: same") {
+		t.Fatalf("expected duplicate step code error, got %v", err)
 	}
 }
 
@@ -718,6 +790,8 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 			"project_id":          map[string]any{"source": "trigger_param", "key": "project_id"},
 			"test_no":             map[string]any{"source": "trigger_param", "key": "test_no"},
 			"custom_items":        map[string]any{"source": "trigger_param", "key": "custom_items"},
+			"process_params":      map[string]any{"source": "trigger_param", "key": "process_params", "optional": true},
+			"plc_writes":          map[string]any{"source": "trigger_param", "key": "plc_writes", "optional": true},
 			"limit_check_enabled": map[string]any{"source": "trigger_param", "key": "limit_check_enabled", "default": true},
 			"end_policy":          map[string]any{"source": "trigger_param", "key": "end_policy"},
 			"duration_sec":        map[string]any{"source": "trigger_param", "key": "duration_sec"},
@@ -749,6 +823,8 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 		"limit_check_enabled": true,
 		"end_policy":          models.DetectionEndPolicyFixedDuration,
 		"duration_sec":        60,
+		"process_params":      map[string]any{"inlet_area_m2": 1.25},
+		"plc_writes":          []map[string]any{{"var_id": 3901, "value_from": "process_params.inlet_area_m2"}},
 		"custom_items": []map[string]any{{
 			"var_id":         tempTag.VarID,
 			"var_name":       tempTag.VarName,
@@ -770,6 +846,9 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 	if task.StandardID != nil || task.StandardCode != "custom" || !task.LimitCheckEnabled || task.EndPolicy != models.DetectionEndPolicyFixedDuration || task.CustomConfigJSON == "" {
 		t.Fatalf("unexpected custom task: %+v", task)
 	}
+	if !strings.Contains(task.CustomConfigJSON, `"process_params"`) || !strings.Contains(task.CustomConfigJSON, `"inlet_area_m2"`) || !strings.Contains(task.CustomConfigJSON, `"plc_writes"`) {
+		t.Fatalf("expected process params and plc writes frozen, custom_config_json=%s", task.CustomConfigJSON)
+	}
 	item, err := repo.UpdateDetectionRunStandardItem(task.ID, tempTag.VarID, nil)
 	if err != nil || item.StandardID != 0 || item.StandardItemID != 0 || item.LimitH == nil || *item.LimitH != limitH {
 		t.Fatalf("unexpected custom run item: %+v err=%v", item, err)
@@ -781,6 +860,515 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 	alarmEvent := receiveAlarmEvent(t, channels)
 	if alarmEvent.Alarm.TaskID != task.ID || alarmEvent.Alarm.VarID != tempTag.VarID || alarmEvent.Alarm.AlarmType != "above_h" {
 		t.Fatalf("unexpected custom start alarm: %+v", alarmEvent)
+	}
+}
+
+func TestTaskFlowStringPayloadWritesPLCBeforeStartingDetection(t *testing.T) {
+	db := newTaskFlowTestDB(t)
+	repo := database.NewRepository(db)
+	channels := NewChannels()
+	tags := NewTagManager()
+	tasks := NewTaskManager()
+	project := &models.Project{ProjectCode: "AC-15", Name: "Project 15", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	requestTag := models.TagConfig{
+		VarID:       1501,
+		SourceType:  models.TagSourceVirtual,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "task_request",
+		RawName:     "task_request",
+		VarName:     "task_request",
+		JSONPath:    "task_request",
+		DataType:    "STRING",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	tempTag := models.TagConfig{
+		VarID:       1502,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "temp",
+		RawName:     "temp",
+		VarName:     "temp",
+		JSONPath:    "temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	controlTag := models.TagConfig{
+		VarID:         1503,
+		GatewayID:     1,
+		SourceTopic:   "topic",
+		SourcePath:    "plc.inlet_area",
+		RawName:       "plc.inlet_area",
+		VarName:       "plc_inlet_area",
+		JSONPath:      "plc.inlet_area",
+		DataType:      "FLOAT",
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		Enabled:       true,
+		ScaleFactor:   1,
+		RWMode:        "W",
+		Writable:      true,
+		WritePath:     "plc.inlet_area",
+		WriteDataType: "FLOAT",
+	}
+	for _, cfg := range []*models.TagConfig{&requestTag, &tempTag, &controlTag} {
+		if err := repo.CreateTag(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tags.Load([]models.TagConfig{requestTag, tempTag, controlTag})
+
+	executor := NewTaskFlowExecutor(repo, tags, tasks, channels)
+	var writes []TaskFlowVariableWriteInput
+	executor.SetVariableWriter(func(_ context.Context, input TaskFlowVariableWriteInput) (map[string]any, error) {
+		var existing int64
+		if err := db.Model(&models.DetectionTask{}).Where("test_no = ?", "TF-PLC-FIRST").Count(&existing).Error; err != nil {
+			t.Fatal(err)
+		}
+		if existing != 0 {
+			t.Fatalf("PLC control write must run before detection start, existing tasks=%d", existing)
+		}
+		writes = append(writes, input)
+		return map[string]any{
+			"var_id":            input.VarID,
+			"value":             input.Value,
+			"wait_ack":          input.WaitAck,
+			"ack_timeout_sec":   input.AckTimeoutSec,
+			"request_id":        input.RequestID,
+			"project_confirmed": true,
+			"source_type":       models.TagSourceMQTT,
+		}, nil
+	})
+	flow := models.TaskFlow{
+		ID:              150,
+		ProjectID:       project.ID,
+		FlowCode:        "request-plc-then-detection",
+		Name:            "Request PLC Then Detection",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerDataChange,
+		ConditionScript: `task_params.command === "start_detection"`,
+		StepsJSON: mustStepsJSON(t, []map[string]any{
+			{
+				"code":   "control",
+				"module": models.TaskFlowActionBuiltinWriteControlVariables,
+				"params": map[string]any{
+					"items": map[string]any{"source": "trigger_param", "key": "plc_writes", "optional": true},
+				},
+			},
+			{
+				"code":   "start",
+				"module": models.TaskFlowActionBuiltinStartDetectionRun,
+				"params": map[string]any{
+					"project_id":          map[string]any{"source": "trigger_param", "key": "project_id"},
+					"test_no":             map[string]any{"source": "trigger_param", "key": "test_no"},
+					"custom_items":        map[string]any{"source": "trigger_param", "key": "custom_items"},
+					"process_params":      map[string]any{"source": "trigger_param", "key": "process_params"},
+					"plc_writes":          map[string]any{"source": "trigger_param", "key": "plc_writes"},
+					"limit_check_enabled": map[string]any{"source": "trigger_param", "key": "limit_check_enabled", "default": true},
+					"end_policy":          map[string]any{"source": "trigger_param", "key": "end_policy", "default": models.DetectionEndPolicyManual},
+					"enable_storage":      false,
+					"enable_alarm":        false,
+				},
+			},
+		}),
+		TimeoutMS: 3000,
+		Vars:      []models.TaskFlowVar{{FlowID: 150, ProjectID: project.ID, VarID: requestTag.VarID, Role: models.TaskFlowVarRoleWatch}},
+	}
+	executor.Load([]models.TaskFlow{flow})
+	executor.Start(1)
+
+	limitH := 50.0
+	request, _ := json.Marshal(map[string]any{
+		"command":             "start_detection",
+		"project_id":          project.ID,
+		"test_no":             "TF-PLC-FIRST",
+		"process_params":      map[string]any{"inlet_area_m2": 1.25},
+		"plc_writes":          []map[string]any{{"var_id": controlTag.VarID, "value_from": "process_params.inlet_area_m2", "wait_ack": true, "ack_timeout_sec": 9}},
+		"limit_check_enabled": true,
+		"custom_items": []map[string]any{{
+			"var_id":         tempTag.VarID,
+			"var_name":       tempTag.VarName,
+			"check_enabled":  true,
+			"alarm_enabled":  false,
+			"store_enabled":  false,
+			"check_on_start": true,
+			"limit_h":        limitH,
+		}},
+	})
+	payload, _ := json.Marshal(map[string]any{"task_request": string(request)})
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: payload, Timestamp: time.Now()}, channels, tags, tasks, executor)
+
+	waitForTaskFlowRunStatus(t, db, flow.ID, models.TaskFlowStatusSuccess, time.Second)
+	if len(writes) != 1 {
+		t.Fatalf("expected one PLC write, got %d", len(writes))
+	}
+	if writes[0].VarID != controlTag.VarID || writes[0].Value != 1.25 || !writes[0].WaitAck || writes[0].AckTimeoutSec != 9 {
+		t.Fatalf("unexpected PLC write input: %+v", writes[0])
+	}
+	var task models.DetectionTask
+	if err := db.First(&task, "test_no = ?", "TF-PLC-FIRST").Error; err != nil {
+		t.Fatal(err)
+	}
+	if task.CustomConfigJSON == "" || !strings.Contains(task.CustomConfigJSON, `"process_params"`) || !strings.Contains(task.CustomConfigJSON, `"plc_writes"`) || !strings.Contains(task.CustomConfigJSON, `"inlet_area_m2"`) {
+		t.Fatalf("expected process and PLC parameters frozen, custom_config_json=%s", task.CustomConfigJSON)
+	}
+	var auditCount int64
+	if err := db.Model(&models.SysAuditLog{}).Where("action = ? AND target_id = ? AND result = ?", "task_flow.write_variable", controlTag.VarID, "success").Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected one PLC write audit, got %d", auditCount)
+	}
+}
+
+func TestTaskFlowStringPayloadStopsDetectionWhenPLCParamMissing(t *testing.T) {
+	db := newTaskFlowTestDB(t)
+	repo := database.NewRepository(db)
+	channels := NewChannels()
+	tags := NewTagManager()
+	tasks := NewTaskManager()
+	project := &models.Project{ProjectCode: "AC-16", Name: "Project 16", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	requestTag := models.TagConfig{
+		VarID:       1601,
+		SourceType:  models.TagSourceVirtual,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "task_request",
+		RawName:     "task_request",
+		VarName:     "task_request",
+		JSONPath:    "task_request",
+		DataType:    "STRING",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	tempTag := models.TagConfig{
+		VarID:       1602,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "temp",
+		RawName:     "temp",
+		VarName:     "temp",
+		JSONPath:    "temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	controlTag := models.TagConfig{
+		VarID:         1603,
+		GatewayID:     1,
+		SourceTopic:   "topic",
+		SourcePath:    "plc.inlet_area",
+		RawName:       "plc.inlet_area",
+		VarName:       "plc_inlet_area",
+		JSONPath:      "plc.inlet_area",
+		DataType:      "FLOAT",
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		Enabled:       true,
+		ScaleFactor:   1,
+		RWMode:        "W",
+		Writable:      true,
+		WritePath:     "plc.inlet_area",
+		WriteDataType: "FLOAT",
+	}
+	for _, cfg := range []*models.TagConfig{&requestTag, &tempTag, &controlTag} {
+		if err := repo.CreateTag(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tags.Load([]models.TagConfig{requestTag, tempTag, controlTag})
+
+	executor := NewTaskFlowExecutor(repo, tags, tasks, channels)
+	var writerCalled bool
+	executor.SetVariableWriter(func(_ context.Context, input TaskFlowVariableWriteInput) (map[string]any, error) {
+		writerCalled = true
+		return map[string]any{"var_id": input.VarID, "value": input.Value}, nil
+	})
+	flow := models.TaskFlow{
+		ID:              160,
+		ProjectID:       project.ID,
+		FlowCode:        "request-plc-param-missing",
+		Name:            "Request PLC Param Missing",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerDataChange,
+		ConditionScript: `task_params.command === "start_detection"`,
+		StepsJSON: mustStepsJSON(t, []map[string]any{
+			{
+				"code":   "control",
+				"module": models.TaskFlowActionBuiltinWriteControlVariables,
+				"params": map[string]any{
+					"items": map[string]any{"source": "trigger_param", "key": "plc_writes"},
+				},
+			},
+			{
+				"code":   "start",
+				"module": models.TaskFlowActionBuiltinStartDetectionRun,
+				"params": map[string]any{
+					"project_id":     map[string]any{"source": "trigger_param", "key": "project_id"},
+					"test_no":        map[string]any{"source": "trigger_param", "key": "test_no"},
+					"custom_items":   map[string]any{"source": "trigger_param", "key": "custom_items"},
+					"enable_storage": false,
+					"enable_alarm":   false,
+				},
+			},
+		}),
+		TimeoutMS: 3000,
+		Vars:      []models.TaskFlowVar{{FlowID: 160, ProjectID: project.ID, VarID: requestTag.VarID, Role: models.TaskFlowVarRoleWatch}},
+	}
+	executor.Load([]models.TaskFlow{flow})
+	executor.Start(1)
+
+	request, _ := json.Marshal(map[string]any{
+		"command":    "start_detection",
+		"project_id": project.ID,
+		"test_no":    "TF-PLC-MISSING",
+		"process_params": map[string]any{
+			"inlet_area_m2": 1.25,
+		},
+		"plc_writes": []map[string]any{{
+			"var_id":     controlTag.VarID,
+			"value_from": "process_params.missing_inlet_area",
+		}},
+		"custom_items": []map[string]any{{
+			"var_id":        tempTag.VarID,
+			"var_name":      tempTag.VarName,
+			"check_enabled": true,
+			"store_enabled": false,
+			"limit_h":       50,
+		}},
+	})
+	payload, _ := json.Marshal(map[string]any{"task_request": string(request)})
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: payload, Timestamp: time.Now()}, channels, tags, tasks, executor)
+
+	run := waitForTaskFlowRunStatus(t, db, flow.ID, models.TaskFlowStatusFailed, time.Second)
+	if writerCalled {
+		t.Fatalf("variable writer must not be called when value_from cannot be resolved")
+	}
+	if !strings.Contains(run.ErrorMessage, "missing_inlet_area") {
+		t.Fatalf("expected missing value_from in error, got %q", run.ErrorMessage)
+	}
+	var taskCount int64
+	if err := db.Model(&models.DetectionTask{}).Where("test_no = ?", "TF-PLC-MISSING").Count(&taskCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("detection task must not start after PLC parameter failure, count=%d", taskCount)
+	}
+	var auditCount int64
+	if err := db.Model(&models.SysAuditLog{}).Where("action = ? AND target_id = ? AND result = ?", "task_flow.write_variable", controlTag.VarID, "failed").Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected one failed PLC write audit, got %d", auditCount)
+	}
+}
+
+func TestTaskFlowStringPayloadStopsDetectionWhenPLCWriteFails(t *testing.T) {
+	db := newTaskFlowTestDB(t)
+	repo := database.NewRepository(db)
+	channels := NewChannels()
+	tags := NewTagManager()
+	tasks := NewTaskManager()
+	project := &models.Project{ProjectCode: "AC-17", Name: "Project 17", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	requestTag := models.TagConfig{
+		VarID:       1701,
+		SourceType:  models.TagSourceVirtual,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "task_request",
+		RawName:     "task_request",
+		VarName:     "task_request",
+		JSONPath:    "task_request",
+		DataType:    "STRING",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	tempTag := models.TagConfig{
+		VarID:       1702,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "temp",
+		RawName:     "temp",
+		VarName:     "temp",
+		JSONPath:    "temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	controlTag := models.TagConfig{
+		VarID:         1703,
+		GatewayID:     1,
+		SourceTopic:   "topic",
+		SourcePath:    "plc.inlet_area",
+		RawName:       "plc.inlet_area",
+		VarName:       "plc_inlet_area",
+		JSONPath:      "plc.inlet_area",
+		DataType:      "FLOAT",
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		Enabled:       true,
+		ScaleFactor:   1,
+		RWMode:        "W",
+		Writable:      true,
+		WritePath:     "plc.inlet_area",
+		WriteDataType: "FLOAT",
+	}
+	for _, cfg := range []*models.TagConfig{&requestTag, &tempTag, &controlTag} {
+		if err := repo.CreateTag(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tags.Load([]models.TagConfig{requestTag, tempTag, controlTag})
+
+	executor := NewTaskFlowExecutor(repo, tags, tasks, channels)
+	var writes []TaskFlowVariableWriteInput
+	executor.SetVariableWriter(func(_ context.Context, input TaskFlowVariableWriteInput) (map[string]any, error) {
+		writes = append(writes, input)
+		return nil, errors.New("plc write rejected")
+	})
+	flow := models.TaskFlow{
+		ID:              161,
+		ProjectID:       project.ID,
+		FlowCode:        "request-plc-write-fails",
+		Name:            "Request PLC Write Fails",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerDataChange,
+		ConditionScript: `task_params.command === "start_detection"`,
+		StepsJSON: mustStepsJSON(t, []map[string]any{
+			{
+				"code":   "control",
+				"module": models.TaskFlowActionBuiltinWriteControlVariables,
+				"params": map[string]any{
+					"items": map[string]any{"source": "trigger_param", "key": "plc_writes"},
+				},
+			},
+			{
+				"code":   "start",
+				"module": models.TaskFlowActionBuiltinStartDetectionRun,
+				"params": map[string]any{
+					"project_id":     map[string]any{"source": "trigger_param", "key": "project_id"},
+					"test_no":        map[string]any{"source": "trigger_param", "key": "test_no"},
+					"custom_items":   map[string]any{"source": "trigger_param", "key": "custom_items"},
+					"enable_storage": false,
+					"enable_alarm":   false,
+				},
+			},
+		}),
+		TimeoutMS: 3000,
+		Vars:      []models.TaskFlowVar{{FlowID: 161, ProjectID: project.ID, VarID: requestTag.VarID, Role: models.TaskFlowVarRoleWatch}},
+	}
+	executor.Load([]models.TaskFlow{flow})
+	executor.Start(1)
+
+	request, _ := json.Marshal(map[string]any{
+		"command":        "start_detection",
+		"project_id":     project.ID,
+		"test_no":        "TF-PLC-WRITE-FAIL",
+		"process_params": map[string]any{"inlet_area_m2": 1.25},
+		"plc_writes": []map[string]any{{
+			"var_id":     controlTag.VarID,
+			"value_from": "process_params.inlet_area_m2",
+			"wait_ack":   true,
+		}},
+		"custom_items": []map[string]any{{
+			"var_id":        tempTag.VarID,
+			"var_name":      tempTag.VarName,
+			"check_enabled": true,
+			"store_enabled": false,
+			"limit_h":       50,
+		}},
+	})
+	payload, _ := json.Marshal(map[string]any{"task_request": string(request)})
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: payload, Timestamp: time.Now()}, channels, tags, tasks, executor)
+
+	run := waitForTaskFlowRunStatus(t, db, flow.ID, models.TaskFlowStatusFailed, time.Second)
+	if len(writes) != 1 {
+		t.Fatalf("expected one attempted PLC write, got %d", len(writes))
+	}
+	if writes[0].VarID != controlTag.VarID || writes[0].Value != 1.25 || !writes[0].WaitAck {
+		t.Fatalf("unexpected write input: %+v", writes[0])
+	}
+	if !strings.Contains(run.ErrorMessage, "plc write rejected") {
+		t.Fatalf("expected PLC writer error in task-flow run, got %q", run.ErrorMessage)
+	}
+	var taskCount int64
+	if err := db.Model(&models.DetectionTask{}).Where("test_no = ?", "TF-PLC-WRITE-FAIL").Count(&taskCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("detection task must not start after PLC write failure, count=%d", taskCount)
+	}
+	var auditCount int64
+	if err := db.Model(&models.SysAuditLog{}).Where("action = ? AND target_id = ? AND result = ?", "task_flow.write_variable", controlTag.VarID, "failed").Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected one failed PLC write audit, got %d", auditCount)
+	}
+}
+
+func TestTaskFlowStatusForErrDoesNotClassifyBusinessTimeoutTextAsTimeout(t *testing.T) {
+	if got := statusForErr(nil); got != models.TaskFlowStatusSuccess {
+		t.Fatalf("nil error status = %s", got)
+	}
+	if got := statusForErr(errors.New("plc ack timeout")); got != models.TaskFlowStatusFailed {
+		t.Fatalf("business error with timeout text status = %s", got)
+	}
+	if got := statusForErr(errors.New("timeout")); got != models.TaskFlowStatusTimeout {
+		t.Fatalf("exact timeout status = %s", got)
+	}
+	if got := statusForErr(context.DeadlineExceeded); got != models.TaskFlowStatusTimeout {
+		t.Fatalf("context deadline status = %s", got)
+	}
+}
+
+func TestTaskFlowJavaScriptTimeoutStatus(t *testing.T) {
+	executor := NewTaskFlowExecutor(database.NewRepository(newTaskFlowTestDB(t)), NewTagManager(), NewTaskManager(), NewChannels())
+	flow := models.TaskFlow{
+		ID:           162,
+		ProjectID:    1,
+		FlowCode:     "js-timeout",
+		Name:         "JS Timeout",
+		Enabled:      true,
+		TriggerType:  models.TaskFlowTriggerManual,
+		ActionType:   models.TaskFlowActionJavaScript,
+		ActionScript: `while (true) {}`,
+		TimeoutMS:    10,
+	}
+
+	started := time.Now()
+	result := executor.runFlow(flow, TaskFlowEvent{TriggerType: models.TaskFlowTriggerManual, ProjectID: 1, At: started}, 16201)
+	if result.Status != models.TaskFlowStatusTimeout {
+		t.Fatalf("expected timeout status, got status=%s err=%v", result.Status, result.Err)
+	}
+	if result.Err == nil {
+		t.Fatalf("expected timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("javascript timeout took too long: %s", elapsed)
 	}
 }
 
@@ -1089,6 +1677,66 @@ func TestTaskFlowWriteVariableRejectsPhysicalVariables(t *testing.T) {
 	}
 }
 
+func TestTaskFlowWriteControlVariablesResolvesProcessParams(t *testing.T) {
+	db := newTaskFlowTestDB(t)
+	repo := database.NewRepository(db)
+	executor := NewTaskFlowExecutor(repo, NewTagManager(), NewTaskManager(), NewChannels())
+	var writes []TaskFlowVariableWriteInput
+	executor.SetVariableWriter(func(_ context.Context, input TaskFlowVariableWriteInput) (map[string]any, error) {
+		writes = append(writes, input)
+		return map[string]any{
+			"var_id":      input.VarID,
+			"value":       input.Value,
+			"wait_ack":    input.WaitAck,
+			"request_id":  input.RequestID,
+			"source_type": models.TagSourceMQTT,
+		}, nil
+	})
+	flow := models.TaskFlow{
+		ID:          131,
+		ProjectID:   13,
+		FlowCode:    "control-write",
+		Name:        "Control Write",
+		Enabled:     true,
+		TriggerType: models.TaskFlowTriggerDataChange,
+		StepsJSON: mustStepsJSON(t, []map[string]any{{
+			"code":   "write_plc",
+			"module": models.TaskFlowActionBuiltinWriteControlVariables,
+			"params": map[string]any{
+				"items": []map[string]any{{
+					"var_id":          "9212397624135540848",
+					"value_from":      "process_params.inlet_area_m2",
+					"wait_ack":        true,
+					"ack_timeout_sec": 7,
+				}},
+			},
+		}}),
+		TimeoutMS: 3000,
+	}
+	result := executor.runFlow(flow, TaskFlowEvent{
+		TriggerType:  models.TaskFlowTriggerDataChange,
+		ProjectID:    13,
+		TriggerValue: map[string]any{"process_params": map[string]any{"inlet_area_m2": 1.25}},
+		RequestID:    "req-control",
+	}, 13101)
+	if result.Err != nil || result.Status == models.TaskFlowStatusFailed {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("expected one write, got %d", len(writes))
+	}
+	if writes[0].VarID != 9212397624135540848 || writes[0].Value != 1.25 || !writes[0].WaitAck || writes[0].AckTimeoutSec != 7 || writes[0].RequestID != "req-control" {
+		t.Fatalf("unexpected write input: %+v", writes[0])
+	}
+	var auditCount int64
+	if err := db.Model(&models.SysAuditLog{}).Where("action = ? AND target_id = ? AND result = ?", "task_flow.write_variable", "9212397624135540848", "success").Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected success audit, got %d", auditCount)
+	}
+}
+
 func TestTaskFlowDetectionLifecycleTriggersProjectFlows(t *testing.T) {
 	db := newTaskFlowTestDB(t)
 	repo := database.NewRepository(db)
@@ -1198,6 +1846,30 @@ func TestTaskFlowExternalActionModules(t *testing.T) {
 	var reports int64
 	if err := db.Model(&models.DetectionRunReport{}).Where("task_id = ?", task.ID).Count(&reports).Error; err != nil || reports != 1 {
 		t.Fatalf("reports=%d err=%v", reports, err)
+	}
+	featureResult := runDetectionFlow(t, executor, models.TaskFlow{
+		ID:          72,
+		ProjectID:   projectID,
+		FlowCode:    "refresh-features",
+		Name:        "Refresh Features",
+		TriggerType: models.TaskFlowTriggerManual,
+		StepsJSON: mustStepsJSON(t, []map[string]any{{
+			"code":   "features",
+			"module": models.TaskFlowActionBuiltinRefreshFeatures,
+			"params": map[string]any{"task_id": task.ID},
+		}}),
+		TimeoutMS: 3000,
+	})
+	if featureResult.Result["context"].(map[string]any)["features.feature_count"] == nil {
+		t.Fatalf("expected feature refresh context: %+v", featureResult.Result)
+	}
+	var featureEvents int64
+	if err := db.Model(&models.DetectionRunEvent{}).Where("task_id = ? AND event_type = ?", task.ID, models.DetectionEventFeaturesUpdated).Count(&featureEvents).Error; err != nil || featureEvents != 1 {
+		t.Fatalf("feature events=%d err=%v", featureEvents, err)
+	}
+	featureNotification := <-channels.Notify
+	if featureNotification.Type != models.NotificationDetectionFeatures || featureNotification.TaskID != task.ID {
+		t.Fatalf("unexpected feature notification: %+v", featureNotification)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Button, Segmented, Tooltip, message } from 'antd'
+import { Badge, Button, Empty, Popover, Segmented, Select, Tooltip, message } from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
   ActivitySquare,
   BarChart3,
+  Bell,
   Box,
+  CheckCheck,
   FileSearch,
   FolderOpen,
   Languages,
@@ -25,7 +27,9 @@ import {
 import { openExternal, openLogs, restartSidecar } from '@/shared/desktop/desktopBridge'
 import { createSsoTicket, logout } from '@/features/auth/api'
 import { useAuthStore } from '@/features/auth/authStore'
-import { getDevices } from '@/features/edge-status/api'
+import { getDevices, getNotificationUnreadCount, getNotifications, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
+import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
+import type { UserNotification } from '@/shared/api/types'
 import { queryClient } from './queryClient'
 
 const navItems = [
@@ -38,12 +42,25 @@ const navItems = [
   { path: '/debug', key: 'debug', icon: LayoutDashboard, permissions: ['system_settings'] },
 ]
 
+const notificationTypeOptions = [
+  { value: 'alarm.limit.enter', labelKey: 'notifications.types.alarmEnter' },
+  { value: 'alarm.limit.recover', labelKey: 'notifications.types.alarmRecover' },
+  { value: 'detection.run_started', labelKey: 'notifications.types.runStarted' },
+  { value: 'detection.run_stopped', labelKey: 'notifications.types.runStopped' },
+  { value: 'detection.result_ok', labelKey: 'notifications.types.resultOk' },
+  { value: 'detection.result_ng', labelKey: 'notifications.types.resultNg' },
+]
+
 export function ShellLayout() {
   const { t, i18n } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const [messageApi, contextHolder] = message.useMessage()
   const [collapsed, setCollapsed] = useState(false)
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const [notificationUnreadFilter, setNotificationUnreadFilter] = useState<'all' | 'unread'>('all')
+  const [notificationTypeFilter, setNotificationTypeFilter] = useState<string>()
+  const [notificationProjectFilter, setNotificationProjectFilter] = useState<number>()
   const [time, setTime] = useState(() => new Date().toLocaleTimeString('zh-CN', { hour12: false }))
   const user = useAuthStore((state) => state.user)
   const hasAnyPermission = useAuthStore((state) => state.hasAnyPermission)
@@ -52,6 +69,25 @@ export function ShellLayout() {
     queryKey: ['shell', 'devices'],
     queryFn: getDevices,
     refetchInterval: 10000,
+    retry: false,
+  })
+  const unreadQuery = useQuery({
+    queryKey: ['shell', 'notifications', 'unread-count'],
+    queryFn: getNotificationUnreadCount,
+    refetchInterval: 10000,
+    retry: false,
+  })
+  const notificationsQuery = useQuery({
+    queryKey: ['shell', 'notifications', 'latest', notificationUnreadFilter, notificationTypeFilter ?? 'all', notificationProjectFilter ?? 'all'],
+    queryFn: () =>
+      getNotifications({
+        limit: 20,
+        unread: notificationUnreadFilter === 'unread' ? true : undefined,
+        type: notificationTypeFilter,
+        project_id: notificationProjectFilter,
+      }),
+    enabled: notificationOpen,
+    staleTime: 5000,
     retry: false,
   })
 
@@ -83,6 +119,22 @@ export function ShellLayout() {
     },
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('auth.ssoFailed')),
   })
+  const markReadMutation = useMutation({
+    mutationFn: (notificationId: number) => markNotificationRead(notificationId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
+      ])
+    },
+  })
+  const markAllReadMutation = useMutation({
+    mutationFn: markAllNotificationsRead,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
+      ])
+    },
+  })
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -90,6 +142,137 @@ export function ShellLayout() {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    let reconnectTimer = 0
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+
+    const connect = () => {
+      const scheduleReconnect = () => {
+        if (disposed || reconnectTimer) return
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = 0
+          connect()
+        }, 3000)
+      }
+
+      unsubscribe = subscribeRealtimeWebSocket({
+        subscription: { topics: ['notifications'] },
+        onMessage: (message) => {
+          if (message.type !== 'notification.event') return
+          void queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] })
+        },
+        onClose: scheduleReconnect,
+        onError: scheduleReconnect,
+      })
+    }
+
+    connect()
+
+    return () => {
+      disposed = true
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      unsubscribe?.()
+    }
+  }, [])
+
+  function notificationTitle(notification: UserNotification) {
+    return notification.display_name || notification.var_name || notification.test_no || notification.type
+  }
+
+  function openNotificationTarget(notification: UserNotification) {
+    if (!notification.read_at) markReadMutation.mutate(notification.id)
+    setNotificationOpen(false)
+
+    const params = new URLSearchParams()
+    if (notification.task_id && hasAnyPermission(['view_history'])) {
+      params.set('task_id', String(notification.task_id))
+      if (notification.project_id) params.set('project_id', String(notification.project_id))
+      if (notification.test_no) params.set('test_no', notification.test_no)
+      navigate(`/history?${params.toString()}`)
+      return
+    }
+
+    if (notification.project_id && hasAnyPermission(['view_realtime'])) {
+      params.set('project_id', String(notification.project_id))
+      navigate({ pathname: '/', search: params.toString() })
+    }
+  }
+
+  const notificationContent = (
+    <div className="notification-popover">
+      <div className="notification-popover-head">
+        <div>
+          <strong>{t('notifications.title')}</strong>
+          <span>
+            {t('notifications.unread', { count: unreadQuery.data?.unread ?? 0 })}
+            {notificationsQuery.data ? ` · ${t('notifications.filtered', { count: notificationsQuery.data.total })}` : ''}
+          </span>
+        </div>
+        <Button
+          size="small"
+          icon={<CheckCheck size={14} />}
+          loading={markAllReadMutation.isPending}
+          onClick={() => markAllReadMutation.mutate()}
+        >
+          {t('notifications.readAll')}
+        </Button>
+      </div>
+      <div className="notification-filters">
+        <Segmented
+          size="small"
+          value={notificationUnreadFilter}
+          onChange={(value) => setNotificationUnreadFilter(value as 'all' | 'unread')}
+          options={[
+            { label: t('notifications.filters.all'), value: 'all' },
+            { label: t('notifications.filters.unread'), value: 'unread' },
+          ]}
+        />
+        <Select
+          allowClear
+          size="small"
+          className="notification-filter-select"
+          placeholder={t('notifications.filters.type')}
+          value={notificationTypeFilter}
+          onChange={(value) => setNotificationTypeFilter(value)}
+          options={notificationTypeOptions.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+        />
+        <Select
+          allowClear
+          showSearch
+          size="small"
+          className="notification-filter-select"
+          optionFilterProp="label"
+          placeholder={t('notifications.filters.project')}
+          value={notificationProjectFilter}
+          onChange={(value) => setNotificationProjectFilter(value)}
+          options={stationDevices.map((project) => ({ value: project.id, label: displayDeviceName(project) }))}
+        />
+      </div>
+      <div className="notification-list">
+        {(notificationsQuery.data?.items.length ?? 0) === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('notifications.empty')} />
+        ) : (
+          notificationsQuery.data?.items.map((notification) => (
+            <button
+              className={notification.read_at ? 'notification-item read' : `notification-item ${notification.level}`}
+              key={notification.id}
+              title={t('notifications.openTarget')}
+              onClick={() => openNotificationTarget(notification)}
+            >
+              <span className="notification-level-dot" />
+              <span className="notification-item-main">
+                <strong>{notificationTitle(notification)}</strong>
+                <span>{notification.message || notification.type}</span>
+                <small>{new Date(notification.occurred_at || notification.created_at).toLocaleString()}</small>
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  )
 
   return (
     <div className="workbench-shell">
@@ -122,8 +305,9 @@ export function ShellLayout() {
               {item.key === 'station' && !collapsed && stationDevices.length > 0 ? (
                 <div className="nav-subtree">
                   {stationDevices.map((device) => {
-                    const search = `?device_id=${device.id}`
-                    const active = location.pathname === '/' && location.search === search
+                    const search = `?project_id=${device.id}`
+                    const legacySearch = `?device_id=${device.id}`
+                    const active = location.pathname === '/' && (location.search === search || location.search === legacySearch)
                     const deviceName = displayDeviceName(device)
                     return (
                       <Link
@@ -171,6 +355,21 @@ export function ShellLayout() {
               <UserRound size={14} />
               {user?.username}
             </span>
+            <Popover
+              content={notificationContent}
+              open={notificationOpen}
+              autoAdjustOverflow={false}
+              onOpenChange={(open) => {
+                setNotificationOpen(open)
+                if (open) void notificationsQuery.refetch()
+              }}
+              placement="bottomRight"
+              trigger="click"
+            >
+              <Badge count={unreadQuery.data?.unread ?? 0} size="small">
+                <Button className="icon-button" icon={<Bell size={16} />} aria-label={t('notifications.title')} />
+              </Badge>
+            </Popover>
             {hasAnyPermission(['sso_handoff']) ? (
               <Tooltip title={t('auth.openMainSite')}>
                 <Button

@@ -207,7 +207,7 @@ func (h *GatewaysHandler) patchConfig(c *gin.Context) {
 	}
 	gateway, err := h.repo.UpdateGatewayConfig(gatewayID, gatewayConfigUpdates(req))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	if err := h.mqtt.ApplyConfig(gateway); err != nil {
@@ -225,7 +225,7 @@ func (h *GatewaysHandler) deleteConfig(c *gin.Context) {
 	}
 	h.mqtt.Stop(gatewayID)
 	if err := h.repo.DeleteGatewayConfig(gatewayID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

@@ -16,9 +16,13 @@ applyTo: "**/*"
 
 ## Board Discipline
 
-- `AI_BOARD.md` is the only active board.
+- Root `AI_BOARD.md` is the realtime/current interaction board.
+- Keep every open and blocked work item in `AI_BOARD.md`.
 - Do not put open or blocked items under `.ai/docs/`.
-- If a decision becomes stable, move the decision summary into `.ai/docs/` and keep only active follow-up in `AI_BOARD.md`.
+- Do not create another active board under `.ai/docs/`, `backend/docs/`, or a feature folder.
+- If a decision or task becomes closed and stable, move the durable conclusion, implementation notes, test evidence, and related closed explanations into the matching stable document under `.ai/docs/` or the relevant module docs.
+- If no stable document fits, create a concise historical record under `.ai/docs/archive/`.
+- Keep only active follow-up, unresolved risk, current cross-team contracts, and recent handoff notes in `AI_BOARD.md`.
 
 ## Project Boundary Rules
 

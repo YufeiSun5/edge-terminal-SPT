@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -227,6 +228,43 @@ func (k *Kernel) mountRoutes() {
 	realtimeWSService := services.NewRealtimeWSService(k.tags, k.tasks)
 	kioWriteService := services.NewKIOWriteService(k.mqtt)
 	variableWriteService := services.NewVariableWriteService(k.repo, k.tags, kioWriteService, k.flows)
+	k.flows.SetVariableWriter(func(ctx context.Context, input pipeline.TaskFlowVariableWriteInput) (map[string]any, error) {
+		result, err := variableWriteService.Write(ctx, services.VariableWriteInput{
+			VarID:          input.VarID,
+			Value:          input.Value,
+			Quality:        input.Quality,
+			Trigger:        input.Trigger,
+			WaitAck:        input.WaitAck,
+			AckTimeoutSec:  input.AckTimeoutSec,
+			OriginFlowID:   input.OriginFlowID,
+			OriginRunID:    input.OriginRunID,
+			Depth:          input.Depth,
+			MaxDepth:       input.MaxDepth,
+			AllowReentrant: input.AllowReentrant,
+			RequestID:      input.RequestID,
+		})
+		out := map[string]any{
+			"var_id":            result.VarID,
+			"var_name":          result.VarName,
+			"source_type":       result.SourceType,
+			"value":             result.Value,
+			"quality":           result.Quality,
+			"triggered":         result.Triggered,
+			"origin_flow_id":    result.OriginFlowID,
+			"origin_run_id":     result.OriginRunID,
+			"depth":             result.Depth,
+			"next_depth":        result.NextDepth,
+			"max_depth":         result.MaxDepth,
+			"allow_reentrant":   result.AllowReentrant,
+			"request_id":        result.RequestID,
+			"broker_accepted":   result.BrokerAccepted,
+			"project_confirmed": result.ProjectConfirmed,
+		}
+		if result.ProjectID != nil {
+			out["project_id"] = *result.ProjectID
+		}
+		return out, err
+	})
 
 	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).WithNotificationHub(k.notify).Register(v1, k.auth)
 	handlers.NewUsersHandler(k.repo).Register(protected, k.auth)
@@ -241,6 +279,7 @@ func (k *Kernel) mountRoutes() {
 	handlers.NewSystemConfigHandler(systemConfigService).Register(protected, k.auth)
 	handlers.NewAuditLogsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewNotificationsHandler(k.repo).Register(protected, k.auth)
+	handlers.NewLimitAlarmsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewTaskFlowsHandler(k.repo, k.flows).Register(protected, k.auth)
 }
 
@@ -251,7 +290,7 @@ func corsMiddleware() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
 		}
-		c.Header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+		c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Authorization,Content-Type,Accept")
 		c.Header("Access-Control-Max-Age", "600")
 

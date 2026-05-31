@@ -69,6 +69,18 @@ func TestVariablesHandlerCreate(t *testing.T) {
 	if deleteResp.Code != http.StatusOK {
 		t.Fatalf("delete status=%d", deleteResp.Code)
 	}
+	missingPatchResp := callHandlerWithParams(t, http.MethodPatch, "/variables/404", map[string]any{"display_name": "missing"}, gin.Params{{Key: "variable_id", Value: "404"}}, handler.patch)
+	if missingPatchResp.Code != http.StatusNotFound {
+		t.Fatalf("missing variable patch should be 404, got %d body=%s", missingPatchResp.Code, missingPatchResp.Body.String())
+	}
+	missingAssignResp := callHandlerWithParams(t, http.MethodPatch, "/variables/404/assignment", map[string]any{"project_id": Project.ID, "enabled": true}, gin.Params{{Key: "variable_id", Value: "404"}}, handler.assign)
+	if missingAssignResp.Code != http.StatusNotFound {
+		t.Fatalf("missing variable assignment should be 404, got %d body=%s", missingAssignResp.Code, missingAssignResp.Body.String())
+	}
+	missingDeleteResp := callHandlerWithParams(t, http.MethodDelete, "/variables/404", nil, gin.Params{{Key: "variable_id", Value: "404"}}, handler.delete)
+	if missingDeleteResp.Code != http.StatusNotFound {
+		t.Fatalf("missing variable delete should be 404, got %d body=%s", missingDeleteResp.Code, missingDeleteResp.Body.String())
+	}
 }
 
 func TestVariablesHandlerRealtimeFilters(t *testing.T) {
@@ -181,7 +193,7 @@ func TestStorageRoutesHandlerCRUD(t *testing.T) {
 	repo := database.NewRepository(db)
 	Project := createHandlerProject(t, repo)
 	tag := models.TagConfig{
-		VarID:       501,
+		VarID:       9212397624135540848,
 		GatewayID:   1,
 		SourcePath:  "temp",
 		RawName:     "temp",
@@ -201,7 +213,7 @@ func TestStorageRoutesHandlerCRUD(t *testing.T) {
 	enabled := true
 	createResp := callHandler(t, http.MethodPost, "/storage-routes", map[string]any{
 		"project_id":     Project.ID,
-		"var_id":         tag.VarID,
+		"var_id":         strconv.FormatInt(tag.VarID, 10),
 		"table_name":     "custom_temp_data",
 		"column_name":    "temp_value",
 		"trigger_mode":   models.StoreTriggerOnCycle,
@@ -219,6 +231,9 @@ func TestStorageRoutesHandlerCRUD(t *testing.T) {
 	if route.StorageTable != "custom_temp_data" || route.CycleMS != 3000 || !route.StoreOnStart || !route.Enabled {
 		t.Fatalf("unexpected created route: %+v", route)
 	}
+	if !strings.Contains(createResp.Body.String(), `"var_id_text":"9212397624135540848"`) {
+		t.Fatalf("expected storage route response to include exact var_id_text, body=%s", createResp.Body.String())
+	}
 	listResp := callHandler(t, http.MethodGet, "/storage-routes?project_id=1&enabled=true", nil, handler.list)
 	if listResp.Code != http.StatusOK {
 		t.Fatalf("list storage routes status=%d", listResp.Code)
@@ -227,9 +242,17 @@ func TestStorageRoutesHandlerCRUD(t *testing.T) {
 	if patchResp.Code != http.StatusOK {
 		t.Fatalf("patch storage route status=%d body=%s", patchResp.Code, patchResp.Body.String())
 	}
+	missingPatchResp := callHandlerWithParams(t, http.MethodPatch, "/storage-routes/404", map[string]any{"enabled": true}, gin.Params{{Key: "id", Value: "404"}}, handler.patch)
+	if missingPatchResp.Code != http.StatusNotFound {
+		t.Fatalf("missing storage route patch should be 404, got %d body=%s", missingPatchResp.Code, missingPatchResp.Body.String())
+	}
 	deleteResp := callHandlerWithParams(t, http.MethodDelete, "/storage-routes/1", nil, gin.Params{{Key: "id", Value: strconv.FormatUint(route.ID, 10)}}, handler.delete)
 	if deleteResp.Code != http.StatusOK {
 		t.Fatalf("delete storage route status=%d body=%s", deleteResp.Code, deleteResp.Body.String())
+	}
+	missingDeleteResp := callHandlerWithParams(t, http.MethodDelete, "/storage-routes/404", nil, gin.Params{{Key: "id", Value: "404"}}, handler.delete)
+	if missingDeleteResp.Code != http.StatusNotFound {
+		t.Fatalf("missing storage route delete should be 404, got %d body=%s", missingDeleteResp.Code, missingDeleteResp.Body.String())
 	}
 }
 
@@ -274,8 +297,175 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 	if modulesResp.Code != http.StatusOK {
 		t.Fatalf("modules status=%d body=%s", modulesResp.Code, modulesResp.Body.String())
 	}
-	if body := modulesResp.Body.String(); !strings.Contains(body, "getMany([var_id])") || !strings.Contains(body, "默认 trigger=false") {
+	if body := modulesResp.Body.String(); !strings.Contains(body, "getMany([var_id])") || !strings.Contains(body, "trigger_var_id_text") || !strings.Contains(body, "默认 trigger=false") {
 		t.Fatalf("expected JavaScript realtime runtime_api, body=%s", body)
+	}
+	if body := modulesResp.Body.String(); !strings.Contains(body, "process_params") || !strings.Contains(body, "plc_writes") || !strings.Contains(body, "进风口面积") {
+		t.Fatalf("expected task module schema to expose process params and PLC writes, body=%s", body)
+	}
+	badCreateResp := callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"flow_code":    "missing-project",
+		"name":         "Missing Project",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"action_type":  models.TaskFlowActionJavaScript,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("missing project_id should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    " ",
+		"name":         "Missing Flow Code",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"action_type":  models.TaskFlowActionJavaScript,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("blank flow_code should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "missing-name",
+		"name":         " ",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"action_type":  models.TaskFlowActionJavaScript,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("blank name should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-trigger",
+		"name":         "Bad Trigger",
+		"trigger_type": "never",
+		"action_type":  models.TaskFlowActionJavaScript,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid trigger_type should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-action",
+		"name":         "Bad Action",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"action_type":  "builtin.missing",
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid action_type should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-timing",
+		"name":         "Bad Timing",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"timeout_ms":   -1,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("negative timing should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-step",
+		"name":         "Bad Step",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"steps_json":   `[{"code":"bad","module":"builtin.missing"}]`,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid steps_json module should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "empty-steps",
+		"name":         "Empty Steps",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"steps_json":   `[]`,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("empty steps_json should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "duplicate-step-code",
+		"name":         "Duplicate Step Code",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"steps_json":   `[{"code":"same","module":"builtin.context_set","params":{"a":1}},{"code":"same","module":"builtin.context_set","params":{"b":2}}]`,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate steps_json code should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-param-source",
+		"name":         "Bad Param Source",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"steps_json":   `[{"code":"start","module":"builtin.start_detection_run","params":{"project_id":{"source":"trigger","key":"project_id"}}}]`,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid steps_json param source should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-event-key",
+		"name":         "Bad Event Key",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"steps_json":   `[{"code":"ctx","module":"builtin.context_set","params":{"project":{"source":"event","key":"project"}}}]`,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid steps_json event key should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	disabledEventFlow := false
+	eventKeyCreateResp := callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "event-var-id-text",
+		"name":         "Event Var ID Text",
+		"enabled":      disabledEventFlow,
+		"trigger_type": models.TaskFlowTriggerManual,
+		"steps_json":   `[{"code":"ctx","module":"builtin.context_set","params":{"trigger_var_id_text":{"source":"event","key":"trigger_var_id_text"}}}]`,
+	}, handler.create)
+	if eventKeyCreateResp.Code != http.StatusOK {
+		t.Fatalf("valid trigger_var_id_text event key should be accepted, got %d body=%s", eventKeyCreateResp.Code, eventKeyCreateResp.Body.String())
+	}
+	var eventFlow models.TaskFlow
+	if err := json.Unmarshal(eventKeyCreateResp.Body.Bytes(), &eventFlow); err != nil {
+		t.Fatal(err)
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-role",
+		"name":         "Bad Role",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"vars":         []map[string]any{{"var_id": 100, "role": "execute"}},
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid var role should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "bad-var-id",
+		"name":         "Bad Var ID",
+		"trigger_type": models.TaskFlowTriggerManual,
+		"vars":         []map[string]any{{"var_id": 0, "role": models.TaskFlowVarRoleWatch}},
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid var_id should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "data-change-no-watch",
+		"name":         "Data Change No Watch",
+		"trigger_type": models.TaskFlowTriggerDataChange,
+		"vars":         []map[string]any{{"var_id": 100, "role": models.TaskFlowVarRoleRead}},
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("data_change without watch var should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
+	}
+	badCreateResp = callHandler(t, http.MethodPost, "/task-flows", map[string]any{
+		"project_id":   Project.ID,
+		"flow_code":    "schedule-no-interval",
+		"name":         "Schedule No Interval",
+		"trigger_type": models.TaskFlowTriggerSchedule,
+	}, handler.create)
+	if badCreateResp.Code != http.StatusBadRequest {
+		t.Fatalf("schedule without interval should be rejected, got %d body=%s", badCreateResp.Code, badCreateResp.Body.String())
 	}
 	createResp := callHandler(t, http.MethodPost, "/task-flows", map[string]any{
 		"project_id":       Project.ID,
@@ -307,6 +497,10 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 	if listResp.Code != http.StatusOK {
 		t.Fatalf("list task flows status=%d", listResp.Code)
 	}
+	badListResp := callHandler(t, http.MethodGet, "/task-flows?trigger_type=never", nil, handler.list)
+	if badListResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid list trigger_type should be rejected, got %d body=%s", badListResp.Code, badListResp.Body.String())
+	}
 	templatesResp := callHandler(t, http.MethodGet, "/task-flow-templates", nil, handler.templates)
 	templatesBody := templatesResp.Body.String()
 	if templatesResp.Code != http.StatusOK ||
@@ -315,8 +509,13 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 		!strings.Contains(templatesBody, "variable-request-start-qualified-hold-detection") ||
 		!strings.Contains(templatesBody, models.TaskFlowActionBuiltinUpdateDetectionLimits) ||
 		!strings.Contains(templatesBody, models.TaskFlowActionBuiltinRefreshFeatures) ||
-		!strings.Contains(templatesBody, models.TaskFlowActionBuiltinRegisterReport) {
+		!strings.Contains(templatesBody, models.TaskFlowActionBuiltinRegisterReport) ||
+		!strings.Contains(templatesBody, "operator_note") ||
+		!strings.Contains(templatesBody, "report_template_id") {
 		t.Fatalf("task flow templates status=%d body=%s", templatesResp.Code, templatesResp.Body.String())
+	}
+	if strings.Count(templatesBody, models.TaskFlowActionBuiltinWriteControlVariables) < 4 {
+		t.Fatalf("start detection templates should include PLC write step before detection start, body=%s", templatesBody)
 	}
 	disabled := false
 	patchResp := callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"project_id": otherProject.ID, "enabled": disabled, "priority": 7, "vars": []map[string]any{{"var_id": 101, "role": models.TaskFlowVarRoleRead}}}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
@@ -326,6 +525,74 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 	mustDecodeHandler(t, patchResp, &flow)
 	if flow.ProjectID != otherProject.ID || len(flow.Vars) != 1 || flow.Vars[0].ProjectID != otherProject.ID {
 		t.Fatalf("patch should update task flow project and var bindings: %+v", flow)
+	}
+	badPatchResp := callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"trigger_type": models.TaskFlowTriggerDataChange}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("patch data_change without watch var should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"trigger_type": models.TaskFlowTriggerSchedule}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("patch schedule without interval should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"action_type": "builtin.missing"}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch action_type should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"project_id": 0}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch project_id should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"flow_code": " "}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("blank patch flow_code should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"name": " "}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("blank patch name should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"timeout_ms": 0}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch timeout_ms should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"hold_ms": -1}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("negative patch hold_ms should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{
+		"steps_json": `[{"code":"control","module":"builtin.write_control_variables","params":{"items":{"source":"task_param","key":"plc_writes"}}}]`,
+	}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch steps_json param source should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"steps_json": `[]`}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("empty patch steps_json should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{
+		"steps_json": `[{"code":"same","module":"builtin.context_set","params":{"a":1}},{"code":"same","module":"builtin.context_set","params":{"b":2}}]`,
+	}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate patch steps_json code should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{
+		"steps_json": `[{"code":"ctx","module":"builtin.context_set","params":{"project":{"source":"event","key":"project"}}}]`,
+	}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch steps_json event key should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	patchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{
+		"steps_json": `[{"code":"ctx","module":"builtin.context_set","params":{"trigger_var_id_text":{"source":"event","key":"trigger_var_id_text"}}}]`,
+	}, gin.Params{{Key: "id", Value: strconv.FormatUint(eventFlow.ID, 10)}}, handler.patch)
+	if patchResp.Code != http.StatusOK {
+		t.Fatalf("valid patch trigger_var_id_text event key should be accepted, got %d body=%s", patchResp.Code, patchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"vars": []map[string]any{{"var_id": 101, "role": "execute"}}}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch var role should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
+	}
+	badPatchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"vars": []map[string]any{{"var_id": -1, "role": models.TaskFlowVarRoleWatch}}}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
+	if badPatchResp.Code != http.StatusBadRequest {
+		t.Fatalf("invalid patch var_id should be rejected, got %d body=%s", badPatchResp.Code, badPatchResp.Body.String())
 	}
 	enabled := true
 	patchResp = callHandlerWithParams(t, http.MethodPatch, "/task-flows/1", map[string]any{"enabled": enabled}, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.patch)
@@ -351,9 +618,22 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 			if getRunResp.Code != http.StatusOK {
 				t.Fatalf("get task flow run status=%d body=%s", getRunResp.Code, getRunResp.Body.String())
 			}
+			missingRunID := run.ID + 999
+			missingRunResp := callHandlerWithParams(t, http.MethodGet, "/task-flow-runs/999999", nil, gin.Params{{Key: "id", Value: strconv.FormatUint(missingRunID, 10)}}, handler.getRun)
+			if missingRunResp.Code != http.StatusNotFound {
+				t.Fatalf("missing task flow run should be 404, got %d body=%s", missingRunResp.Code, missingRunResp.Body.String())
+			}
 			sqlLogsResp := callHandlerWithParams(t, http.MethodGet, "/task-flow-runs/1/sql-logs", nil, gin.Params{{Key: "id", Value: strconv.FormatUint(run.ID, 10)}}, handler.listRunSQLLogs)
 			if sqlLogsResp.Code != http.StatusOK {
 				t.Fatalf("list task flow sql logs status=%d body=%s", sqlLogsResp.Code, sqlLogsResp.Body.String())
+			}
+			missingSQLLogsResp := callHandlerWithParams(t, http.MethodGet, "/task-flow-runs/999999/sql-logs", nil, gin.Params{{Key: "id", Value: strconv.FormatUint(missingRunID, 10)}}, handler.listRunSQLLogs)
+			if missingSQLLogsResp.Code != http.StatusNotFound {
+				t.Fatalf("missing task flow run sql logs should be 404, got %d body=%s", missingSQLLogsResp.Code, missingSQLLogsResp.Body.String())
+			}
+			badSQLLogsLimitResp := callHandlerWithParams(t, http.MethodGet, "/task-flow-runs/1/sql-logs?limit=0", nil, gin.Params{{Key: "id", Value: strconv.FormatUint(run.ID, 10)}}, handler.listRunSQLLogs)
+			if badSQLLogsLimitResp.Code != http.StatusBadRequest {
+				t.Fatalf("zero sql logs limit should be rejected, got %d body=%s", badSQLLogsLimitResp.Code, badSQLLogsLimitResp.Body.String())
 			}
 			deleteResp := callHandlerWithParams(t, http.MethodDelete, "/task-flows/1", nil, gin.Params{{Key: "id", Value: strconv.FormatUint(flow.ID, 10)}}, handler.delete)
 			if deleteResp.Code != http.StatusOK || !strings.Contains(deleteResp.Body.String(), "deleted") {
@@ -372,6 +652,120 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("expected successful run, got %+v", run)
+}
+
+func TestTaskFlowsHandlerListRunsFiltersFailedAndTimeoutDistinctly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	handler := NewTaskFlowsHandler(repo, pipeline.NewTaskFlowExecutor(repo, pipeline.NewTagManager(), pipeline.NewTaskManager(), pipeline.NewChannels()))
+	project := createHandlerProject(t, repo)
+	flow := models.TaskFlow{
+		ProjectID:       project.ID,
+		FlowCode:        "status-filter",
+		Name:            "Status Filter",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerManual,
+		ActionType:      models.TaskFlowActionJavaScript,
+		ConditionScript: "true",
+	}
+	if err := repo.CreateTaskFlow(&flow); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 5, 31, 1, 40, 0, 0, time.UTC)
+	failedRun := models.TaskFlowRun{
+		FlowID:       flow.ID,
+		FlowCode:     flow.FlowCode,
+		ProjectID:    project.ID,
+		TriggerType:  models.TaskFlowTriggerDataChange,
+		TriggerVarID: 9001,
+		Status:       models.TaskFlowStatusFailed,
+		StartedAt:    base,
+		ErrorMessage: "plc ack timeout",
+	}
+	if err := repo.CreateTaskFlowRun(&failedRun); err != nil {
+		t.Fatal(err)
+	}
+	timeoutRun := models.TaskFlowRun{
+		FlowID:       flow.ID,
+		FlowCode:     flow.FlowCode,
+		ProjectID:    project.ID,
+		TriggerType:  models.TaskFlowTriggerDataChange,
+		TriggerVarID: 9001,
+		Status:       models.TaskFlowStatusTimeout,
+		StartedAt:    base.Add(time.Second),
+		ErrorMessage: "timeout at <eval>:1:1(1)",
+	}
+	if err := repo.CreateTaskFlowRun(&timeoutRun); err != nil {
+		t.Fatal(err)
+	}
+
+	failedResp := callHandler(t, http.MethodGet, "/task-flow-runs?status=failed&limit=10", nil, handler.listRuns)
+	if failedResp.Code != http.StatusOK {
+		t.Fatalf("failed filter status=%d body=%s", failedResp.Code, failedResp.Body.String())
+	}
+	var failedBody struct {
+		Items []models.TaskFlowRun `json:"items"`
+		Total int64                `json:"total"`
+	}
+	mustDecodeHandler(t, failedResp, &failedBody)
+	if failedBody.Total != 1 || len(failedBody.Items) != 1 || failedBody.Items[0].ID != failedRun.ID || failedBody.Items[0].Status != models.TaskFlowStatusFailed {
+		t.Fatalf("unexpected failed filter body: %+v", failedBody)
+	}
+
+	timeoutResp := callHandler(t, http.MethodGet, "/task-flow-runs?status=timeout&limit=10", nil, handler.listRuns)
+	if timeoutResp.Code != http.StatusOK {
+		t.Fatalf("timeout filter status=%d body=%s", timeoutResp.Code, timeoutResp.Body.String())
+	}
+	var timeoutBody struct {
+		Items []models.TaskFlowRun `json:"items"`
+		Total int64                `json:"total"`
+	}
+	mustDecodeHandler(t, timeoutResp, &timeoutBody)
+	if timeoutBody.Total != 1 || len(timeoutBody.Items) != 1 || timeoutBody.Items[0].ID != timeoutRun.ID || timeoutBody.Items[0].Status != models.TaskFlowStatusTimeout {
+		t.Fatalf("unexpected timeout filter body: %+v", timeoutBody)
+	}
+
+	badStatusResp := callHandler(t, http.MethodGet, "/task-flow-runs?status=done", nil, handler.listRuns)
+	if badStatusResp.Code != http.StatusBadRequest {
+		t.Fatalf("bad status query should be rejected, got %d body=%s", badStatusResp.Code, badStatusResp.Body.String())
+	}
+	badTriggerResp := callHandler(t, http.MethodGet, "/task-flow-runs?trigger_type=unknown", nil, handler.listRuns)
+	if badTriggerResp.Code != http.StatusBadRequest {
+		t.Fatalf("bad trigger_type query should be rejected, got %d body=%s", badTriggerResp.Code, badTriggerResp.Body.String())
+	}
+	badLimitZeroResp := callHandler(t, http.MethodGet, "/task-flow-runs?limit=0", nil, handler.listRuns)
+	if badLimitZeroResp.Code != http.StatusBadRequest {
+		t.Fatalf("zero limit query should be rejected, got %d body=%s", badLimitZeroResp.Code, badLimitZeroResp.Body.String())
+	}
+	badLimitNegativeResp := callHandler(t, http.MethodGet, "/task-flow-runs?limit=-1", nil, handler.listRuns)
+	if badLimitNegativeResp.Code != http.StatusBadRequest {
+		t.Fatalf("negative limit query should be rejected, got %d body=%s", badLimitNegativeResp.Code, badLimitNegativeResp.Body.String())
+	}
+	badOffsetResp := callHandler(t, http.MethodGet, "/task-flow-runs?offset=-1", nil, handler.listRuns)
+	if badOffsetResp.Code != http.StatusBadRequest {
+		t.Fatalf("negative offset query should be rejected, got %d body=%s", badOffsetResp.Code, badOffsetResp.Body.String())
+	}
+	badProjectResp := callHandler(t, http.MethodGet, "/task-flow-runs?project_id=0", nil, handler.listRuns)
+	if badProjectResp.Code != http.StatusBadRequest {
+		t.Fatalf("zero project_id query should be rejected, got %d body=%s", badProjectResp.Code, badProjectResp.Body.String())
+	}
+	badFlowResp := callHandler(t, http.MethodGet, "/task-flow-runs?flow_id=0", nil, handler.listRuns)
+	if badFlowResp.Code != http.StatusBadRequest {
+		t.Fatalf("zero flow_id query should be rejected, got %d body=%s", badFlowResp.Code, badFlowResp.Body.String())
+	}
+	badTriggerVarResp := callHandler(t, http.MethodGet, "/task-flow-runs?trigger_var_id=-1", nil, handler.listRuns)
+	if badTriggerVarResp.Code != http.StatusBadRequest {
+		t.Fatalf("negative trigger_var_id query should be rejected, got %d body=%s", badTriggerVarResp.Code, badTriggerVarResp.Body.String())
+	}
+	badOriginResp := callHandler(t, http.MethodGet, "/task-flow-runs?origin_flow_id=0", nil, handler.listRuns)
+	if badOriginResp.Code != http.StatusBadRequest {
+		t.Fatalf("zero origin_flow_id query should be rejected, got %d body=%s", badOriginResp.Code, badOriginResp.Body.String())
+	}
+	badTimeRangeResp := callHandler(t, http.MethodGet, "/task-flow-runs?from=2026-05-31T02:00:00Z&to=2026-05-31T01:00:00Z", nil, handler.listRuns)
+	if badTimeRangeResp.Code != http.StatusBadRequest {
+		t.Fatalf("reversed time range query should be rejected, got %d body=%s", badTimeRangeResp.Code, badTimeRangeResp.Body.String())
+	}
 }
 
 func TestHandlerHelpers(t *testing.T) {
@@ -455,6 +849,7 @@ func TestHandlerRouteRegistration(t *testing.T) {
 	NewReportTemplatesHandler(services.NewReportTemplatesService(repo)).Register(group, authService)
 	NewDetectionRunsHandler(services.NewDetectionRunsService(repo, tasks)).Register(group, authService)
 	NewNotificationsHandler(repo).Register(group, authService)
+	NewLimitAlarmsHandler(repo).Register(group, authService)
 	cfg := config.Default()
 	cfg.ConfigPath = filepath.Join(t.TempDir(), "config.json")
 	NewSystemConfigHandler(services.NewSystemConfigService(cfg)).Register(group, authService)
@@ -475,6 +870,7 @@ func TestNotificationResponseKeepsPayloadAsObject(t *testing.T) {
 		TargetID:    "2",
 		ProjectID:   2,
 		ProjectCode: "AC-02",
+		VarID:       9212397624135540846,
 		Message:     "NG",
 		Payload:     `{"result_status":"NG"}`,
 		OccurredAt:  at,
@@ -483,6 +879,9 @@ func TestNotificationResponseKeepsPayloadAsObject(t *testing.T) {
 	}})
 	if len(responses) != 1 || string(responses[0].Payload) != `{"result_status":"NG"}` || responses[0].ReadAt == nil {
 		t.Fatalf("unexpected response: %+v", responses)
+	}
+	if responses[0].VarIDText != "9212397624135540846" {
+		t.Fatalf("expected exact notification var_id_text, got %+v", responses[0])
 	}
 	body, err := json.Marshal(responses[0])
 	if err != nil {
@@ -569,6 +968,96 @@ func TestNotificationsHandlerRoutes(t *testing.T) {
 	}
 }
 
+func TestLimitAlarmsHandlerListFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	handler := NewLimitAlarmsHandler(repo)
+	Project := createHandlerProject(t, repo)
+	now := time.Date(2026, 5, 30, 20, 0, 0, 0, time.UTC)
+	startValue := 12.0
+	limitValue := 10.0
+	if err := repo.CreateDetectionLimitAlarm(&models.DetectionLimitAlarm{
+		Scope:         models.AlarmScopeDefault,
+		TaskID:        0,
+		ProjectID:     Project.ID,
+		ProjectCode:   Project.ProjectCode,
+		VarID:         9212397624135540845,
+		VarName:       "temperature",
+		CheckMethod:   models.CheckMethodNumericRange,
+		AlarmType:     "above_h",
+		AlarmLevel:    "H",
+		Status:        models.DetectionAlarmStatusActive,
+		StartValue:    &startValue,
+		PeakValue:     &startValue,
+		LimitValue:    &limitValue,
+		Quality:       1,
+		FirstSeenAt:   now,
+		LastSeenAt:    now,
+		LimitDeadband: 0.5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateDetectionLimitAlarm(&models.DetectionLimitAlarm{
+		Scope:       models.AlarmScopeDetection,
+		TaskID:      7,
+		TestNo:      "T-007",
+		ProjectID:   Project.ID,
+		ProjectCode: Project.ProjectCode,
+		VarID:       1002,
+		VarName:     "pressure",
+		CheckMethod: models.CheckMethodNumericRange,
+		AlarmType:   "below_l",
+		AlarmLevel:  "L",
+		Status:      models.DetectionAlarmStatusClosed,
+		StartValue:  &startValue,
+		PeakValue:   &startValue,
+		LimitValue:  &limitValue,
+		Quality:     1,
+		FirstSeenAt: now.Add(time.Minute),
+		LastSeenAt:  now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := callHandler(t, http.MethodGet, "/limit-alarms?scope=default&project_id="+strconv.FormatUint(uint64(Project.ID), 10)+"&status=active&limit=5", nil, handler.list)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Items []models.DetectionLimitAlarm `json:"items"`
+		Total int64                        `json:"total"`
+		Limit int                          `json:"limit"`
+	}
+	mustDecodeHandler(t, resp, &body)
+	if body.Total != 1 || body.Limit != 5 || len(body.Items) != 1 || body.Items[0].Scope != models.AlarmScopeDefault || body.Items[0].TaskID != 0 {
+		t.Fatalf("unexpected body: %+v", body)
+	}
+	if !strings.Contains(resp.Body.String(), `"var_id_text":"9212397624135540845"`) {
+		t.Fatalf("expected exact limit alarm var_id_text, body=%s", resp.Body.String())
+	}
+	closedResp := callHandler(t, http.MethodGet, "/limit-alarms?scope=detection&status=closed&limit=5", nil, handler.list)
+	if closedResp.Code != http.StatusOK {
+		t.Fatalf("closed status=%d body=%s", closedResp.Code, closedResp.Body.String())
+	}
+	var closedBody struct {
+		Items []models.DetectionLimitAlarm `json:"items"`
+		Total int64                        `json:"total"`
+	}
+	mustDecodeHandler(t, closedResp, &closedBody)
+	if closedBody.Total != 1 || len(closedBody.Items) != 1 || closedBody.Items[0].Status != models.DetectionAlarmStatusClosed {
+		t.Fatalf("expected closed alias to return recovered alarm: %+v", closedBody)
+	}
+	badResp := callHandler(t, http.MethodGet, "/limit-alarms?scope=bad", nil, handler.list)
+	if badResp.Code != http.StatusBadRequest {
+		t.Fatalf("bad status=%d body=%s", badResp.Code, badResp.Body.String())
+	}
+	badStatusResp := callHandler(t, http.MethodGet, "/limit-alarms?status=done", nil, handler.list)
+	if badStatusResp.Code != http.StatusBadRequest {
+		t.Fatalf("bad status query code=%d body=%s", badStatusResp.Code, badStatusResp.Body.String())
+	}
+}
+
 func TestParseTagFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -616,9 +1105,17 @@ func TestReportTemplatesHandler(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", resp.Code, resp.Body.String())
 	}
+	resp = callHandlerWithParams(t, http.MethodPatch, "/report-templates/404", map[string]any{"remark": "missing"}, gin.Params{{Key: "id", Value: "404"}}, handler.patch)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("missing report template patch should be 404, got %d body=%s", resp.Code, resp.Body.String())
+	}
 	resp = callHandlerWithParams(t, http.MethodDelete, "/report-templates/1", nil, gin.Params{{Key: "id", Value: "1"}}, handler.delete)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("delete status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	resp = callHandlerWithParams(t, http.MethodDelete, "/report-templates/404", nil, gin.Params{{Key: "id", Value: "404"}}, handler.delete)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("missing report template delete should be 404, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	resp = callHandler(t, http.MethodGet, "/report-templates?enabled=bad", nil, handler.list)
 	if resp.Code != http.StatusBadRequest {
@@ -679,6 +1176,43 @@ func TestUsersProjectsHistoryAndStandardsHandlers(t *testing.T) {
 	if resp = callHandlerWithParams(t, http.MethodPatch, "/projects/1", map[string]any{"display_name_ja": "設備"}, gin.Params{{Key: "id", Value: itoaHandler(uint64(Project.ID))}}, Projects.patch); resp.Code != http.StatusOK {
 		t.Fatalf("patch Project status=%d", resp.Code)
 	}
+	memberUser := &models.SysUser{Username: "project-member", PasswordHash: "hash", Role: "operator", Enabled: true}
+	if err := repo.CreateUser(memberUser); err != nil {
+		t.Fatal(err)
+	}
+	if resp = callHandlerWithParams(t, http.MethodPut, "/projects/1/members", map[string]any{
+		"members": []map[string]any{{"user_id": memberUser.ID, "member_role": "operator", "notify_enabled": true}},
+	}, gin.Params{{Key: "id", Value: itoaHandler(uint64(Project.ID))}}, Projects.replaceMembers); resp.Code != http.StatusOK {
+		t.Fatalf("replace Project members status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"username":"project-member"`) {
+		t.Fatalf("expected project member response, body=%s", resp.Body.String())
+	}
+	if resp = callHandlerWithParams(t, http.MethodPut, "/projects/1/members", map[string]any{
+		"members": []map[string]any{},
+	}, gin.Params{{Key: "id", Value: itoaHandler(uint64(Project.ID))}}, Projects.replaceMembers); resp.Code != http.StatusOK {
+		t.Fatalf("clear Project members status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"items":[]`) {
+		t.Fatalf("expected empty project members array, body=%s", resp.Body.String())
+	}
+	if resp = callHandlerWithParams(t, http.MethodGet, "/projects/1/members", nil, gin.Params{{Key: "id", Value: itoaHandler(uint64(Project.ID))}}, Projects.listMembers); resp.Code != http.StatusOK {
+		t.Fatalf("list Project members status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"items":[]`) {
+		t.Fatalf("expected empty project members list array, body=%s", resp.Body.String())
+	}
+	if resp = callHandlerWithParams(t, http.MethodPut, "/projects/1/members", map[string]any{
+		"members": []map[string]any{{"user_id": memberUser.ID}, {"user_id": memberUser.ID}},
+	}, gin.Params{{Key: "id", Value: itoaHandler(uint64(Project.ID))}}, Projects.replaceMembers); resp.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate Project member should be 400, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp = callHandlerWithParams(t, http.MethodGet, "/projects/404/members", nil, gin.Params{{Key: "id", Value: "404"}}, Projects.listMembers); resp.Code != http.StatusNotFound {
+		t.Fatalf("missing Project members should be 404, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp = callHandlerWithParams(t, http.MethodPatch, "/projects/404", map[string]any{"display_name": "missing"}, gin.Params{{Key: "id", Value: "404"}}, Projects.patch); resp.Code != http.StatusNotFound {
+		t.Fatalf("missing Project patch should be 404, got %d body=%s", resp.Code, resp.Body.String())
+	}
 	if resp = callHandler(t, http.MethodPost, "/projects", map[string]any{"project_code": "bad"}, Projects.create); resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected missing name bad request, got %d", resp.Code)
 	}
@@ -689,7 +1223,7 @@ func TestUsersProjectsHistoryAndStandardsHandlers(t *testing.T) {
 		ProjectID:   Project.ID,
 		TaskID:      7,
 		TestNo:      "H-1",
-		VarID:       1,
+		VarID:       9212397624135540844,
 		VarName:     "temp",
 		ProjectCode: Project.ProjectCode,
 		Value:       &value,
@@ -701,6 +1235,9 @@ func TestUsersProjectsHistoryAndStandardsHandlers(t *testing.T) {
 	if resp = callHandler(t, http.MethodGet, "/history/data?task_id=7&limit=10", nil, history.data); resp.Code != http.StatusOK {
 		t.Fatalf("history data status=%d body=%s", resp.Code, resp.Body.String())
 	}
+	if !strings.Contains(resp.Body.String(), `"var_id_text":"9212397624135540844"`) {
+		t.Fatalf("expected exact history var_id_text, body=%s", resp.Body.String())
+	}
 	if resp = callHandler(t, http.MethodGet, "/history/data?limit=0", nil, history.data); resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid history limit, got %d", resp.Code)
 	}
@@ -710,7 +1247,7 @@ func TestUsersProjectsHistoryAndStandardsHandlers(t *testing.T) {
 		"display_name":  "标准",
 		"project_id":    Project.ID,
 		"items": []map[string]any{{
-			"var_id":   1,
+			"var_id":   "9212397624135540847",
 			"var_name": "temp",
 		}},
 	}, standards.create)
@@ -719,6 +1256,9 @@ func TestUsersProjectsHistoryAndStandardsHandlers(t *testing.T) {
 	}
 	var standard models.DetectionStandard
 	mustDecodeHandler(t, resp, &standard)
+	if !strings.Contains(resp.Body.String(), `"var_id_text":"9212397624135540847"`) {
+		t.Fatalf("expected detection standard response to include exact var_id_text, body=%s", resp.Body.String())
+	}
 	if resp = callHandler(t, http.MethodGet, "/detection-standards?enabled=true", nil, standards.list); resp.Code != http.StatusOK {
 		t.Fatalf("list standards status=%d", resp.Code)
 	}
@@ -728,11 +1268,20 @@ func TestUsersProjectsHistoryAndStandardsHandlers(t *testing.T) {
 	if resp = callHandlerWithParams(t, http.MethodPatch, "/detection-standards/1", map[string]any{"remark": "updated"}, gin.Params{{Key: "id", Value: itoaHandler(uint64(standard.ID))}}, standards.patch); resp.Code != http.StatusOK {
 		t.Fatalf("patch standard status=%d", resp.Code)
 	}
-	if resp = callHandlerWithParams(t, http.MethodPut, "/detection-standards/1/items", map[string]any{"items": []map[string]any{{"var_id": 1, "var_name": "temp", "store_enabled": false}}}, gin.Params{{Key: "id", Value: itoaHandler(uint64(standard.ID))}}, standards.replaceItems); resp.Code != http.StatusOK {
+	if resp = callHandlerWithParams(t, http.MethodPatch, "/detection-standards/404", map[string]any{"remark": "missing"}, gin.Params{{Key: "id", Value: "404"}}, standards.patch); resp.Code != http.StatusNotFound {
+		t.Fatalf("expected missing standard patch to return 404, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp = callHandlerWithParams(t, http.MethodPut, "/detection-standards/1/items", map[string]any{"items": []map[string]any{{"var_id": "9212397624135540847", "var_name": "temp", "store_enabled": false}}}, gin.Params{{Key: "id", Value: itoaHandler(uint64(standard.ID))}}, standards.replaceItems); resp.Code != http.StatusOK {
 		t.Fatalf("replace items status=%d", resp.Code)
+	}
+	if resp = callHandlerWithParams(t, http.MethodPut, "/detection-standards/404/items", map[string]any{"items": []map[string]any{}}, gin.Params{{Key: "id", Value: "404"}}, standards.replaceItems); resp.Code != http.StatusNotFound {
+		t.Fatalf("expected missing standard items replace to return 404, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	if resp = callHandlerWithParams(t, http.MethodDelete, "/detection-standards/1", nil, gin.Params{{Key: "id", Value: itoaHandler(uint64(standard.ID))}}, standards.delete); resp.Code != http.StatusOK {
 		t.Fatalf("delete standard status=%d", resp.Code)
+	}
+	if resp = callHandlerWithParams(t, http.MethodDelete, "/detection-standards/404", nil, gin.Params{{Key: "id", Value: "404"}}, standards.delete); resp.Code != http.StatusNotFound {
+		t.Fatalf("missing standard delete should be 404, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	if resp = callHandler(t, http.MethodGet, "/detection-standards?enabled=bad", nil, standards.list); resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid enabled, got %d", resp.Code)
@@ -774,6 +1323,9 @@ func TestGatewaysHandler(t *testing.T) {
 	if resp := callHandlerWithParams(t, http.MethodPatch, "/gateway-configs/9", map[string]any{"name": "gw2", "qos": 2}, gin.Params{{Key: "gateway_id", Value: "9"}}, handler.patchConfig); resp.Code != http.StatusOK {
 		t.Fatalf("patch gateway status=%d body=%s", resp.Code, resp.Body.String())
 	}
+	if resp := callHandlerWithParams(t, http.MethodPatch, "/gateway-configs/404", map[string]any{"name": "missing"}, gin.Params{{Key: "gateway_id", Value: "404"}}, handler.patchConfig); resp.Code != http.StatusNotFound {
+		t.Fatalf("missing gateway patch should be 404, got %d body=%s", resp.Code, resp.Body.String())
+	}
 	if resp := callHandlerWithParams(t, http.MethodPost, "/gateway-configs/9/discover", map[string]any{}, gin.Params{{Key: "gateway_id", Value: "9"}}, handler.discover); resp.Code != http.StatusBadRequest {
 		t.Fatalf("discover without config status=%d", resp.Code)
 	}
@@ -800,6 +1352,9 @@ func TestGatewaysHandler(t *testing.T) {
 	}
 	if resp := callHandlerWithParams(t, http.MethodDelete, "/gateway-configs/9", nil, gin.Params{{Key: "gateway_id", Value: "9"}}, handler.deleteConfig); resp.Code != http.StatusOK {
 		t.Fatalf("delete gateway status=%d", resp.Code)
+	}
+	if resp := callHandlerWithParams(t, http.MethodDelete, "/gateway-configs/404", nil, gin.Params{{Key: "gateway_id", Value: "404"}}, handler.deleteConfig); resp.Code != http.StatusNotFound {
+		t.Fatalf("missing gateway delete should be 404, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	if resp := callHandlerWithParams(t, http.MethodGet, "/gateway-configs/bad", nil, gin.Params{{Key: "gateway_id", Value: "bad"}}, handler.getConfig); resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected bad gateway id, got %d", resp.Code)
@@ -967,7 +1522,7 @@ func TestDetectionRunsHandlerLifecycle(t *testing.T) {
 		t.Fatalf("resume status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	value := 19.5
-	if err := db.Create(&models.HistoryData{GatewayID: 1, ProjectID: Project.ID, TaskID: task.ID, TestNo: task.TestNo, VarID: 11, VarName: "temp", ProjectCode: Project.ProjectCode, Value: &value, Quality: 1, SourceTime: time.Now()}).Error; err != nil {
+	if err := db.Create(&models.HistoryData{GatewayID: 1, ProjectID: Project.ID, TaskID: task.ID, TestNo: task.TestNo, VarID: 9212397624135540843, VarName: "temp", ProjectCode: Project.ProjectCode, Value: &value, Quality: 1, SourceTime: time.Now()}).Error; err != nil {
 		t.Fatal(err)
 	}
 	resp = callHandlerWithParams(t, http.MethodPost, "/detection-runs/1/stop", map[string]any{"reason": "done"}, gin.Params{{Key: "id", Value: "1"}}, handler.stop)
@@ -977,6 +1532,9 @@ func TestDetectionRunsHandlerLifecycle(t *testing.T) {
 	resp = callHandlerWithParams(t, http.MethodGet, "/detection-runs/1/features", nil, gin.Params{{Key: "id", Value: "1"}}, handler.features)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("features status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"var_id_text":"9212397624135540843"`) {
+		t.Fatalf("expected exact feature var_id_text, body=%s", resp.Body.String())
 	}
 	resp = callHandler(t, http.MethodPost, "/detection-runs", map[string]any{"project_id": Project.ID, "test_no": "T-H-2", "mode": "standard"}, handler.start)
 	if resp.Code != http.StatusOK {

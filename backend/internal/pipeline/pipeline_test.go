@@ -183,6 +183,133 @@ func TestProcessMessageUpdatesTagsAndStoresOnlyWhenAllowed(t *testing.T) {
 	processMessage(1, &models.MQTTMessage{Topic: "bad", Payload: []byte(`bad`)}, channels, tags, tasks)
 }
 
+func TestProcessMessageKIOPayloadUpdatesOnlyIndexedKnownTags(t *testing.T) {
+	projectID := uint(10)
+	tags := NewTagManager()
+	tags.Load([]models.TagConfig{
+		{
+			VarID:         3901,
+			GatewayID:     1,
+			SourceTopic:   "datachange_S_KIO_Project",
+			SourcePath:    `Objs.#(N=="台1_39").1`,
+			SourceType:    models.TagSourceMQTT,
+			RawName:       "台1_39",
+			VarName:       "kio_01_39",
+			JSONPath:      `Objs.#(N=="台1_39").1`,
+			DataType:      "FLOAT",
+			ProjectID:     &projectID,
+			ProjectCode:   "AC-01",
+			ScaleFactor:   2,
+			OffsetVal:     1,
+			Enabled:       true,
+			DisplayName:   "台1 测点 39",
+			DisplayNameEN: "AC-01 point 39",
+			DisplayNameJA: "AC-01 ポイント 39",
+		},
+		{
+			VarID:       4001,
+			GatewayID:   1,
+			SourceTopic: "datachange_S_KIO_Project",
+			SourcePath:  `Objs.#(N=="台1_40").1`,
+			SourceType:  models.TagSourceMQTT,
+			RawName:     "台1_40",
+			VarName:     "kio_01_40",
+			JSONPath:    `Objs.#(N=="台1_40").1`,
+			DataType:    "BOOL",
+			ProjectID:   &projectID,
+			ProjectCode: "AC-01",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+		{
+			VarID:       4201,
+			GatewayID:   1,
+			SourceTopic: "datachange_S_KIO_Project",
+			SourcePath:  `Objs.#(N=="台1_42").1`,
+			SourceType:  models.TagSourceMQTT,
+			RawName:     "台1_42",
+			VarName:     "kio_01_42",
+			JSONPath:    `Objs.#(N=="台1_42").1`,
+			DataType:    "STRING",
+			ProjectID:   &projectID,
+			ProjectCode: "AC-01",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+		{
+			VarID:       5001,
+			GatewayID:   1,
+			SourceTopic: "datachange_S_KIO_Project",
+			SourcePath:  `Objs.#(N=="$ProjectControlOfS7-1200").1`,
+			SourceType:  models.TagSourceMQTT,
+			RawName:     "$ProjectControlOfS7-1200",
+			VarName:     "$ProjectControlOfS7_1200",
+			JSONPath:    `Objs.#(N=="$ProjectControlOfS7-1200").1`,
+			DataType:    "INT",
+			ProjectID:   &projectID,
+			ProjectCode: "AC-01",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+		{
+			VarID:       9901,
+			GatewayID:   1,
+			SourceTopic: "other_topic",
+			SourcePath:  `Objs.#(N=="台1_39").1`,
+			SourceType:  models.TagSourceMQTT,
+			RawName:     "台1_39",
+			VarName:     "other_topic_should_not_update",
+			JSONPath:    `Objs.#(N=="台1_39").1`,
+			DataType:    "FLOAT",
+			ProjectID:   &projectID,
+			ProjectCode: "AC-01",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+	})
+
+	at := time.Date(2026, 5, 31, 8, 30, 0, 0, time.UTC)
+	payload := []byte(`{
+		"Writer":"IOServer",
+		"PVs":{"1":7,"2":"2026-05-31 08:30:00.000 +0800","3":192},
+		"Objs":[
+			{"N":"台1_39","1":13.5,"3":192},
+			{"N":"台1_40","1":true,"3":192},
+			{"N":"台1_42","1":"ready","3":0},
+			{"N":"$ProjectControlOfS7-1200"},
+			{"N":"未知变量","1":999}
+		]
+	}`)
+
+	processMessage(1, &models.MQTTMessage{
+		GatewayID: 1,
+		Topic:     "datachange_S_KIO_Project",
+		Payload:   payload,
+		Timestamp: at,
+	}, NewChannels(), tags, NewTaskManager())
+
+	floatTag, _ := tags.Get(3901)
+	if snap := floatTag.Snapshot(); snap.Value != 28 || snap.Quality != 1 || !snap.LastUpdate.Equal(at) {
+		t.Fatalf("expected scaled KIO float update through raw JSONPath: %+v", snap)
+	}
+	boolTag, _ := tags.Get(4001)
+	if snap := boolTag.Snapshot(); snap.Value != 1 || snap.Quality != 1 {
+		t.Fatalf("expected KIO bool update: %+v", snap)
+	}
+	stringTag, _ := tags.Get(4201)
+	if snap := stringTag.Snapshot(); !snap.IsString || snap.StrValue != "ready" || snap.Quality != 0 {
+		t.Fatalf("expected KIO string update with bad quality: %+v", snap)
+	}
+	controlTag, _ := tags.Get(5001)
+	if snap := controlTag.Snapshot(); snap.Value != 7 || snap.Quality != 1 {
+		t.Fatalf("expected PVs fallback update despite remapped var_name: %+v", snap)
+	}
+	otherTopicTag, _ := tags.Get(9901)
+	if snap := otherTopicTag.Snapshot(); !snap.LastUpdate.IsZero() || snap.Value != 0 {
+		t.Fatalf("topic index should not update tags from another topic: %+v", snap)
+	}
+}
+
 func TestProcessMessageDoesNotStoreDebouncePending(t *testing.T) {
 	ProjectID := uint(10)
 	threshold := 5.0
@@ -285,8 +412,83 @@ func TestProcessMessageEnqueuesDetectionLimitAlarmEnterAndRecover(t *testing.T) 
 	}
 	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: []byte(`{"temp":18.5}`), Timestamp: at.Add(2 * time.Second)}, channels, tags, tasks)
 	recover := <-channels.Alarm
-	if recover.Action != models.DetectionAlarmActionRecover || recover.Alarm.Status != models.DetectionAlarmStatusClosed || recover.Alarm.RecoverValue == nil || *recover.Alarm.RecoverValue != 18.5 {
+	if recover.Action != models.DetectionAlarmActionRecover ||
+		recover.Alarm.Status != models.DetectionAlarmStatusClosed ||
+		recover.Alarm.ProjectID != ProjectID ||
+		recover.Alarm.ProjectCode != "AC-01" ||
+		recover.Alarm.TestNo != "T-7" ||
+		recover.Alarm.VarName != "temp" ||
+		recover.Alarm.AlarmLevel != "HH" ||
+		recover.Alarm.LimitValue == nil ||
+		*recover.Alarm.LimitValue != 20 ||
+		recover.Alarm.RecoverValue == nil ||
+		*recover.Alarm.RecoverValue != 18.5 {
 		t.Fatalf("unexpected recover alarm event: %+v", recover)
+	}
+}
+
+func TestProcessMessageEnqueuesDefaultLimitAlarmWithoutDetection(t *testing.T) {
+	ProjectID := uint(10)
+	limitH := 10.0
+	limitHH := 20.0
+	deadband := 1.0
+	tags := NewTagManager()
+	tags.Load([]models.TagConfig{
+		{
+			VarID:                  1,
+			GatewayID:              1,
+			SourceTopic:            "topic",
+			VarName:                "temp",
+			DisplayName:            "Temperature",
+			JSONPath:               "temp",
+			DataType:               "FLOAT",
+			ProjectID:              &ProjectID,
+			ProjectCode:            "AC-01",
+			ScaleFactor:            1,
+			Enabled:                true,
+			DefaultAlarmEnabled:    true,
+			DefaultLimitH:          &limitH,
+			DefaultLimitHH:         &limitHH,
+			DefaultLimitDeadband:   deadband,
+			DefaultRecoverHoldMS:   100,
+			DefaultViolationHoldMS: 0,
+		},
+	})
+	tasks := NewTaskManager()
+	channels := NewChannels()
+	at := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: []byte(`{"temp":12}`), Timestamp: at}, channels, tags, tasks)
+	enter := <-channels.Alarm
+	if enter.Action != models.DetectionAlarmActionEnter || enter.Alarm.Scope != models.AlarmScopeDefault || enter.Alarm.TaskID != 0 || enter.Alarm.AlarmType != "above_h" || enter.Alarm.DisplayName != "Temperature" {
+		t.Fatalf("unexpected default enter alarm event: %+v", enter)
+	}
+
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: []byte(`{"temp":22}`), Timestamp: at.Add(50 * time.Millisecond)}, channels, tags, tasks)
+	levelChange := <-channels.Alarm
+	if levelChange.Action != models.DetectionAlarmActionLevelChange || levelChange.Alarm.Scope != models.AlarmScopeDefault || levelChange.PreviousAlarmType != "above_h" || levelChange.Alarm.AlarmType != "above_hh" {
+		t.Fatalf("unexpected default level change event: %+v", levelChange)
+	}
+
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: []byte(`{"temp":18.5}`), Timestamp: at.Add(100 * time.Millisecond)}, channels, tags, tasks)
+	if len(channels.Alarm) != 0 {
+		t.Fatalf("expected recover hold to delay default alarm recovery")
+	}
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: []byte(`{"temp":18.5}`), Timestamp: at.Add(250 * time.Millisecond)}, channels, tags, tasks)
+	recover := <-channels.Alarm
+	if recover.Action != models.DetectionAlarmActionRecover ||
+		recover.Alarm.Scope != models.AlarmScopeDefault ||
+		recover.Alarm.Status != models.DetectionAlarmStatusClosed ||
+		recover.Alarm.ProjectID != ProjectID ||
+		recover.Alarm.ProjectCode != "AC-01" ||
+		recover.Alarm.VarName != "temp" ||
+		recover.Alarm.DisplayName != "Temperature" ||
+		recover.Alarm.AlarmLevel != "HH" ||
+		recover.Alarm.LimitValue == nil ||
+		*recover.Alarm.LimitValue != 20 ||
+		recover.Alarm.RecoverValue == nil ||
+		*recover.Alarm.RecoverValue != 18.5 {
+		t.Fatalf("unexpected default recover alarm event: %+v", recover)
 	}
 }
 

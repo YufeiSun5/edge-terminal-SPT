@@ -23,3 +23,30 @@ type Project struct {
 func (Project) TableName() string {
 	return "sys_projects"
 }
+
+type SysProjectMember struct {
+	ID            uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	ProjectID     uint      `gorm:"column:project_id;uniqueIndex:uk_project_member;index;not null" json:"project_id"`
+	UserID        uint      `gorm:"column:user_id;uniqueIndex:uk_project_member;index;not null" json:"user_id"`
+	MemberRole    string    `gorm:"column:member_role;size:32;default:'member'" json:"member_role"`
+	NotifyEnabled bool      `gorm:"column:notify_enabled;index;not null" json:"notify_enabled"`
+	CreatedAt     time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt     time.Time `gorm:"column:updated_at" json:"updated_at"`
+}
+
+func (SysProjectMember) TableName() string {
+	return "sys_project_members"
+}
+
+type ProjectMemberView struct {
+	ID            uint64    `json:"id"`
+	ProjectID     uint      `json:"project_id"`
+	UserID        uint      `json:"user_id"`
+	Username      string    `json:"username"`
+	UserRole      string    `json:"user_role"`
+	UserEnabled   bool      `json:"user_enabled"`
+	MemberRole    string    `json:"member_role"`
+	NotifyEnabled bool      `json:"notify_enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}

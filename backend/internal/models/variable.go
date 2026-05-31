@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
 
 type TagConfig struct {
 	VarID                  int64     `gorm:"column:var_id;primaryKey" json:"var_id"`
@@ -52,4 +56,15 @@ type TagConfig struct {
 
 func (TagConfig) TableName() string {
 	return "sys_tags"
+}
+
+func (t TagConfig) MarshalJSON() ([]byte, error) {
+	type alias TagConfig
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(t),
+		VarIDText: strconv.FormatInt(t.VarID, 10),
+	})
 }

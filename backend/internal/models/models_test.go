@@ -9,6 +9,7 @@ func TestTableNames(t *testing.T) {
 	names := map[string]string{
 		GatewayConfig{}.TableName():             "sys_gateways",
 		Project{}.TableName():                   "sys_projects",
+		SysProjectMember{}.TableName():          "sys_project_members",
 		TagConfig{}.TableName():                 "sys_tags",
 		StorageRoute{}.TableName():              "sys_storage_routes",
 		HistoryData{}.TableName():               "rt_history_data",

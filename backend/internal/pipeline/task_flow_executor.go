@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -25,6 +28,7 @@ type TaskFlowExecutor struct {
 	tags             *TagManager
 	tasks            *TaskManager
 	channels         *Channels
+	variableWriter   TaskFlowVariableWriter
 	index            *TaskFlowIndex
 	input            chan taskFlowJob
 	guardsMu         sync.Mutex
@@ -61,6 +65,23 @@ type taskFlowRunContext struct {
 	Steps  []map[string]any
 }
 
+type TaskFlowVariableWriter func(context.Context, TaskFlowVariableWriteInput) (map[string]any, error)
+
+type TaskFlowVariableWriteInput struct {
+	VarID          int64
+	Value          any
+	Quality        int
+	Trigger        bool
+	WaitAck        bool
+	AckTimeoutSec  int
+	OriginFlowID   uint64
+	OriginRunID    uint64
+	Depth          int
+	MaxDepth       int
+	AllowReentrant bool
+	RequestID      string
+}
+
 const taskFlowStringParamMaxBytes = 256 * 1024
 
 func NewTaskFlowExecutor(repo *database.Repository, tags *TagManager, tasks *TaskManager, channels *Channels) *TaskFlowExecutor {
@@ -73,6 +94,10 @@ func NewTaskFlowExecutor(repo *database.Repository, tags *TagManager, tasks *Tas
 		input:    make(chan taskFlowJob, 1000),
 		guards:   make(map[string]struct{}),
 	}
+}
+
+func (e *TaskFlowExecutor) SetVariableWriter(writer TaskFlowVariableWriter) {
+	e.variableWriter = writer
 }
 
 func (e *TaskFlowExecutor) Load(flows []models.TaskFlow) {
@@ -271,13 +296,28 @@ func (e *TaskFlowExecutor) runFlow(flow models.TaskFlow, event TaskFlowEvent, ru
 }
 
 func statusForErr(err error) string {
-	if err != nil {
-		if strings.Contains(err.Error(), "timeout") {
-			return models.TaskFlowStatusTimeout
-		}
-		return models.TaskFlowStatusFailed
+	if err == nil {
+		return models.TaskFlowStatusSuccess
 	}
-	return models.TaskFlowStatusSuccess
+	if errors.Is(err, context.DeadlineExceeded) {
+		return models.TaskFlowStatusTimeout
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return models.TaskFlowStatusTimeout
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case message == "timeout":
+		return models.TaskFlowStatusTimeout
+	case strings.HasPrefix(message, "timeout at "):
+		return models.TaskFlowStatusTimeout
+	case strings.Contains(message, "context deadline exceeded"):
+		return models.TaskFlowStatusTimeout
+	case strings.Contains(message, "execution terminated: timeout"):
+		return models.TaskFlowStatusTimeout
+	}
+	return models.TaskFlowStatusFailed
 }
 
 func (e *TaskFlowExecutor) evaluateCondition(ctx *taskFlowRunContext, logs *[]string) (bool, error) {
@@ -331,7 +371,7 @@ func (e *TaskFlowExecutor) bindJavaScriptAPI(ctx context.Context, vm *goja.Runti
 	event := runCtx.Event
 	defaultProjectID := firstNonZeroUint(event.ProjectID, flow.ProjectID)
 	_ = vm.Set("project", map[string]any{"id": flow.ProjectID})
-	_ = vm.Set("trigger", map[string]any{"type": event.TriggerType, "var_id": event.TriggerVarID, "value": event.TriggerValue, "topic": event.Topic})
+	_ = vm.Set("trigger", map[string]any{"type": event.TriggerType, "var_id": event.TriggerVarID, "var_id_text": fmt.Sprintf("%d", event.TriggerVarID), "value": event.TriggerValue, "topic": event.Topic})
 	_ = vm.Set("task_params", params)
 	_ = vm.Set("params", params)
 	_ = vm.Set("context", runCtx.Values)
@@ -347,8 +387,8 @@ func (e *TaskFlowExecutor) bindJavaScriptAPI(ctx context.Context, vm *goja.Runti
 		},
 	})
 	_ = vm.Set("realtime", map[string]any{
-		"get": func(varID int64) map[string]any {
-			tag, ok := e.tags.Get(varID)
+		"get": func(varID any) map[string]any {
+			tag, ok := e.tags.Get(toInt64(varID))
 			if !ok {
 				return nil
 			}
@@ -357,7 +397,7 @@ func (e *TaskFlowExecutor) bindJavaScriptAPI(ctx context.Context, vm *goja.Runti
 		"getMany": func(varIDs []any) []map[string]any {
 			out := make([]map[string]any, 0, len(varIDs))
 			for _, raw := range varIDs {
-				tag, ok := e.tags.Get(int64(toFloat64(raw)))
+				tag, ok := e.tags.Get(toInt64(raw))
 				if !ok {
 					continue
 				}
@@ -389,7 +429,7 @@ func (e *TaskFlowExecutor) bindJavaScriptAPI(ctx context.Context, vm *goja.Runti
 			}
 			return out
 		},
-		"write": func(varID int64, value any, options ...map[string]any) map[string]any {
+		"write": func(varID any, value any, options ...map[string]any) map[string]any {
 			writeParams := map[string]any{"var_id": varID, "value": value, "trigger": false}
 			if len(options) > 0 {
 				for key, item := range options[0] {
@@ -531,7 +571,7 @@ func (e *TaskFlowExecutor) updateOneDetectionLimit(params map[string]any) (map[s
 	if err != nil {
 		return nil, err
 	}
-	varID := int64(toFloat64(params["var_id"]))
+	varID := toInt64(params["var_id"])
 	if varID == 0 {
 		return nil, fmt.Errorf("var_id is required")
 	}
@@ -695,7 +735,7 @@ func updateDetectionLimitItemsFromAny(value any) ([]map[string]any, error) {
 }
 
 func (e *TaskFlowExecutor) writeVariableFromTaskFlow(ctx *taskFlowRunContext, params map[string]any) (map[string]any, error) {
-	varID := int64(toFloat64(params["var_id"]))
+	varID := toInt64(params["var_id"])
 	if varID == 0 {
 		err := fmt.Errorf("var_id is required")
 		e.recordTaskFlowWriteAudit(ctx, varID, "", "failed", err.Error())
@@ -789,6 +829,7 @@ func (e *TaskFlowExecutor) writeVariableFromTaskFlow(ctx *taskFlowRunContext, pa
 	e.recordTaskFlowWriteAudit(ctx, varID, fmt.Sprint(value), "success", "")
 	return map[string]any{
 		"var_id":          varID,
+		"var_id_text":     fmt.Sprintf("%d", varID),
 		"value":           value,
 		"quality":         quality,
 		"triggered":       triggered,
@@ -802,6 +843,131 @@ func (e *TaskFlowExecutor) writeVariableFromTaskFlow(ctx *taskFlowRunContext, pa
 		"request_id":      requestID,
 		"updated_at":      now,
 	}, nil
+}
+
+func (e *TaskFlowExecutor) writeControlVariables(ctx *taskFlowRunContext, params map[string]any) (map[string]any, error) {
+	if e.variableWriter == nil {
+		return nil, fmt.Errorf("variable writer is not available")
+	}
+	items, err := controlWriteItemsFromParams(params)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]map[string]any, 0, len(items))
+	written := 0
+	for index, item := range items {
+		varID := toInt64(item["var_id"])
+		if varID == 0 {
+			err := fmt.Errorf("items[%d].var_id is required", index)
+			e.recordTaskFlowWriteAudit(ctx, varID, "", "failed", err.Error())
+			return nil, err
+		}
+		value, err := e.controlWriteValue(item, ctx)
+		if err != nil {
+			e.recordTaskFlowWriteAudit(ctx, varID, "", "failed", err.Error())
+			return nil, fmt.Errorf("items[%d]: %w", index, err)
+		}
+		quality := int(toFloat64(item["quality"]))
+		if quality == 0 {
+			quality = 1
+		}
+		originFlowID := ctx.Event.OriginFlowID
+		if originFlowID == 0 {
+			originFlowID = ctx.Flow.ID
+		}
+		originRunID := ctx.Event.OriginRunID
+		if originRunID == 0 {
+			originRunID = ctx.RunID
+		}
+		requestID := strings.TrimSpace(stringFromAny(item["request_id"]))
+		if requestID == "" {
+			requestID = ctx.Event.RequestID
+		}
+		if requestID == "" {
+			requestID = fmt.Sprintf("task-flow-%d-%d", ctx.RunID, index+1)
+		}
+		maxDepth := int(toFloat64(item["max_depth"]))
+		if maxDepth <= 0 {
+			maxDepth = 1
+		}
+		input := TaskFlowVariableWriteInput{
+			VarID:          varID,
+			Value:          value,
+			Quality:        quality,
+			Trigger:        boolFromAnyDefault(item["trigger"], false),
+			WaitAck:        boolFromAnyDefault(item["wait_ack"], true),
+			AckTimeoutSec:  int(toFloat64(item["ack_timeout_sec"])),
+			OriginFlowID:   originFlowID,
+			OriginRunID:    originRunID,
+			Depth:          ctx.Event.Depth,
+			MaxDepth:       maxDepth,
+			AllowReentrant: boolFromAnyDefault(item["allow_reentrant"], false),
+			RequestID:      requestID,
+		}
+		if input.AckTimeoutSec <= 0 {
+			input.AckTimeoutSec = 5
+		}
+		result, err := e.variableWriter(context.Background(), input)
+		if err != nil {
+			e.recordTaskFlowWriteAudit(ctx, varID, fmt.Sprint(value), "failed", err.Error())
+			return nil, fmt.Errorf("items[%d] write variable %d: %w", index, varID, err)
+		}
+		e.recordTaskFlowWriteAudit(ctx, varID, fmt.Sprint(value), "success", "")
+		results = append(results, result)
+		written++
+		if settle := time.Duration(toFloat64(item["settle_ms"])) * time.Millisecond; settle > 0 {
+			time.Sleep(settle)
+		}
+	}
+	return map[string]any{
+		"written": written,
+		"items":   results,
+	}, nil
+}
+
+func controlWriteItemsFromParams(params map[string]any) ([]map[string]any, error) {
+	if rawItems, ok := params["items"]; ok {
+		if rawItems == nil {
+			return nil, nil
+		}
+		items, ok := rawItems.([]any)
+		if !ok {
+			return nil, fmt.Errorf("items must be an array")
+		}
+		if len(items) == 0 {
+			return nil, nil
+		}
+		out := make([]map[string]any, 0, len(items))
+		for _, raw := range items {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("items must contain objects")
+			}
+			out = append(out, item)
+		}
+		return out, nil
+	}
+	if _, ok := params["var_id"]; !ok {
+		return nil, fmt.Errorf("items or var_id is required")
+	}
+	return []map[string]any{params}, nil
+}
+
+func (e *TaskFlowExecutor) controlWriteValue(item map[string]any, ctx *taskFlowRunContext) (any, error) {
+	if value, ok := item["value"]; ok {
+		return value, nil
+	}
+	valueFrom := strings.TrimSpace(stringFromAny(item["value_from"]))
+	if valueFrom == "" {
+		return nil, fmt.Errorf("value or value_from is required")
+	}
+	if value, ok := taskFlowValueByPath(ctx.Params, valueFrom); ok {
+		return value, nil
+	}
+	if value, ok := taskFlowValueByPath(ctx.Values, valueFrom); ok {
+		return value, nil
+	}
+	return nil, fmt.Errorf("value_from %q not found", valueFrom)
 }
 
 func canTaskFlowWriteTag(cfg models.TagConfig) bool {
@@ -877,6 +1043,8 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 		Mode:              mode,
 		StandardID:        optionalUintFromAny(params["standard_id"]),
 		CustomItems:       customItems,
+		ProcessParams:     params["process_params"],
+		PLCWrites:         params["plc_writes"],
 		LimitCheckEnabled: &limitCheckEnabled,
 		EndPolicy:         endPolicy,
 		DurationSec:       int(toFloat64(params["duration_sec"])),
@@ -975,7 +1143,7 @@ func detectionStandardItemsFromTaskParams(value any) ([]models.DetectionStandard
 		if !ok {
 			return nil, fmt.Errorf("custom_items must contain objects")
 		}
-		varID := int64(toFloat64(itemMap["var_id"]))
+		varID := toInt64(itemMap["var_id"])
 		if varID == 0 {
 			return nil, fmt.Errorf("custom_items.var_id is required")
 		}
@@ -1034,7 +1202,7 @@ func (e *TaskFlowExecutor) stopDetectionRun(taskID uint, reason string, endType 
 	e.tasks.Clear(task.ProjectID)
 	e.recordDetectionRunEvent(*task, models.DetectionEventRunStopped, "info", "detection run stopped by task flow")
 	summary, ok := e.refreshDetectionSummary(task.ID)
-	e.refreshDetectionFeatures(task.ID)
+	_, _ = e.refreshDetectionFeatures(task.ID)
 	if ok {
 		e.publishDetectionResult(*task, summary)
 	}
@@ -1313,15 +1481,17 @@ func (e *TaskFlowExecutor) refreshDetectionSummary(taskID uint) (models.Detectio
 	return summary, true
 }
 
-func (e *TaskFlowExecutor) refreshDetectionFeatures(taskID uint) {
-	if _, err := e.repo.RefreshDetectionRunFeatures(taskID); err != nil {
+func (e *TaskFlowExecutor) refreshDetectionFeatures(taskID uint) ([]models.DetectionRunFeature, error) {
+	features, err := e.repo.RefreshDetectionRunFeatures(taskID)
+	if err != nil {
 		log.Printf("task-flow refresh detection features failed task_id=%d err=%v", taskID, err)
-		return
+		return nil, err
 	}
 	task, err := e.repo.GetDetectionTask(taskID)
 	if err == nil {
 		e.recordDetectionRunEvent(task, models.DetectionEventFeaturesUpdated, "info", "detection run features refreshed")
 	}
+	return features, nil
 }
 
 func (e *TaskFlowExecutor) publishDetectionEventNotification(task models.DetectionTask, eventType string, level string, message string) {
@@ -1430,18 +1600,19 @@ func (e *TaskFlowExecutor) clearGuard(key string) {
 
 func (e *TaskFlowExecutor) inputSnapshot(flow models.TaskFlow, event TaskFlowEvent) string {
 	items := map[string]any{
-		"flow_id":        flow.ID,
-		"flow_code":      flow.FlowCode,
-		"project_id":     flow.ProjectID,
-		"trigger_type":   event.TriggerType,
-		"trigger_var_id": event.TriggerVarID,
-		"trigger_value":  event.TriggerValue,
-		"trigger_params": taskFlowParamsFromTrigger(event.TriggerValue),
-		"origin_flow_id": event.OriginFlowID,
-		"origin_run_id":  event.OriginRunID,
-		"depth":          event.Depth,
-		"request_id":     event.RequestID,
-		"at":             event.At,
+		"flow_id":             flow.ID,
+		"flow_code":           flow.FlowCode,
+		"project_id":          flow.ProjectID,
+		"trigger_type":        event.TriggerType,
+		"trigger_var_id":      event.TriggerVarID,
+		"trigger_var_id_text": fmt.Sprintf("%d", event.TriggerVarID),
+		"trigger_value":       event.TriggerValue,
+		"trigger_params":      taskFlowParamsFromTrigger(event.TriggerValue),
+		"origin_flow_id":      event.OriginFlowID,
+		"origin_run_id":       event.OriginRunID,
+		"depth":               event.Depth,
+		"request_id":          event.RequestID,
+		"at":                  event.At,
 	}
 	if tag, ok := e.tags.Get(event.TriggerVarID); ok {
 		items["trigger_var"] = snapshotMap(tag.Snapshot())
@@ -1453,17 +1624,18 @@ func (e *TaskFlowExecutor) inputSnapshot(flow models.TaskFlow, event TaskFlowEve
 func newTaskFlowRunContext(flow models.TaskFlow, event TaskFlowEvent, runID uint64) *taskFlowRunContext {
 	params := taskFlowParamsFromTrigger(event.TriggerValue)
 	values := map[string]any{
-		"flow_id":        flow.ID,
-		"flow_code":      flow.FlowCode,
-		"project_id":     firstNonZeroUint(event.ProjectID, flow.ProjectID),
-		"trigger_type":   event.TriggerType,
-		"trigger_var_id": event.TriggerVarID,
-		"trigger_value":  event.TriggerValue,
-		"origin_flow_id": event.OriginFlowID,
-		"origin_run_id":  event.OriginRunID,
-		"depth":          event.Depth,
-		"request_id":     event.RequestID,
-		"run_id":         runID,
+		"flow_id":             flow.ID,
+		"flow_code":           flow.FlowCode,
+		"project_id":          firstNonZeroUint(event.ProjectID, flow.ProjectID),
+		"trigger_type":        event.TriggerType,
+		"trigger_var_id":      event.TriggerVarID,
+		"trigger_var_id_text": fmt.Sprintf("%d", event.TriggerVarID),
+		"trigger_value":       event.TriggerValue,
+		"origin_flow_id":      event.OriginFlowID,
+		"origin_run_id":       event.OriginRunID,
+		"depth":               event.Depth,
+		"request_id":          event.RequestID,
+		"run_id":              runID,
 	}
 	for key, value := range params {
 		values["param."+key] = value
@@ -1511,11 +1683,20 @@ func taskFlowSteps(flow models.TaskFlow) ([]taskFlowStep, error) {
 			}
 			steps = []taskFlowStep{single}
 		}
+		if len(steps) == 0 {
+			return nil, fmt.Errorf("steps_json cannot be empty")
+		}
+		seenCodes := map[string]struct{}{}
 		for i := range steps {
 			steps[i].Module = strings.ToLower(strings.TrimSpace(steps[i].Module))
+			steps[i].Code = strings.TrimSpace(steps[i].Code)
 			if steps[i].Code == "" {
 				steps[i].Code = fmt.Sprintf("step_%d", i+1)
 			}
+			if _, exists := seenCodes[steps[i].Code]; exists {
+				return nil, fmt.Errorf("duplicate task flow step code: %s", steps[i].Code)
+			}
+			seenCodes[steps[i].Code] = struct{}{}
 		}
 		return steps, nil
 	}
@@ -1606,7 +1787,7 @@ func (e *TaskFlowExecutor) runStep(ctx *taskFlowRunContext, step taskFlowStep, l
 		if err != nil {
 			return nil, err
 		}
-		features, err := e.repo.RefreshDetectionRunFeatures(taskID)
+		features, err := e.refreshDetectionFeatures(taskID)
 		if err != nil {
 			return nil, err
 		}
@@ -1651,6 +1832,12 @@ func (e *TaskFlowExecutor) runStep(ctx *taskFlowRunContext, step taskFlowStep, l
 		return result, nil
 	case models.TaskFlowActionBuiltinWriteVariable:
 		result, err := e.writeVariableFromTaskFlow(ctx, params)
+		for key, value := range result {
+			ctx.Values[step.Code+"."+key] = value
+		}
+		return result, err
+	case models.TaskFlowActionBuiltinWriteControlVariables:
+		result, err := e.writeControlVariables(ctx, params)
 		for key, value := range result {
 			ctx.Values[step.Code+"."+key] = value
 		}
@@ -1733,7 +1920,7 @@ func resolveTaskFlowValue(value any, ctx *taskFlowRunContext) (any, error) {
 		case "literal":
 			return typed["value"], nil
 		case "trigger_param":
-			value, ok := ctx.Params[key]
+			value, ok := taskFlowValueByPath(ctx.Params, key)
 			if !ok {
 				if hasDefault {
 					return defaultValue, nil
@@ -1747,7 +1934,7 @@ func resolveTaskFlowValue(value any, ctx *taskFlowRunContext) (any, error) {
 		case "event":
 			return taskFlowEventValue(ctx.Event, key)
 		case "context":
-			value, ok := ctx.Values[key]
+			value, ok := taskFlowValueByPath(ctx.Values, key)
 			if !ok {
 				if hasDefault {
 					return defaultValue, nil
@@ -1766,6 +1953,36 @@ func resolveTaskFlowValue(value any, ctx *taskFlowRunContext) (any, error) {
 	}
 }
 
+func taskFlowValueByPath(values map[string]any, path string) (any, bool) {
+	if values == nil {
+		return nil, false
+	}
+	if value, ok := values[path]; ok {
+		return value, true
+	}
+	parts := strings.Split(path, ".")
+	if len(parts) <= 1 {
+		return nil, false
+	}
+	var current any = values
+	for _, part := range parts {
+		if part == "" {
+			return nil, false
+		}
+		switch typed := current.(type) {
+		case map[string]any:
+			next, ok := typed[part]
+			if !ok {
+				return nil, false
+			}
+			current = next
+		default:
+			return nil, false
+		}
+	}
+	return current, true
+}
+
 func taskFlowEventValue(event TaskFlowEvent, key string) (any, error) {
 	switch key {
 	case "trigger_type":
@@ -1774,6 +1991,8 @@ func taskFlowEventValue(event TaskFlowEvent, key string) (any, error) {
 		return event.ProjectID, nil
 	case "trigger_var_id":
 		return event.TriggerVarID, nil
+	case "trigger_var_id_text":
+		return fmt.Sprintf("%d", event.TriggerVarID), nil
 	case "trigger_value":
 		return event.TriggerValue, nil
 	case "gateway_id":
@@ -1866,6 +2085,7 @@ func minDuration(a time.Duration, b time.Duration) time.Duration {
 func snapshotMap(snapshot models.TagSnapshot) map[string]any {
 	return map[string]any{
 		"var_id":       snapshot.VarID,
+		"var_id_text":  fmt.Sprintf("%d", snapshot.VarID),
 		"var_name":     snapshot.VarName,
 		"project_id":   snapshot.ProjectID,
 		"value":        snapshot.Value,
@@ -1910,6 +2130,44 @@ func toFloat64(value any) float64 {
 			return 1
 		case "false", "no", "off":
 			return 0
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
+func toInt64(value any) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case int32:
+		return int64(v)
+	case uint:
+		return int64(v)
+	case uint64:
+		if v > math.MaxInt64 {
+			return 0
+		}
+		return int64(v)
+	case uint32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case float32:
+		return int64(v)
+	case json.Number:
+		parsed, err := v.Int64()
+		if err == nil {
+			return parsed
+		}
+		return 0
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err == nil {
+			return parsed
 		}
 		return 0
 	default:

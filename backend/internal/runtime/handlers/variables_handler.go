@@ -18,47 +18,47 @@ type VariablesHandler struct {
 }
 
 type createVariableRequest struct {
-	VarID                  int64    `json:"var_id"`
-	SourceType             string   `json:"source_type"`
-	GatewayID              int      `json:"gateway_id"`
-	SourceTopic            string   `json:"source_topic"`
-	SourcePath             string   `json:"source_path"`
-	RawName                string   `json:"raw_name"`
-	ProjectID              *uint    `json:"project_id"`
-	ProjectCode            string   `json:"project_code"`
-	VarGroup               string   `json:"var_group"`
-	VarName                string   `json:"var_name" binding:"required"`
-	DisplayName            string   `json:"display_name"`
-	DisplayNameEN          string   `json:"display_name_en"`
-	DisplayNameJA          string   `json:"display_name_ja"`
-	JSONPath               string   `json:"json_path"`
-	DataType               string   `json:"data_type" binding:"required"`
-	Unit                   string   `json:"unit"`
-	DecimalPlaces          int      `json:"decimal_places"`
-	ScaleFactor            float64  `json:"scale_factor"`
-	OffsetVal              float64  `json:"offset_val"`
-	RWMode                 string   `json:"rw_mode"`
-	Writable               bool     `json:"writable"`
-	WriteSourceID          int      `json:"write_source_id"`
-	WritePath              string   `json:"write_path"`
-	WriteDataType          string   `json:"write_data_type"`
-	WriteMin               *float64 `json:"write_min"`
-	WriteMax               *float64 `json:"write_max"`
-	WriteEnum              string   `json:"write_enum"`
-	WriteRequiresAudit     *bool    `json:"write_requires_audit"`
-	SuspiciousValue        *float64 `json:"suspicious_value"`
-	DebounceThreshold      *float64 `json:"debounce_threshold"`
-	DebounceMS             int      `json:"debounce_ms"`
-	Deadband               float64  `json:"deadband"`
-	DefaultAlarmEnabled    *bool    `json:"default_alarm_enabled"`
-	DefaultLimitLL         *float64 `json:"default_limit_ll"`
-	DefaultLimitL          *float64 `json:"default_limit_l"`
-	DefaultLimitH          *float64 `json:"default_limit_h"`
-	DefaultLimitHH         *float64 `json:"default_limit_hh"`
-	DefaultLimitDeadband   float64  `json:"default_limit_deadband"`
-	DefaultViolationHoldMS int      `json:"default_violation_hold_ms"`
-	DefaultRecoverHoldMS   int      `json:"default_recover_hold_ms"`
-	Enabled                *bool    `json:"enabled"`
+	VarID                  flexibleInt64 `json:"var_id"`
+	SourceType             string        `json:"source_type"`
+	GatewayID              int           `json:"gateway_id"`
+	SourceTopic            string        `json:"source_topic"`
+	SourcePath             string        `json:"source_path"`
+	RawName                string        `json:"raw_name"`
+	ProjectID              *uint         `json:"project_id"`
+	ProjectCode            string        `json:"project_code"`
+	VarGroup               string        `json:"var_group"`
+	VarName                string        `json:"var_name" binding:"required"`
+	DisplayName            string        `json:"display_name"`
+	DisplayNameEN          string        `json:"display_name_en"`
+	DisplayNameJA          string        `json:"display_name_ja"`
+	JSONPath               string        `json:"json_path"`
+	DataType               string        `json:"data_type" binding:"required"`
+	Unit                   string        `json:"unit"`
+	DecimalPlaces          int           `json:"decimal_places"`
+	ScaleFactor            float64       `json:"scale_factor"`
+	OffsetVal              float64       `json:"offset_val"`
+	RWMode                 string        `json:"rw_mode"`
+	Writable               bool          `json:"writable"`
+	WriteSourceID          int           `json:"write_source_id"`
+	WritePath              string        `json:"write_path"`
+	WriteDataType          string        `json:"write_data_type"`
+	WriteMin               *float64      `json:"write_min"`
+	WriteMax               *float64      `json:"write_max"`
+	WriteEnum              string        `json:"write_enum"`
+	WriteRequiresAudit     *bool         `json:"write_requires_audit"`
+	SuspiciousValue        *float64      `json:"suspicious_value"`
+	DebounceThreshold      *float64      `json:"debounce_threshold"`
+	DebounceMS             int           `json:"debounce_ms"`
+	Deadband               float64       `json:"deadband"`
+	DefaultAlarmEnabled    *bool         `json:"default_alarm_enabled"`
+	DefaultLimitLL         *float64      `json:"default_limit_ll"`
+	DefaultLimitL          *float64      `json:"default_limit_l"`
+	DefaultLimitH          *float64      `json:"default_limit_h"`
+	DefaultLimitHH         *float64      `json:"default_limit_hh"`
+	DefaultLimitDeadband   float64       `json:"default_limit_deadband"`
+	DefaultViolationHoldMS int           `json:"default_violation_hold_ms"`
+	DefaultRecoverHoldMS   int           `json:"default_recover_hold_ms"`
+	Enabled                *bool         `json:"enabled"`
 }
 
 type assignVariableRequest struct {
@@ -162,7 +162,7 @@ func (h *VariablesHandler) create(c *gin.Context) {
 		return
 	}
 	tag, err := h.service.Create(services.CreateVariableInput{
-		VarID:                  req.VarID,
+		VarID:                  req.VarID.Int64(),
 		SourceType:             req.SourceType,
 		GatewayID:              req.GatewayID,
 		SourceTopic:            req.SourceTopic,
@@ -223,7 +223,7 @@ func (h *VariablesHandler) assign(c *gin.Context) {
 		return
 	}
 	if err := h.service.Assign(variableID, req.ProjectID, req.ProjectCode, req.VarGroup, req.Enabled); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -268,7 +268,7 @@ func (h *VariablesHandler) patch(c *gin.Context) {
 	}
 	tag, err := h.service.Update(variableID, variableUpdates(req), services.UpdateVariableOptions{ApplyToRunning: req.ApplyToRunning})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, tag)
@@ -281,7 +281,7 @@ func (h *VariablesHandler) delete(c *gin.Context) {
 		return
 	}
 	if err := h.service.Delete(variableID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

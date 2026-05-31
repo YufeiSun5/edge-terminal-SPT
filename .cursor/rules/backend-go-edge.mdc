@@ -10,6 +10,6 @@ Mother rule: `.ai/instructions/backend-go-edge.md`.
 Read `MEMORY.md` and `AI_BOARD.md` before editing.
 
 - Keep MQTT callbacks lightweight and channel-based.
-- Keep devices as virtual business groups, not MQTT gateway children.
+- Keep projects as virtual business groups, not MQTT gateway children. Legacy `device` names are historical aliases only.
 - Do not implement application-layer historical sync without confirmed board scope.
 - API, DTO, schema, SSE/WS, RabbitMQ, or HTTP changes must update `AI_BOARD.md`.

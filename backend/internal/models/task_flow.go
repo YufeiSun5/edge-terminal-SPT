@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"strconv"
+	"time"
+)
 
 const (
 	TaskFlowTriggerDataChange   = "data_change"
@@ -24,6 +28,7 @@ const (
 	TaskFlowActionBuiltinHTTPRequest           = "builtin.http_request"
 	TaskFlowActionBuiltinContextSet            = "builtin.context_set"
 	TaskFlowActionBuiltinWriteVariable         = "builtin.write_variable"
+	TaskFlowActionBuiltinWriteControlVariables = "builtin.write_control_variables"
 	TaskFlowActionJavaScript                   = "javascript"
 
 	TaskFlowStatusPending = "pending"
@@ -79,6 +84,17 @@ func (TaskFlowVar) TableName() string {
 	return "sys_task_flow_vars"
 }
 
+func (v TaskFlowVar) MarshalJSON() ([]byte, error) {
+	type alias TaskFlowVar
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text"`
+	}{
+		alias:     alias(v),
+		VarIDText: strconv.FormatInt(v.VarID, 10),
+	})
+}
+
 type TaskFlowRun struct {
 	ID            uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	FlowID        uint64     `gorm:"column:flow_id;index;not null" json:"flow_id"`
@@ -103,6 +119,17 @@ type TaskFlowRun struct {
 
 func (TaskFlowRun) TableName() string {
 	return "task_flow_runs"
+}
+
+func (r TaskFlowRun) MarshalJSON() ([]byte, error) {
+	type alias TaskFlowRun
+	return json.Marshal(struct {
+		alias
+		TriggerVarIDText string `json:"trigger_var_id_text"`
+	}{
+		alias:            alias(r),
+		TriggerVarIDText: strconv.FormatInt(r.TriggerVarID, 10),
+	})
 }
 
 type TaskFlowSQLLog struct {

@@ -92,6 +92,7 @@ func processMessage(workerID int, msg *models.MQTTMessage, channels *Channels, t
 			log.Printf("[logic-%d] task rule matched rule=%s action=%s var_id=%d", workerID, match.Rule.RuleCode, match.Rule.ActionType, tag.Config.VarID)
 		}
 		enqueueAlarmEvents(channels, tasks.EvaluateLimitAlarm(tag, now, false), workerID)
+		enqueueAlarmEvents(channels, tasks.EvaluateDefaultLimitAlarm(tag, now), workerID)
 		if storeTask := buildStoreTaskForTrigger(tag, tasks, msg.GatewayID, msg.Topic, now, models.StoreTriggerOnChange, didChange, first); storeTask != nil {
 			changed = append(changed, storeTask)
 		}

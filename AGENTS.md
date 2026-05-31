@@ -71,8 +71,8 @@ Frontend hard rules:
 
 ## Core Conventions
 
-1. Keep MQTT gateways as data sources; do not model them as device parents.
-2. Devices are virtual business groups used by pages and detection tasks.
+1. Keep MQTT gateways as data sources; do not model them as project parents.
+2. Projects are virtual business groups used by pages and detection tasks. Legacy `device` names are historical aliases only and must not expand outside explicit compatibility layers.
 3. MQTT callbacks must not write MySQL directly; they enqueue into buffered channels.
 4. Realtime values are memory-first; history is written only for variables assigned to a device with a running detection task.
 5. Business APIs use `/api/v1`; use short nouns and stable JSON field names.
@@ -89,11 +89,21 @@ Frontend hard rules:
 - `.ai/instructions/frontend-electron-react.md`: Electron + React desktop shell rules.
 - `.ai/instructions/testing-smoke.md`: verification and smoke-test rules.
 
+## Collaboration Board and Archive Policy
+
+- Realtime/current interaction board: root `AI_BOARD.md`.
+- Historical closed records: `.ai/docs/` for stable design, architecture, interface, and stage-summary documents; `.ai/docs/archive/` for closed board records, superseded notes, and trace-only material.
+- `AI_BOARD.md` must keep all open and blocked work items. Do not remove, rewrite, or hide an open/blocked item during board cleanup.
+- Closed work should not accumulate in `AI_BOARD.md`. When an item is closed, move its durable conclusion, implementation notes, test evidence, and related closed explanations to the matching stable document under `.ai/docs/` or the relevant module docs such as `backend/docs/`.
+- If there is no matching stable document, create a concise archive file under `.ai/docs/archive/` and link or name it from the remaining board context when useful.
+- Keep only the short current handoff in `AI_BOARD.md`: active open/blocked items, current cross-team API/DTO/page/realtime/control contracts, unresolved risk, and recent activity needed for ongoing work.
+- Do not create another active board under `.ai/docs/`, `backend/docs/`, or any feature folder. Those locations are historical or stable-document sources, not realtime coordination boards.
+
 ## On-Demand Resources
 
 | Resource | Use When |
 | --- | --- |
-| `.ai/docs/README.md` | Need stable architecture notes, closed records, or archive guidance. |
+| `.ai/docs/README.md` | Need stable architecture notes, closed records, archive guidance, or the location of historical board content. |
 | `backend/docs/backend-architecture.md` | Need current backend flow, data model, and endpoint evidence. |
 | `docs-desktop-packaging.md` | Need desktop packaging and sidecar deployment direction. |
 | `.ai/skills/README.md` | Considering a reusable project-specific workflow. |
@@ -117,7 +127,8 @@ Frontend hard rules:
 4. For API, DTO, error semantics, page scope, realtime channel, control channel, login, SSO, or startup changes, update `AI_BOARD.md` first or in the same change.
 5. For backend data-flow changes, update `backend/docs/边缘端全链路数据流转与分发图.md` first or in the same change.
 6. After material changes, update `MEMORY.md` with a short change log entry.
-7. Do not create another active board under `.ai/docs/`.
+7. When closing a board item, move durable conclusions and related closed explanations out of `AI_BOARD.md` into the corresponding stable doc or `.ai/docs/archive/`.
+8. Do not create another active board under `.ai/docs/`.
 
 ## Test Gate
 

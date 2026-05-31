@@ -2,6 +2,7 @@ package services
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -224,11 +225,12 @@ func (sub RealtimeSubscription) ResponsePayload() map[string]interface{} {
 		}
 	}
 	return map[string]interface{}{
-		"topics":      topics,
-		"source_type": sub.SourceType,
-		"gateway_id":  sub.GatewayID,
-		"project_id":  sub.ProjectID,
-		"var_ids":     varIDList(sub.VarIDs),
+		"topics":       topics,
+		"source_type":  sub.SourceType,
+		"gateway_id":   sub.GatewayID,
+		"project_id":   sub.ProjectID,
+		"var_ids":      varIDList(sub.VarIDs),
+		"var_id_texts": varIDTextList(sub.VarIDs),
 	}
 }
 
@@ -254,4 +256,13 @@ func varIDList(values map[int64]bool) []int64 {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
+}
+
+func varIDTextList(values map[int64]bool) []string {
+	ids := varIDList(values)
+	items := make([]string, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, strconv.FormatInt(id, 10))
+	}
+	return items
 }

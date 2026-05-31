@@ -6,6 +6,7 @@ import (
 
 	"spindle-edge/backend/internal/models"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -126,15 +127,19 @@ func (r *Repository) AssignTag(varID int64, ProjectID *uint, ProjectCode string,
 		resolvedProjectCode = ProjectCode
 	}
 
-	if err := r.db.Model(&models.TagConfig{}).
+	result := r.db.Model(&models.TagConfig{}).
 		Where("var_id = ?", varID).
 		Updates(map[string]interface{}{
 			"project_id":   ProjectID,
 			"project_code": resolvedProjectCode,
 			"var_group":    group,
 			"enabled":      enabled,
-		}).Error; err != nil {
-		return err
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
 	}
 	if ProjectID == nil || !enabled {
 		return nil
@@ -148,7 +153,14 @@ func (r *Repository) AssignTag(varID int64, ProjectID *uint, ProjectCode string,
 }
 
 func (r *Repository) DeleteTag(varID int64) error {
-	return r.db.Delete(&models.TagConfig{}, "var_id = ?", varID).Error
+	result := r.db.Delete(&models.TagConfig{}, "var_id = ?", varID)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *Repository) UpsertDiscoveredTags(tags []models.TagConfig) error {

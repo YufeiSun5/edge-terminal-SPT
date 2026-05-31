@@ -18,6 +18,7 @@ import type {
   DetectionRunNotesResponse,
   DetectionRunStartPayload,
   DetectionRunStopPayload,
+  DetectionRunStorageRoutesResponse,
   DetectionRunSummary,
   DetectionStandard,
   DetectionStandardItemPayload,
@@ -30,9 +31,13 @@ import type {
   GatewayConfigPayload,
   GatewayStatusMap,
   HealthResponse,
+  LimitAlarmListParams,
+  LimitAlarmListResponse,
   NotificationListParams,
   NotificationListResponse,
   NotificationUnreadCount,
+  ProjectMemberUpdate,
+  ProjectMembersResponse,
   RealtimeVariableListParams,
   TagSnapshot,
   ReportTemplate,
@@ -56,6 +61,7 @@ import type {
   VariableCreatePayload,
   VariableListParams,
   VariablePatchPayload,
+  VarIdentifier,
 } from "@/shared/api/types";
 
 export function getHealth() {
@@ -126,6 +132,25 @@ export function markAllNotificationsRead() {
   return postJson<{ updated: number }, Record<string, never>>("/api/v1/notifications/read-all", {});
 }
 
+export function getLimitAlarms(params: LimitAlarmListParams = {}) {
+  const query = new URLSearchParams();
+  if (params.scope) query.set("scope", params.scope);
+  if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+  if (params.task_id !== undefined) query.set("task_id", String(params.task_id));
+  if (params.test_no) query.set("test_no", params.test_no);
+  if (params.var_id !== undefined) query.set("var_id", String(params.var_id));
+  if (params.status) query.set("status", params.status);
+  if (params.alarm_type) query.set("alarm_type", params.alarm_type);
+  if (params.level) query.set("level", params.level);
+  if (params.alarm_level) query.set("alarm_level", params.alarm_level);
+  if (params.from) query.set("from", params.from);
+  if (params.to) query.set("to", params.to);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString();
+  return getJson<LimitAlarmListResponse>(`/api/v1/limit-alarms${suffix ? `?${suffix}` : ""}`);
+}
+
 export function getGateways() {
   return getJson<GatewayStatusMap>("/api/v1/gateways");
 }
@@ -136,6 +161,17 @@ export function getGatewayConfigs() {
 
 export function getDevices() {
   return getJson<Device[]>("/api/v1/projects").then((items) => items.map(withDeviceAliases));
+}
+
+export function getProjectMembers(projectId: number) {
+  return getJson<ProjectMembersResponse>(`/api/v1/projects/${projectId}/members`);
+}
+
+export function replaceProjectMembers(projectId: number, members: ProjectMemberUpdate[]) {
+  return putJson<ProjectMembersResponse, { members: ProjectMemberUpdate[] }>(
+    `/api/v1/projects/${projectId}/members`,
+    { members },
+  );
 }
 
 export function createDevice(payload: DevicePayload) {
@@ -197,7 +233,7 @@ export function createVariable(payload: VariableCreatePayload) {
 }
 
 export function updateVariable(
-  variableId: number,
+  variableId: VarIdentifier,
   payload: VariablePatchPayload,
 ) {
   return patchJson<VariableConfig, Record<string, unknown>>(
@@ -207,7 +243,7 @@ export function updateVariable(
 }
 
 export function assignVariable(
-  variableId: number,
+  variableId: VarIdentifier,
   payload: VariableAssignmentPayload,
 ) {
   return patchJson<{ status: string }, Record<string, unknown>>(
@@ -216,7 +252,7 @@ export function assignVariable(
   );
 }
 
-export function deleteVariable(variableId: number) {
+export function deleteVariable(variableId: VarIdentifier) {
   return deleteJson<{ status: string }>(`/api/v1/variables/${variableId}`);
 }
 
@@ -301,6 +337,11 @@ export function getDetectionRunSummary(runId: number) {
 export function getDetectionRunEvents(runId: number, limit = 200) {
   return getJson<DetectionRunEventsResponse>(`/api/v1/detection-runs/${runId}/events?limit=${limit}`)
     .then((response) => ({ ...response, items: response.items.map(withRunAliases) }));
+}
+
+export function getDetectionRunStorageRoutes(runId: number) {
+  return getJson<DetectionRunStorageRoutesResponse>(`/api/v1/detection-runs/${runId}/storage-routes`)
+    .then((response) => ({ ...response, items: response.items.map(withStorageRouteAliases) }));
 }
 
 export function startDetectionRun(payload: DetectionRunStartPayload) {

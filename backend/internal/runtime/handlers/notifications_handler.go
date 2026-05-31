@@ -33,6 +33,7 @@ type userNotificationResponse struct {
 	TaskID      uint            `json:"task_id,omitempty"`
 	TestNo      string          `json:"test_no,omitempty"`
 	VarID       int64           `json:"var_id,omitempty"`
+	VarIDText   string          `json:"var_id_text,omitempty"`
 	VarName     string          `json:"var_name,omitempty"`
 	DisplayName string          `json:"display_name,omitempty"`
 	Message     string          `json:"message"`
@@ -229,6 +230,7 @@ func notificationResponse(item models.UserNotification) userNotificationResponse
 		TaskID:      item.TaskID,
 		TestNo:      item.TestNo,
 		VarID:       item.VarID,
+		VarIDText:   notificationVarIDText(item.VarID),
 		VarName:     item.VarName,
 		DisplayName: item.DisplayName,
 		Message:     item.Message,
@@ -237,4 +239,11 @@ func notificationResponse(item models.UserNotification) userNotificationResponse
 		CreatedAt:   item.CreatedAt.Format(time.RFC3339Nano),
 		ReadAt:      readAt,
 	}
+}
+
+func notificationVarIDText(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
 }

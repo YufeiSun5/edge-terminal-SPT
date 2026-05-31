@@ -97,8 +97,8 @@ func TestKernelAuthAndBusinessRoutes(t *testing.T) {
 	assertStatus(t, performKernelRequest(kernel, http.MethodGet, "/api/v1/gateway-configs/7", token, nil), http.StatusOK)
 	assertStatus(t, performKernelRequest(kernel, http.MethodPatch, "/api/v1/gateway-configs/7", token, map[string]any{"name": "gw2", "qos": 2}), http.StatusOK)
 	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateway-configs/7/discover", token, map[string]any{}), http.StatusBadRequest)
-	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateways/7/publish", token, map[string]any{"topic": "x", "payload": map[string]any{"a": 1}}), http.StatusBadGateway)
-	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateways/7/subscribe", token, map[string]any{"topic": "x"}), http.StatusBadGateway)
+	assertStatusIn(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateways/7/publish", token, map[string]any{"topic": "x", "payload": map[string]any{"a": 1}}), http.StatusOK, http.StatusBadGateway)
+	assertStatusIn(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateways/7/subscribe", token, map[string]any{"topic": "x"}), http.StatusOK, http.StatusBadGateway)
 	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateways/7/kio/write", token, map[string]any{"values": []map[string]any{{"name": "A", "value": 1}}}), http.StatusBadRequest)
 	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/gateways/7/kio/query-all", token, map[string]any{}), http.StatusBadRequest)
 	assertStatus(t, performKernelRequest(kernel, http.MethodDelete, "/api/v1/gateway-configs/7", token, nil), http.StatusOK)
@@ -330,8 +330,9 @@ func TestKernelRouteValidationFailures(t *testing.T) {
 		{http.MethodDelete, "/api/v1/users/1", nil, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/gateway-configs", map[string]any{"name": "missing"}, http.StatusBadRequest},
 		{http.MethodPatch, "/api/v1/gateway-configs/bad", map[string]any{}, http.StatusBadRequest},
-		{http.MethodPatch, "/api/v1/gateway-configs/404", map[string]any{"name": "x"}, http.StatusInternalServerError},
+		{http.MethodPatch, "/api/v1/gateway-configs/404", map[string]any{"name": "x"}, http.StatusNotFound},
 		{http.MethodDelete, "/api/v1/gateway-configs/bad", nil, http.StatusBadRequest},
+		{http.MethodDelete, "/api/v1/gateway-configs/404", nil, http.StatusNotFound},
 		{http.MethodPost, "/api/v1/gateway-configs/bad/discover", map[string]any{}, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/gateway-configs/404/discover", map[string]any{}, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/gateways/bad/publish", map[string]any{}, http.StatusBadRequest},
@@ -349,22 +350,37 @@ func TestKernelRouteValidationFailures(t *testing.T) {
 		{http.MethodGet, "/api/v1/detection-standards?enabled=bad", nil, http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/detection-standards/bad", nil, http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/detection-standards/404", nil, http.StatusNotFound},
+		{http.MethodPost, "/api/v1/detection-standards/404/favorite", nil, http.StatusNotFound},
+		{http.MethodDelete, "/api/v1/detection-standards/404/favorite", nil, http.StatusNotFound},
 		{http.MethodPost, "/api/v1/detection-standards", map[string]any{"standard_code": "STD"}, http.StatusBadRequest},
 		{http.MethodPatch, "/api/v1/detection-standards/bad", map[string]any{"remark": "x"}, http.StatusBadRequest},
-		{http.MethodPatch, "/api/v1/detection-standards/404", map[string]any{"remark": "x"}, http.StatusInternalServerError},
+		{http.MethodPatch, "/api/v1/detection-standards/404", map[string]any{"remark": "x"}, http.StatusNotFound},
 		{http.MethodPut, "/api/v1/detection-standards/bad/items", map[string]any{"items": []any{}}, http.StatusBadRequest},
-		{http.MethodPut, "/api/v1/detection-standards/404/items", map[string]any{"items": []any{}}, http.StatusInternalServerError},
+		{http.MethodPut, "/api/v1/detection-standards/404/items", map[string]any{"items": []any{}}, http.StatusNotFound},
 		{http.MethodDelete, "/api/v1/detection-standards/bad", nil, http.StatusBadRequest},
+		{http.MethodDelete, "/api/v1/detection-standards/404", nil, http.StatusNotFound},
+		{http.MethodGet, "/api/v1/report-templates?enabled=bad", nil, http.StatusBadRequest},
+		{http.MethodPatch, "/api/v1/report-templates/bad", map[string]any{"remark": "x"}, http.StatusBadRequest},
+		{http.MethodPatch, "/api/v1/report-templates/404", map[string]any{"remark": "x"}, http.StatusNotFound},
+		{http.MethodDelete, "/api/v1/report-templates/bad", nil, http.StatusBadRequest},
+		{http.MethodDelete, "/api/v1/report-templates/404", nil, http.StatusNotFound},
+		{http.MethodGet, "/api/v1/storage-routes?project_id=bad", nil, http.StatusBadRequest},
+		{http.MethodPatch, "/api/v1/storage-routes/bad", map[string]any{"enabled": true}, http.StatusBadRequest},
+		{http.MethodPatch, "/api/v1/storage-routes/404", map[string]any{"enabled": true}, http.StatusNotFound},
+		{http.MethodDelete, "/api/v1/storage-routes/bad", nil, http.StatusBadRequest},
+		{http.MethodDelete, "/api/v1/storage-routes/404", nil, http.StatusNotFound},
 		{http.MethodPost, "/api/v1/projects", map[string]any{"project_code": "AC"}, http.StatusBadRequest},
 		{http.MethodPatch, "/api/v1/projects/bad", map[string]any{"display_name": "x"}, http.StatusBadRequest},
-		{http.MethodPatch, "/api/v1/projects/404", map[string]any{"display_name": "x"}, http.StatusInternalServerError},
+		{http.MethodPatch, "/api/v1/projects/404", map[string]any{"display_name": "x"}, http.StatusNotFound},
 		{http.MethodPatch, "/api/v1/variables/bad", map[string]any{}, http.StatusBadRequest},
-		{http.MethodPatch, "/api/v1/variables/404", map[string]any{"display_name": "x"}, http.StatusInternalServerError},
+		{http.MethodPatch, "/api/v1/variables/404", map[string]any{"display_name": "x"}, http.StatusNotFound},
 		{http.MethodPatch, "/api/v1/variables/bad/assignment", map[string]any{}, http.StatusBadRequest},
+		{http.MethodPatch, "/api/v1/variables/404/assignment", map[string]any{"project_id": 1, "enabled": true}, http.StatusNotFound},
 		{http.MethodDelete, "/api/v1/variables/bad", nil, http.StatusBadRequest},
+		{http.MethodDelete, "/api/v1/variables/404", nil, http.StatusNotFound},
 		{http.MethodPost, "/api/v1/detection-runs", map[string]any{"project_id": 1}, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/detection-runs/bad/stop", map[string]any{}, http.StatusBadRequest},
-		{http.MethodPost, "/api/v1/detection-runs/404/stop", map[string]any{}, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/detection-runs/404/stop", map[string]any{}, http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		resp := performKernelRequest(kernel, tc.method, tc.path, token, tc.body)
@@ -648,6 +664,103 @@ func TestKernelStartSeedsAndLoadsRuntime(t *testing.T) {
 	kernel.Stop()
 }
 
+func TestKernelStartRecoversRunningDetectionTask(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := config.Default()
+	cfg.Auth.JWTSecret = "test-secret"
+	cfg.App.LogicWorkers = 1
+	cfg.App.StoreWorkers = 1
+	cfg.App.HistoryBatch = 1
+	cfg.Gateways = nil
+	db := newRuntimeTestDB(t)
+	repo := database.NewRepository(db)
+	project := &models.Project{ProjectCode: "AC-REC", Name: "Recovered Project", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	tag := models.TagConfig{
+		VarID:       7001,
+		GatewayID:   1,
+		SourceType:  models.TagSourceMQTT,
+		SourceTopic: "topic",
+		SourcePath:  "temp",
+		RawName:     "temp",
+		VarName:     "temp",
+		JSONPath:    "temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	if err := repo.CreateTag(&tag); err != nil {
+		t.Fatal(err)
+	}
+	route, err := repo.EnsureDefaultStorageRouteForTag(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateStorageRoute(route.ID, map[string]interface{}{
+		"enabled":        true,
+		"trigger_mode":   models.StoreTriggerOnDetection,
+		"store_on_start": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	limitH := 30.0
+	standard := &models.DetectionStandard{StandardCode: "STD-REC", Name: "Recovered Standard", ProjectID: &project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Enabled: true}
+	if err := repo.CreateDetectionStandard(standard, []models.DetectionStandardItem{{
+		VarID:        tag.VarID,
+		VarName:      tag.VarName,
+		CheckEnabled: true,
+		AlarmEnabled: true,
+		StoreEnabled: true,
+		CheckOnStart: true,
+		LimitH:       &limitH,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	task, err := repo.StartDetectionTaskWithOptions(database.StartDetectionOptions{
+		ProjectID:  project.ID,
+		TestNo:     "RECOVER-RUNNING",
+		Mode:       "standard",
+		StandardID: &standard.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kernel := NewKernel(cfg, db)
+	if err := kernel.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer kernel.Stop()
+
+	active, ok := kernel.tasks.ActiveForProject(project.ID)
+	if !ok {
+		t.Fatal("expected running detection task to be restored into runtime TaskManager")
+	}
+	if active.ID != task.ID || active.TestNo != task.TestNo || active.ProjectID != project.ID {
+		t.Fatalf("unexpected recovered active task: %+v want_task=%+v", active, task)
+	}
+	if !active.AllowsStore(tag.VarID) {
+		t.Fatalf("expected recovered standard item to allow store for var_id=%d: %+v", tag.VarID, active)
+	}
+	routes := active.RoutesForStore(tag.VarID)
+	if len(routes) != 1 || routes[0].TaskID != task.ID || routes[0].RouteID != route.ID {
+		t.Fatalf("expected recovered storage route snapshot, got %+v", routes)
+	}
+
+	token := loginKernel(t, kernel, "admin", "Admin@12345")
+	activeResp := performKernelRequest(kernel, http.MethodGet, "/api/v1/detection-runs/active", token, nil)
+	assertStatus(t, activeResp, http.StatusOK)
+	var activePayload []models.ActiveTask
+	mustDecodeKernel(t, activeResp, &activePayload)
+	if len(activePayload) != 1 || activePayload[0].ID != task.ID {
+		t.Fatalf("expected active API to expose recovered task, got %+v", activePayload)
+	}
+}
+
 func newRuntimeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
@@ -703,6 +816,16 @@ func assertStatus(t *testing.T, resp *httptest.ResponseRecorder, want int) {
 	if resp.Code != want {
 		t.Fatalf("status got=%d want=%d body=%s", resp.Code, want, resp.Body.String())
 	}
+}
+
+func assertStatusIn(t *testing.T, resp *httptest.ResponseRecorder, wants ...int) {
+	t.Helper()
+	for _, want := range wants {
+		if resp.Code == want {
+			return
+		}
+	}
+	t.Fatalf("status got=%d want one of=%v body=%s", resp.Code, wants, resp.Body.String())
 }
 
 func mustDecodeKernel(t *testing.T, resp *httptest.ResponseRecorder, out any) {

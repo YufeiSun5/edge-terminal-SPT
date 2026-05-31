@@ -1,7 +1,9 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -24,6 +26,17 @@ type RuntimeNotification struct {
 	Message     string         `json:"message"`
 	Payload     map[string]any `json:"payload,omitempty"`
 	OccurredAt  time.Time      `json:"occurred_at"`
+}
+
+func (n RuntimeNotification) MarshalJSON() ([]byte, error) {
+	type alias RuntimeNotification
+	return json.Marshal(struct {
+		alias
+		VarIDText string `json:"var_id_text,omitempty"`
+	}{
+		alias:     alias(n),
+		VarIDText: optionalInt64Text(n.VarID),
+	})
 }
 
 type SysNotification struct {
@@ -83,6 +96,13 @@ type UserNotification struct {
 	ReadAt      *time.Time `json:"read_at,omitempty" gorm:"column:read_at"`
 }
 
+func optionalInt64Text(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
+}
+
 func NewRuntimeNotification(notificationType string, level string, message string, occurredAt time.Time) *RuntimeNotification {
 	if occurredAt.IsZero() {
 		occurredAt = time.Now()
@@ -115,6 +135,10 @@ func RuntimeNotificationFromAlarm(notificationType string, level string, alarm D
 	if notification.Message == "" {
 		notification.Message = fmt.Sprintf("%s %s", alarm.VarName, alarm.AlarmType)
 	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["scope"] = alarm.Scope
 	notification.Payload = payload
 	return notification
 }
