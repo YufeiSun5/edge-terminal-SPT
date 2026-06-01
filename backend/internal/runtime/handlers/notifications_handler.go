@@ -39,6 +39,7 @@ type userNotificationResponse struct {
 	Message     string          `json:"message"`
 	Payload     json.RawMessage `json:"payload"`
 	OccurredAt  string          `json:"occurred_at"`
+	ExpiresAt   *string         `json:"expires_at,omitempty"`
 	CreatedAt   string          `json:"created_at"`
 	ReadAt      *string         `json:"read_at,omitempty"`
 }
@@ -84,7 +85,12 @@ func (h *NotificationsHandler) unreadCount(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user principal is required"})
 		return
 	}
-	count, err := h.repo.CountUnreadNotifications(principal.UserID)
+	filter, err := notificationFilterFromQuery(c, principal.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	count, err := h.repo.CountUnreadNotificationsWithFilter(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -120,7 +126,12 @@ func (h *NotificationsHandler) markAllRead(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user principal is required"})
 		return
 	}
-	updated, err := h.repo.MarkAllNotificationsRead(principal.UserID)
+	filter, err := notificationFilterFromQuery(c, principal.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	updated, err := h.repo.MarkUserNotificationsRead(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -160,15 +171,50 @@ func notificationFilterFromQuery(c *gin.Context, userID uint) (database.Notifica
 		value := uint(parsed)
 		projectID = &value
 	}
+	from, err := notificationQueryTime(firstNonEmptyQuery(c, "from", "occurred_from"))
+	if err != nil {
+		return database.NotificationListFilter{}, fmt.Errorf("from must be a valid time")
+	}
+	to, err := notificationQueryTime(firstNonEmptyQuery(c, "to", "occurred_to"))
+	if err != nil {
+		return database.NotificationListFilter{}, fmt.Errorf("to must be a valid time")
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return database.NotificationListFilter{}, fmt.Errorf("from must be before or equal to to")
+	}
 	return database.NotificationListFilter{
 		UserID:    userID,
 		Unread:    unread,
 		Type:      strings.TrimSpace(c.Query("type")),
 		Level:     strings.TrimSpace(c.Query("level")),
 		ProjectID: projectID,
+		From:      from,
+		To:        to,
+		Keyword:   strings.TrimSpace(c.Query("keyword")),
 		Limit:     limit,
 		Offset:    offset,
 	}, nil
+}
+
+func firstNonEmptyQuery(c *gin.Context, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(c.Query(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func notificationQueryTime(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := parseQueryTime(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 
 func notificationQueryInt(c *gin.Context, key string, fallback int) (int, error) {
@@ -218,6 +264,11 @@ func notificationResponse(item models.UserNotification) userNotificationResponse
 		value := item.ReadAt.Format(time.RFC3339Nano)
 		readAt = &value
 	}
+	var expiresAt *string
+	if item.ExpiresAt != nil {
+		value := item.ExpiresAt.Format(time.RFC3339Nano)
+		expiresAt = &value
+	}
 	return userNotificationResponse{
 		ID:          item.ID,
 		EventUID:    item.EventUID,
@@ -236,6 +287,7 @@ func notificationResponse(item models.UserNotification) userNotificationResponse
 		Message:     item.Message,
 		Payload:     payload,
 		OccurredAt:  item.OccurredAt.Format(time.RFC3339Nano),
+		ExpiresAt:   expiresAt,
 		CreatedAt:   item.CreatedAt.Format(time.RFC3339Nano),
 		ReadAt:      readAt,
 	}

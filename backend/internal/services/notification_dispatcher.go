@@ -5,6 +5,7 @@ import (
 
 	"spindle-edge/backend/internal/database"
 	"spindle-edge/backend/internal/models"
+	"spindle-edge/backend/internal/pipeline"
 )
 
 type NotificationDispatcher struct {
@@ -20,11 +21,11 @@ func (d *NotificationDispatcher) Start(source <-chan *models.RuntimeNotification
 	if d == nil || source == nil {
 		return
 	}
-	go func() {
+	pipeline.GoRecovering("notification-dispatcher", func() {
 		for notification := range source {
 			d.Dispatch(notification)
 		}
-	}()
+	})
 	log.Printf("notification dispatcher started")
 }
 

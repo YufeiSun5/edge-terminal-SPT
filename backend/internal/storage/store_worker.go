@@ -20,7 +20,9 @@ func StartWorkers(count int, batchSize int, channels *pipeline.Channels, repo *d
 		count = 1
 	}
 	bus := newStorageBus(repo, batchSize, 200*time.Millisecond)
-	go bus.Run(channels.Store)
+	pipeline.GoRecovering("storage-bus", func() {
+		bus.Run(channels.Store)
+	})
 	log.Printf("storage bus started: dispatchers=%d batch_size=%d", count, batchSize)
 }
 
@@ -59,7 +61,9 @@ func (b *StorageBus) bucket(key string) chan *models.StoreTask {
 	}
 	ch := make(chan *models.StoreTask, max(1024, b.batchSize*4))
 	b.buckets[key] = ch
-	go b.bucketWorker(key, ch)
+	pipeline.GoRecovering("storage-bucket", func() {
+		b.bucketWorker(key, ch)
+	})
 	return ch
 }
 

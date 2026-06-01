@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next'
 import { queryClient } from '@/app/queryClient'
 import {
   createTaskFlow,
-  getDevices as getProjects,
+  getProjects,
   getTaskFlowRuns,
   getTaskFlowSqlLogs,
   getTaskFlows,
@@ -19,7 +19,7 @@ import {
 } from '@/features/edge-status/api'
 import { sendRealtimeWebSocketCommand } from '@/features/realtime/realtimeClient'
 import type {
-  Device as Project,
+  Project,
   TaskFlow,
   TaskFlowModule,
   TaskFlowPayload,
@@ -60,6 +60,10 @@ type TaskRequestFormValues = {
   enable_alarm?: boolean
   operator_note?: string
   report_template_id?: number
+  report_var_ids?: WireVarID[]
+  report_ext_1?: string
+  report_ext_2?: string
+  report_ext_3?: string
   end_type?: string
   reason?: string
   var_id?: WireVarID
@@ -458,6 +462,7 @@ export function TaskFlowsPage() {
       limit_check_enabled: true,
       enable_storage: true,
       enable_alarm: true,
+      report_var_ids: [],
       process_params: [{ key: 'inlet_area_m2', value_type: 'number' }],
       plc_writes: [{ value_from: 'process_params.inlet_area_m2', value_type: 'number', wait_ack: true, ack_timeout_sec: 5 }],
     }
@@ -787,6 +792,26 @@ export function TaskFlowsPage() {
                 </Form.Item>
                 <Form.Item name="report_template_id" label="report_template_id">
                   <InputNumber min={1} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item className="task-flow-form-wide" name="report_var_ids" label={t('taskFlows.request.reportVariables')}>
+                  <Select
+                    allowClear
+                    mode="multiple"
+                    optionFilterProp="label"
+                    options={requestProjectVariables.map((variable) => ({
+                      label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
+                      value: variableWireId(variable),
+                    }))}
+                  />
+                </Form.Item>
+                <Form.Item name="report_ext_1" label="report_request.ext_1">
+                  <Input />
+                </Form.Item>
+                <Form.Item name="report_ext_2" label="report_request.ext_2">
+                  <Input />
+                </Form.Item>
+                <Form.Item name="report_ext_3" label="report_request.ext_3">
+                  <Input />
                 </Form.Item>
                 <Form.Item name="limit_check_enabled" label="limit_check_enabled" valuePropName="checked">
                   <Switch />
@@ -1461,6 +1486,13 @@ function buildTaskRequestPayload(values: TaskRequestFormValues) {
     setIfPresent(payload, 'enable_alarm', values.enable_alarm)
     setIfPresent(payload, 'operator_note', values.operator_note)
     setIfPresent(payload, 'report_template_id', values.report_template_id)
+    const reportVarIds = (values.report_var_ids ?? []).filter((item) => item !== undefined && item !== null && item !== '')
+    const reportRequest: Record<string, unknown> = {}
+    if (reportVarIds.length > 0) reportRequest.var_ids = reportVarIds
+    setIfPresent(reportRequest, 'ext_1', values.report_ext_1?.trim())
+    setIfPresent(reportRequest, 'ext_2', values.report_ext_2?.trim())
+    setIfPresent(reportRequest, 'ext_3', values.report_ext_3?.trim())
+    if (Object.keys(reportRequest).length > 0) payload.report_request = reportRequest
     const processParams = Object.fromEntries(
       (values.process_params ?? [])
         .filter((row) => row.key?.trim())

@@ -1,4 +1,18 @@
-import type { HistoryDataItem } from '@/shared/api/types'
+import type { DetectionRun, HistoryDataItem } from '@/shared/api/types'
+
+export type HistorySeriesRow = {
+  id: number
+  time: string
+  source_time: string
+} & Record<string, number | string | null>
+
+export type HistoryMetricColumn = {
+  key: string
+  title: string
+  varId: string
+  varName: string
+  isNumeric: boolean
+}
 
 export type HistoryRow = {
   id: number
@@ -12,149 +26,206 @@ export type HistoryRow = {
   pressure: number
   power: number
   vibration: number
-} & Record<`var${number}`, number>
+} & Record<string, number | string>
 
-type HistoryMetricKey = Exclude<keyof HistoryRow, 'id' | 'time'>
-
-const historyMetricMap: Record<string, HistoryMetricKey> = {
-  supply_air_temp: 'tempOut',
-  temp: 'tempOut',
-  tempOut: 'tempOut',
-  supply_air_humidity: 'humidOut',
-  humidity: 'humidOut',
-  humidOut: 'humidOut',
-  inlet_air_temp: 'tempIn',
-  tempIn: 'tempIn',
-  inlet_air_humidity: 'humidIn',
-  humidIn: 'humidIn',
-  inlet_airflow: 'windIn',
-  windIn: 'windIn',
-  noise: 'noise',
-  pressure: 'pressure',
-  power: 'power',
-  vibration: 'vibration',
-}
-
-export type TaskBlock = {
-  id: string
+export type GanttBlock = {
+  id: number
+  sn: string
   startStr: string
   endStr: string
   startPercent: number
   widthPercent: number
-  sn: string
+}
+
+export type GanttLane = {
+  machineId: string
+  blocks: GanttBlock[]
+}
+
+export type TaskBlock = {
+  id: number
+  testNo: string
+  projectCode: string
+  status: string
+  startStr: string
+  endStr: string
+  startPercent: number
+  widthPercent: number
 }
 
 export type TaskLane = {
-  machineId: string
+  projectCode: string
   blocks: TaskBlock[]
 }
 
-export function generateHistoryData(): HistoryRow[] {
-  return Array.from({ length: 1000 }).map((_, index) => {
-    const date = new Date(2026, 4, 27, 0, 0, 0)
-    date.setMinutes(date.getMinutes() + index)
-    const row = {
-      id: index,
-      time: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
-      tempOut: +(48 + Math.random() * 5).toFixed(2),
-      humidOut: +(30 + Math.random() * 10).toFixed(2),
-      tempIn: +(22 + Math.random() * 3).toFixed(2),
-      humidIn: +(40 + Math.random() * 10).toFixed(2),
-      windIn: +(140 + Math.random() * 20).toFixed(2),
-      noise: +(60 + Math.random() * 10).toFixed(2),
-      pressure: +(120 + Math.random() * 15).toFixed(2),
-      power: +(50 + Math.random() * 8).toFixed(2),
-      vibration: +(1.2 + Math.random() * 0.5).toFixed(3),
-    } as HistoryRow
+export function historyItemsToSeries(items: HistoryDataItem[]): {
+  rows: HistorySeriesRow[]
+  metrics: HistoryMetricColumn[]
+} {
+  const byTime = new Map<string, HistorySeriesRow>()
+  const metrics = new Map<string, HistoryMetricColumn>()
 
-    for (let item = 1; item <= 33; item += 1) {
-      row[`var${item}`] = +(Math.random() * 100).toFixed(2)
+  for (const item of items) {
+    const metricKey = metricKeyFor(item)
+    const numericValue = typeof item.value === 'number' ? item.value : Number(item.str_value)
+    const isNumeric = item.value !== undefined && item.value !== null && Number.isFinite(numericValue)
+    if (!metrics.has(metricKey)) {
+      metrics.set(metricKey, {
+        key: metricKey,
+        title: metricTitleFor(item),
+        varId: String(item.var_id_text ?? item.var_id),
+        varName: item.var_name,
+        isNumeric,
+      })
+    } else if (isNumeric) {
+      metrics.get(metricKey)!.isNumeric = true
     }
-    return row
-  })
+
+    const sourceTime = item.source_time || item.created_at
+    const date = new Date(sourceTime)
+    const timeKey = Number.isNaN(date.getTime()) ? sourceTime : date.toISOString()
+    const row = byTime.get(timeKey) ?? {
+      id: byTime.size,
+      time: formatHistoryTime(sourceTime),
+      source_time: sourceTime,
+    }
+    row[metricKey] = isNumeric ? numericValue : item.str_value ?? null
+    byTime.set(timeKey, row)
+  }
+
+  return {
+    rows: Array.from(byTime.values()),
+    metrics: Array.from(metrics.values()),
+  }
+}
+
+export function defaultSelectedMetrics(metrics: HistoryMetricColumn[]) {
+  return metrics.filter((metric) => metric.isNumeric).slice(0, 3).map((metric) => metric.key)
 }
 
 export function historyItemsToRows(items: HistoryDataItem[]): HistoryRow[] {
-  const byTime = new Map<string, HistoryRow>()
-  const dynamicMetricIndex = new Map<string, `var${number}`>()
-
-  for (const item of items) {
-    const date = new Date(item.source_time)
-    const timeKey = Number.isNaN(date.getTime()) ? item.source_time : date.toISOString()
-    const label = Number.isNaN(date.getTime())
-      ? item.source_time
-      : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-    let row = byTime.get(timeKey)
-    if (!row) {
-      row = {
-        id: byTime.size,
-        time: label,
-        tempOut: 0,
-        humidOut: 0,
-        tempIn: 0,
-        humidIn: 0,
-        windIn: 0,
-        noise: 0,
-        pressure: 0,
-        power: 0,
-        vibration: 0,
-      } as HistoryRow
-      byTime.set(timeKey, row)
-    }
-
-    const numericValue = typeof item.value === 'number' ? item.value : Number(item.str_value)
-    if (Number.isNaN(numericValue)) continue
-
-    const mappedKey = historyMetricMap[item.var_name] ?? dynamicMetricIndex.get(item.var_name)
-    if (mappedKey) {
-      row[mappedKey] = numericValue
-      continue
-    }
-
-    const nextIndex = dynamicMetricIndex.size + 1
-    if (nextIndex <= 33) {
-      const dynamicKey = `var${nextIndex}` as `var${number}`
-      dynamicMetricIndex.set(item.var_name, dynamicKey)
-      row[dynamicKey] = numericValue
-    }
-  }
-
-  return Array.from(byTime.values())
+  return historyItemsToSeries(items).rows.map((row, index) => ({
+    ...row,
+    id: index,
+    time: row.time,
+    tempOut: numberFromRow(row, ['var_tempOut', 'tempOut'], 48.6),
+    humidOut: numberFromRow(row, ['var_humidOut', 'humidOut'], 33.2),
+    tempIn: numberFromRow(row, ['var_tempIn', 'tempIn'], 22.3),
+    humidIn: numberFromRow(row, ['var_humidIn', 'humidIn'], 45.5),
+    windIn: numberFromRow(row, ['var_windIn', 'windIn'], 138.6),
+    noise: numberFromRow(row, ['var_noise', 'noise'], 45.7),
+    pressure: numberFromRow(row, ['var_pressure', 'pressure'], 120),
+    power: numberFromRow(row, ['var_power', 'power'], 2.45),
+    vibration: numberFromRow(row, ['var_vibration', 'vibration'], 0.45),
+  }))
 }
 
-export function buildGanttData(): TaskLane[] {
-  const formatTime = (value: number) => {
-    const hour = Math.floor(value)
-    const minute = Math.floor((value - hour) * 60)
-    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-  }
-
-  return Array.from({ length: 12 }).map((_, laneIndex) => {
-    const blocks: TaskBlock[] = []
-    let currentHour = 0
-    const blockCount = (laneIndex % 3) + 2
-
-    for (let blockIndex = 0; blockIndex < blockCount; blockIndex += 1) {
-      const gap = 0.7 + ((laneIndex + blockIndex) % 4) * 0.6
-      const startHour = currentHour + gap
-      if (startHour >= 22) break
-
-      const duration = Math.min(1.4 + ((laneIndex + blockIndex) % 5) * 0.42, 24 - startHour)
-      const endHour = startHour + duration
-      blocks.push({
-        id: `m${laneIndex + 1}-b${blockIndex}`,
-        startStr: formatTime(startHour),
-        endStr: formatTime(endHour),
-        startPercent: (startHour / 24) * 100,
-        widthPercent: (duration / 24) * 100,
-        sn: `A-10${(laneIndex + blockIndex) % 9}`,
-      })
-      currentHour = endHour
-    }
-
+export function generateHistoryData(): HistoryRow[] {
+  return Array.from({ length: 120 }, (_, index) => {
+    const wave = Math.sin(index / 9)
     return {
-      machineId: `测试机 ${laneIndex + 1}`,
-      blocks,
+      id: index,
+      time: `${String(Math.floor(index / 12)).padStart(2, '0')}:${String((index % 12) * 5).padStart(2, '0')}`,
+      tempOut: round(48.6 + wave * 2.1),
+      humidOut: round(33.2 + Math.cos(index / 10) * 1.6),
+      tempIn: round(22.3 + wave * 0.9),
+      humidIn: round(45.5 + Math.cos(index / 12) * 2.2),
+      windIn: round(138.6 + wave * 6),
+      noise: round(45.7 + Math.sin(index / 7) * 1.8),
+      pressure: round(120 + Math.cos(index / 8) * 4),
+      power: round(2.45 + Math.sin(index / 6) * 0.22),
+      vibration: round(0.45 + Math.cos(index / 8) * 0.06),
     }
   })
+}
+
+export function buildGanttData(): GanttLane[] {
+  return [
+    {
+      machineId: 'EDGE-3D-01',
+      blocks: [
+        { id: 1, sn: 'FACTORY-001', startStr: '08:00', endStr: '10:30', startPercent: 8, widthPercent: 18 },
+        { id: 2, sn: 'FACTORY-002', startStr: '13:00', endStr: '15:20', startPercent: 54, widthPercent: 16 },
+      ],
+    },
+    {
+      machineId: 'CRAC-11',
+      blocks: [
+        { id: 3, sn: 'RUN-AC11', startStr: '09:30', endStr: '12:10', startPercent: 22, widthPercent: 19 },
+      ],
+    },
+  ]
+}
+
+export function buildTaskLanes(runs: DetectionRun[]): TaskLane[] {
+  const datedRuns = runs.filter((run) => run.started_at)
+  if (datedRuns.length === 0) return []
+
+  const timestamps = datedRuns.flatMap((run) => {
+    const start = Date.parse(run.started_at ?? '')
+    const end = Date.parse(run.ended_at || run.expected_end_at || run.updated_at || run.started_at || '')
+    return [start, Number.isFinite(end) ? end : start]
+  }).filter(Number.isFinite)
+  const minTime = Math.min(...timestamps)
+  const maxTime = Math.max(...timestamps, minTime + 60 * 60 * 1000)
+  const windowMs = Math.max(maxTime - minTime, 60 * 60 * 1000)
+  const byProject = new Map<string, TaskBlock[]>()
+
+  for (const run of datedRuns) {
+    const start = Date.parse(run.started_at ?? '')
+    if (!Number.isFinite(start)) continue
+    const rawEnd = Date.parse(run.ended_at || run.expected_end_at || run.updated_at || run.started_at || '')
+    const end = Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : start + Math.max(run.duration_sec * 1000, 5 * 60 * 1000)
+    const projectCode = run.project_code || String(run.project_id)
+    const blocks = byProject.get(projectCode) ?? []
+    blocks.push({
+      id: run.id,
+      testNo: run.test_no,
+      projectCode,
+      status: run.status,
+      startStr: formatClock(start),
+      endStr: formatClock(end),
+      startPercent: Math.max(0, ((start - minTime) / windowMs) * 100),
+      widthPercent: Math.max(2, ((end - start) / windowMs) * 100),
+    })
+    byProject.set(projectCode, blocks)
+  }
+
+  return Array.from(byProject.entries()).map(([projectCode, blocks]) => ({
+    projectCode,
+    blocks,
+  }))
+}
+
+export function formatHistoryTime(value?: string) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${formatClock(date.getTime())}`
+}
+
+function metricKeyFor(item: HistoryDataItem) {
+  return `var_${String(item.var_id_text ?? item.var_id).replace(/[^a-zA-Z0-9_-]/g, '_')}`
+}
+
+function metricTitleFor(item: HistoryDataItem) {
+  const varId = String(item.var_id_text ?? item.var_id)
+  return item.var_name ? `${item.var_name} (${varId})` : varId
+}
+
+function numberFromRow(row: HistorySeriesRow, keys: string[], fallback: number) {
+  for (const key of keys) {
+    const value = row[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return fallback
+}
+
+function round(value: number) {
+  return Number(value.toFixed(2))
+}
+
+function formatClock(value: number) {
+  const date = new Date(value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }

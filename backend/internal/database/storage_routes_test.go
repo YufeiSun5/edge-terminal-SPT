@@ -160,6 +160,65 @@ func TestInsertWideHistoryBatchUpsertsDynamicColumns(t *testing.T) {
 	}
 }
 
+func TestQueryWideHistoryDataHandlesLegacyProjectTableWithoutIdentityColumns(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	projectID := uint(9)
+	tableName := ProjectWideTableName(projectID)
+	route := models.DetectionRunStorageRoute{
+		TaskID:        88,
+		TestNo:        "T-LEGACY-WIDE",
+		ProjectID:     projectID,
+		VarID:         8801,
+		RouteID:       1,
+		RouteCode:     "legacy-temp",
+		StorageTarget: models.StorageTargetWideTable,
+		StorageTable:  tableName,
+		ColumnName:    "temp_in",
+		ColumnType:    "DOUBLE",
+		QueryAlias:    "Temp In",
+	}
+	if err := db.Create(&route).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TABLE ` + quoteIdentifier(db.Name(), tableName) + ` (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+task_id INTEGER NOT NULL,
+test_no TEXT DEFAULT '',
+sample_time DATETIME NOT NULL,
+sample_bucket_ms INTEGER NOT NULL,
+temp_in DOUBLE NULL
+)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 5, 31, 9, 0, 0, 0, time.UTC)
+	if err := db.Table(tableName).Create(map[string]any{
+		"task_id":          88,
+		"test_no":          "T-LEGACY-WIDE",
+		"sample_time":      at,
+		"sample_bucket_ms": at.UnixMilli(),
+		"temp_in":          31.5,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.EnsureProjectWideTable(projectID, []models.DetectionRunStorageRoute{route}); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasColumn(tableName, "project_id") || !db.Migrator().HasColumn(tableName, "project_code") {
+		t.Fatal("expected legacy wide table identity columns to be added")
+	}
+	rows, err := repo.QueryHistoryData(HistoryFilter{ProjectID: &projectID, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one history row reconstructed from legacy wide table, got %d", len(rows))
+	}
+	if rows[0].ProjectID != projectID || rows[0].VarID != route.VarID || rows[0].Value == nil || *rows[0].Value != 31.5 {
+		t.Fatalf("unexpected legacy history row: %+v", rows[0])
+	}
+}
+
 func TestDefaultStorageRouteAndProjectWideTableSchema(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	repo := NewRepository(db)

@@ -9,6 +9,7 @@ import {
   Bell,
   Box,
   CheckCheck,
+  FileSpreadsheet,
   FileSearch,
   FolderOpen,
   Languages,
@@ -21,6 +22,7 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  TriangleAlert,
   UserRound,
   Workflow,
 } from 'lucide-react'
@@ -36,6 +38,9 @@ const navItems = [
   { path: '/', key: 'station', icon: ActivitySquare, permissions: ['view_realtime'] },
   { path: '/model-cockpit', key: 'modelCockpit', icon: Box, permissions: ['view_realtime'] },
   { path: '/history', key: 'history', icon: FileSearch, permissions: ['view_history'] },
+  { path: '/reports', key: 'reports', icon: FileSpreadsheet, permissions: ['view_history'] },
+  { path: '/notifications', key: 'notifications', icon: Bell, permissions: ['view_realtime', 'view_history', 'system_settings'] },
+  { path: '/alarms', key: 'alarms', icon: TriangleAlert, permissions: ['view_realtime'] },
   { path: '/detection-config', key: 'detectionConfig', icon: ShieldCheck, permissions: ['manage_variables'] },
   { path: '/tasks', key: 'tasks', icon: Workflow, permissions: ['system_settings'] },
   { path: '/settings', key: 'settings', icon: Settings2, permissions: ['manage_variables', 'manage_gateways', 'system_settings', 'manage_users'] },
@@ -73,7 +78,7 @@ export function ShellLayout() {
   })
   const unreadQuery = useQuery({
     queryKey: ['shell', 'notifications', 'unread-count'],
-    queryFn: getNotificationUnreadCount,
+    queryFn: () => getNotificationUnreadCount(),
     refetchInterval: 10000,
     retry: false,
   })
@@ -128,7 +133,7 @@ export function ShellLayout() {
     },
   })
   const markAllReadMutation = useMutation({
-    mutationFn: markAllNotificationsRead,
+    mutationFn: () => markAllNotificationsRead(),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
@@ -186,6 +191,18 @@ export function ShellLayout() {
     setNotificationOpen(false)
 
     const params = new URLSearchParams()
+    if (notification.type.startsWith('alarm.')) {
+      if (notification.project_id) params.set('project_id', String(notification.project_id))
+      if (notification.task_id) {
+        params.set('task_id', String(notification.task_id))
+        params.set('scope', 'detection')
+      }
+      if (notification.var_id_text ?? notification.var_id) params.set('var_id', String(notification.var_id_text ?? notification.var_id))
+      params.set('status', 'active')
+      navigate(`/alarms?${params.toString()}`)
+      return
+    }
+
     if (notification.task_id && hasAnyPermission(['view_history'])) {
       params.set('task_id', String(notification.task_id))
       if (notification.project_id) params.set('project_id', String(notification.project_id))
@@ -219,6 +236,12 @@ export function ShellLayout() {
           {t('notifications.readAll')}
         </Button>
       </div>
+      <Button className="notification-page-link" type="link" onClick={() => {
+        setNotificationOpen(false)
+        navigate('/notifications')
+      }}>
+        {t('notifications.openCenter')}
+      </Button>
       <div className="notification-filters">
         <Segmented
           size="small"

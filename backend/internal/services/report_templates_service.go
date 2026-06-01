@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -13,14 +14,15 @@ type ReportTemplatesService struct {
 }
 
 type CreateReportTemplateInput struct {
-	TemplateCode string
-	Name         string
-	DisplayName  string
-	FileRef      string
-	FileKind     string
-	Version      int
-	Enabled      *bool
-	Remark       string
+	TemplateCode     string
+	Name             string
+	DisplayName      string
+	FileRef          string
+	FileKind         string
+	Version          int
+	ParamsSchemaJSON string
+	Enabled          *bool
+	Remark           string
 }
 
 func NewReportTemplatesService(repo *database.Repository) *ReportTemplatesService {
@@ -44,19 +46,24 @@ func (s *ReportTemplatesService) Create(input CreateReportTemplateInput) (models
 	if fileRef == "" {
 		return models.ReportTemplate{}, fmt.Errorf("file_ref is required")
 	}
+	paramsSchemaJSON, err := NormalizeOptionalJSON(input.ParamsSchemaJSON, "params_schema_json", true)
+	if err != nil {
+		return models.ReportTemplate{}, err
+	}
 	enabled := true
 	if input.Enabled != nil {
 		enabled = *input.Enabled
 	}
 	template := models.ReportTemplate{
-		TemplateCode: code,
-		Name:         name,
-		DisplayName:  input.DisplayName,
-		FileRef:      fileRef,
-		FileKind:     firstNonEmpty(strings.TrimSpace(input.FileKind), "xlsx"),
-		Version:      input.Version,
-		Enabled:      enabled,
-		Remark:       input.Remark,
+		TemplateCode:     code,
+		Name:             name,
+		DisplayName:      input.DisplayName,
+		FileRef:          fileRef,
+		FileKind:         firstNonEmpty(strings.TrimSpace(input.FileKind), "xlsx"),
+		Version:          input.Version,
+		ParamsSchemaJSON: paramsSchemaJSON,
+		Enabled:          enabled,
+		Remark:           input.Remark,
 	}
 	if err := s.repo.CreateReportTemplate(&template); err != nil {
 		return models.ReportTemplate{}, err
@@ -65,9 +72,41 @@ func (s *ReportTemplatesService) Create(input CreateReportTemplateInput) (models
 }
 
 func (s *ReportTemplatesService) Update(id uint, updates map[string]interface{}) (models.ReportTemplate, error) {
+	if raw, ok := updates["params_schema_json"]; ok {
+		value, err := NormalizeOptionalJSON(fmt.Sprint(raw), "params_schema_json", true)
+		if err != nil {
+			return models.ReportTemplate{}, err
+		}
+		updates["params_schema_json"] = value
+	}
 	return s.repo.UpdateReportTemplate(id, updates)
 }
 
 func (s *ReportTemplatesService) Delete(id uint) error {
 	return s.repo.DeleteReportTemplate(id)
+}
+
+func NormalizeOptionalJSON(value string, field string, allowArray bool) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return "", fmt.Errorf("%s is invalid JSON", field)
+	}
+	switch decoded.(type) {
+	case map[string]any:
+	case []any:
+		if !allowArray {
+			return "", fmt.Errorf("%s must be a JSON object", field)
+		}
+	default:
+		if allowArray {
+			return "", fmt.Errorf("%s must be a JSON object or array", field)
+		}
+		return "", fmt.Errorf("%s must be a JSON object", field)
+	}
+	raw, _ := json.Marshal(decoded)
+	return string(raw), nil
 }

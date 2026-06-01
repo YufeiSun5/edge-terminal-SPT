@@ -212,7 +212,7 @@ func (h *DetectionStandardsHandler) create(c *gin.Context) {
 		return
 	}
 	if err := h.repo.CreateDetectionStandard(&standard, items); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
 		return
 	}
 	standard, err = h.repo.GetDetectionStandard(standard.ID)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -621,11 +622,11 @@ func TestReportTemplatesService(t *testing.T) {
 	repo := database.NewRepository(db)
 	service := NewReportTemplatesService(repo)
 
-	template, err := service.Create(CreateReportTemplateInput{TemplateCode: "RPT-SVC", Name: "Report", FileRef: "templates/report.xlsx"})
+	template, err := service.Create(CreateReportTemplateInput{TemplateCode: "RPT-SVC", Name: "Report", FileRef: "templates/report.xlsx", ParamsSchemaJSON: `[{"key":"inlet_area_m2","type":"number"}]`})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if template.FileKind != "xlsx" || template.Version != 1 {
+	if template.FileKind != "xlsx" || template.Version != 1 || !strings.Contains(template.ParamsSchemaJSON, "inlet_area_m2") {
 		t.Fatalf("unexpected template defaults: %+v", template)
 	}
 	if templates, err := service.List(database.ReportTemplateFilter{Keyword: "RPT"}); err != nil || len(templates) != 1 {
@@ -633,6 +634,9 @@ func TestReportTemplatesService(t *testing.T) {
 	}
 	if got, err := service.Update(template.ID, map[string]interface{}{"remark": "updated"}); err != nil || got.Remark != "updated" {
 		t.Fatalf("update got=%+v err=%v", got, err)
+	}
+	if _, err := service.Update(template.ID, map[string]interface{}{"params_schema_json": `"bad"`}); err == nil {
+		t.Fatal("expected params schema validation error")
 	}
 	if err := service.Delete(template.ID); err != nil {
 		t.Fatal(err)

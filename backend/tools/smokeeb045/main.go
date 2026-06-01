@@ -47,10 +47,19 @@ type taskFlowRun struct {
 	ID            uint64 `json:"id"`
 	FlowCode      string `json:"flow_code"`
 	Status        string `json:"status"`
+	TriggerType   string `json:"trigger_type"`
 	TriggerVarID  int64  `json:"trigger_var_id"`
 	ResultJSON    string `json:"result_json"`
 	ErrorMessage  string `json:"error_message"`
 	InputSnapshot string `json:"input_snapshot"`
+	ScriptLogs    string `json:"script_logs"`
+}
+
+type taskFlowSQLLog struct {
+	ID           uint64 `json:"id"`
+	RunID        uint64 `json:"run_id"`
+	SQLText      string `json:"sql_text"`
+	ErrorMessage string `json:"error_message"`
 }
 
 type detectionTask struct {
@@ -227,7 +236,22 @@ func run(base, username, password string, wait time.Duration) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("task flows ok: start=%d fixed=%d qualified=%d prepare=%d update=%d report=%d http=%d features=%d pause=%d resume=%d stop=%d mute=%d\n", flows["start"].ID, flows["fixed"].ID, flows["qualified"].ID, flows["prepare"].ID, flows["update"].ID, flows["report"].ID, flows["http"].ID, flows["features"].ID, flows["pause"].ID, flows["resume"].ID, flows["stop"].ID, flows["mute"].ID)
+	scheduleFlow, err := c.createScheduledJSFlow(p, suffix)
+	if err != nil {
+		return err
+	}
+	flows["schedule_js"] = scheduleFlow
+	fmt.Printf("task flows ok: start=%d fixed=%d qualified=%d prepare=%d update=%d report=%d http=%d features=%d pause=%d resume=%d stop=%d mute=%d js=%d schedule_js=%d\n", flows["start"].ID, flows["fixed"].ID, flows["qualified"].ID, flows["prepare"].ID, flows["update"].ID, flows["report"].ID, flows["http"].ID, flows["features"].ID, flows["pause"].ID, flows["resume"].ID, flows["stop"].ID, flows["mute"].ID, flows["js"].ID, flows["schedule_js"].ID)
+
+	if scheduleRun, err := c.waitTaskFlowRunByFlowCode(flows["schedule_js"].FlowCode, "schedule", wait); err != nil {
+		return err
+	} else if scheduleRun.Status != "success" || !strings.Contains(scheduleRun.ScriptLogs, "scheduled smoke") || !strings.Contains(scheduleRun.ResultJSON, `"trigger_type":"schedule"`) {
+		return fmt.Errorf("schedule JS flow unexpected status=%s result=%s logs=%s error=%s", scheduleRun.Status, scheduleRun.ResultJSON, scheduleRun.ScriptLogs, scheduleRun.ErrorMessage)
+	} else if err := c.disableTaskFlow(flows["schedule_js"].ID); err != nil {
+		return err
+	} else {
+		fmt.Printf("schedule JS flow ok: flow_run=%d\n", scheduleRun.ID)
+	}
 
 	notifyConn, err := c.openNotificationWS(p.ID)
 	if err != nil {
@@ -238,6 +262,21 @@ func run(base, username, password string, wait time.Duration) error {
 	}()
 
 	testNo := "SMOKE-EB045-" + suffix
+
+	if err := c.writeTaskRequest(requestVar.VarID, map[string]any{"command": "run_javascript", "expected": 7}, "js-"+suffix); err != nil {
+		return err
+	}
+	if run, err := c.waitTaskFlowRun(flows["js"].FlowCode, requestVar.VarID, wait); err != nil {
+		return err
+	} else if run.Status != "success" || !strings.Contains(run.ResultJSON, `"ok":1`) || !strings.Contains(run.ResultJSON, `"expected":7`) || !strings.Contains(run.ScriptLogs, "js_smoke rows=1") {
+		return fmt.Errorf("javascript flow unexpected status=%s result=%s logs=%s error=%s", run.Status, run.ResultJSON, run.ScriptLogs, run.ErrorMessage)
+	} else if logs, err := c.getTaskFlowSQLLogs(run.ID); err != nil {
+		return err
+	} else if len(logs) == 0 || !strings.Contains(logs[0].SQLText, "SELECT 1 AS ok") || logs[0].ErrorMessage != "" {
+		return fmt.Errorf("javascript SQL logs unexpected: %+v", logs)
+	} else {
+		fmt.Printf("javascript task flow ok: flow_run=%d sql_logs=%d\n", run.ID, len(logs))
+	}
 	startPayload := map[string]any{
 		"command":             "start_detection",
 		"project_id":          p.ID,
@@ -1013,6 +1052,19 @@ func (c *client) createTaskFlows(p project, requestVar tag, suffix string) (map[
 			}},
 		},
 		{
+			key:     "js",
+			command: "run_javascript",
+			action:  "javascript",
+			steps: []map[string]any{{
+				"code":   "js",
+				"module": "javascript",
+				"params": map[string]any{
+					"expected": map[string]any{"source": "trigger_param", "key": "expected", "default": 7},
+				},
+				"script": `const rows = db.query("SELECT 1 AS ok", []); const vars = realtime.project(); log.info("js_smoke rows=" + rows.length + " vars=" + vars.length); ({ok: rows[0].ok, expected: params.expected, project_vars: vars.length, trigger_var_id_text: trigger.var_id_text});`,
+			}},
+		},
+		{
 			key:     "features",
 			command: "refresh_features",
 			action:  "builtin.refresh_features",
@@ -1105,6 +1157,29 @@ func (c *client) createTaskFlows(p project, requestVar tag, suffix string) (map[
 		out[def.key] = flow
 	}
 	return out, nil
+}
+
+func (c *client) createScheduledJSFlow(p project, suffix string) (taskFlow, error) {
+	var flow taskFlow
+	payload := map[string]any{
+		"project_id":           p.ID,
+		"flow_code":            "smoke-eb045-schedule-js-" + suffix,
+		"name":                 "EB045 smoke schedule JS",
+		"enabled":              true,
+		"trigger_type":         "schedule",
+		"action_type":          "javascript",
+		"action_script":        `log.info("scheduled smoke " + trigger.type); ({trigger_type: trigger.type, project_id: project.id});`,
+		"timeout_ms":           3000,
+		"schedule_interval_ms": 1000,
+		"priority":             10,
+	}
+	err := c.do(http.MethodPost, "/api/v1/task-flows", payload, &flow)
+	return flow, err
+}
+
+func (c *client) disableTaskFlow(flowID uint64) error {
+	var flow taskFlow
+	return c.do(http.MethodPatch, fmt.Sprintf("/api/v1/task-flows/%d", flowID), map[string]any{"enabled": false}, &flow)
 }
 
 func findStandardItem(items []detectionRunStandardItem, varID int64) *detectionRunStandardItem {
@@ -1277,6 +1352,35 @@ func (c *client) waitTaskFlowRunAfter(flowCode string, triggerVarID int64, minRu
 		time.Sleep(200 * time.Millisecond)
 	}
 	return last, fmt.Errorf("task flow run not finished for flow_code=%s min_run_id=%d last=%+v", flowCode, minRunID, last)
+}
+
+func (c *client) waitTaskFlowRunByFlowCode(flowCode string, triggerType string, timeout time.Duration) (taskFlowRun, error) {
+	deadline := time.Now().Add(timeout)
+	var last taskFlowRun
+	for time.Now().Before(deadline) {
+		path := fmt.Sprintf("/api/v1/task-flow-runs?flow_code=%s&trigger_type=%s&limit=5", url.QueryEscape(flowCode), url.QueryEscape(triggerType))
+		var out listResponse[taskFlowRun]
+		if err := c.do(http.MethodGet, path, nil, &out); err != nil {
+			return last, err
+		}
+		for _, run := range out.Items {
+			if run.FlowCode == flowCode && run.TriggerType == triggerType {
+				last = run
+				switch run.Status {
+				case "success", "failed", "timeout":
+					return run, nil
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return last, fmt.Errorf("task flow run not finished for flow_code=%s trigger_type=%s last=%+v", flowCode, triggerType, last)
+}
+
+func (c *client) getTaskFlowSQLLogs(runID uint64) ([]taskFlowSQLLog, error) {
+	var out []taskFlowSQLLog
+	err := c.do(http.MethodGet, fmt.Sprintf("/api/v1/task-flow-runs/%d/sql-logs", runID), nil, &out)
+	return out, err
 }
 
 func (c *client) currentRun(projectID uint) (detectionTask, error) {

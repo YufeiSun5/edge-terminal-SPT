@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"spindle-edge/backend/internal/database"
@@ -31,6 +32,9 @@ type TaskFlowExecutor struct {
 	variableWriter   TaskFlowVariableWriter
 	index            *TaskFlowIndex
 	input            chan taskFlowJob
+	submitted        atomic.Uint64
+	enqueued         atomic.Uint64
+	dropped          atomic.Uint64
 	guardsMu         sync.Mutex
 	guards           map[string]struct{}
 	schedulerMu      sync.Mutex
@@ -84,6 +88,16 @@ type TaskFlowVariableWriteInput struct {
 
 const taskFlowStringParamMaxBytes = 256 * 1024
 
+type TaskFlowRuntimeStats struct {
+	Queue             ChannelPressure `json:"queue"`
+	Guards            int             `json:"guards"`
+	Submitted         uint64          `json:"submitted"`
+	Enqueued          uint64          `json:"enqueued"`
+	Dropped           uint64          `json:"dropped"`
+	PressureThreshold float64         `json:"pressure_threshold"`
+	Pressure          bool            `json:"pressure"`
+}
+
 func NewTaskFlowExecutor(repo *database.Repository, tags *TagManager, tasks *TaskManager, channels *Channels) *TaskFlowExecutor {
 	return &TaskFlowExecutor{
 		repo:     repo,
@@ -100,6 +114,28 @@ func (e *TaskFlowExecutor) SetVariableWriter(writer TaskFlowVariableWriter) {
 	e.variableWriter = writer
 }
 
+func (e *TaskFlowExecutor) RuntimeStats(threshold float64) TaskFlowRuntimeStats {
+	if threshold <= 0 {
+		threshold = 0.8
+	}
+	stats := TaskFlowRuntimeStats{
+		Queue:             channelPressure("task_flow", 0, 0),
+		PressureThreshold: threshold,
+	}
+	if e == nil {
+		return stats
+	}
+	stats.Queue = DiagnoseChannelPressure(channelPressure("task_flow", len(e.input), cap(e.input)), threshold)
+	stats.Pressure = stats.Queue.Pressure
+	stats.Submitted = e.submitted.Load()
+	stats.Enqueued = e.enqueued.Load()
+	stats.Dropped = e.dropped.Load()
+	e.guardsMu.Lock()
+	stats.Guards = len(e.guards)
+	e.guardsMu.Unlock()
+	return stats
+}
+
 func (e *TaskFlowExecutor) Load(flows []models.TaskFlow) {
 	e.index.Load(flows)
 }
@@ -109,7 +145,10 @@ func (e *TaskFlowExecutor) Start(workerCount int) {
 		workerCount = 1
 	}
 	for i := 0; i < workerCount; i++ {
-		go e.worker(i)
+		workerID := i
+		GoRecovering("task-flow-worker", func() {
+			e.worker(workerID)
+		})
 	}
 	log.Printf("task flow executor started: workers=%d", workerCount)
 }
@@ -126,7 +165,7 @@ func (e *TaskFlowExecutor) StartScheduleScanner(interval time.Duration) {
 	e.schedulerStarted = true
 	e.schedulerMu.Unlock()
 
-	go func() {
+	GoRecovering("task-flow-schedule-scanner", func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		log.Printf("task flow schedule scanner started: interval=%s", interval)
@@ -136,7 +175,7 @@ func (e *TaskFlowExecutor) StartScheduleScanner(interval time.Duration) {
 				At:          now,
 			})
 		}
-	}()
+	})
 }
 
 func (e *TaskFlowExecutor) RecoverActiveDetectionGuards(tasks []models.DetectionTask) {
@@ -170,9 +209,7 @@ func (e *TaskFlowExecutor) Trigger(event TaskFlowEvent) int {
 	}
 	matches := e.index.Match(event)
 	for _, flow := range matches {
-		select {
-		case e.input <- taskFlowJob{flow: flow, event: event}:
-		default:
+		if !e.submitJob(taskFlowJob{flow: flow, event: event}) {
 			log.Printf("[task-flow] queue full, drop flow=%s trigger_var_id=%d", flow.FlowCode, event.TriggerVarID)
 		}
 	}
@@ -183,11 +220,26 @@ func (e *TaskFlowExecutor) Submit(flow models.TaskFlow, event TaskFlowEvent) boo
 	if event.At.IsZero() {
 		event.At = time.Now()
 	}
+	if e.submitJob(taskFlowJob{flow: flow, event: event}) {
+		return true
+	}
+	if e != nil {
+		log.Printf("[task-flow] queue full, drop flow=%s", flow.FlowCode)
+	}
+	return false
+}
+
+func (e *TaskFlowExecutor) submitJob(job taskFlowJob) bool {
+	if e == nil {
+		return false
+	}
+	e.submitted.Add(1)
 	select {
-	case e.input <- taskFlowJob{flow: flow, event: event}:
+	case e.input <- job:
+		e.enqueued.Add(1)
 		return true
 	default:
-		log.Printf("[task-flow] queue full, drop flow=%s", flow.FlowCode)
+		e.dropped.Add(1)
 		return false
 	}
 }
@@ -505,6 +557,7 @@ func (e *TaskFlowExecutor) storageSnapshot(projectID uint, event TaskFlowEvent, 
 			tag.MarkStorageRoutesStored(task.StorageRoutes, task.Timestamp)
 			count++
 		default:
+			e.channels.RecordDrop("store")
 			return count, fmt.Errorf("store queue full")
 		}
 	}
@@ -1045,6 +1098,7 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 		CustomItems:       customItems,
 		ProcessParams:     params["process_params"],
 		PLCWrites:         params["plc_writes"],
+		ReportRequest:     params["report_request"],
 		LimitCheckEnabled: &limitCheckEnabled,
 		EndPolicy:         endPolicy,
 		DurationSec:       int(toFloat64(params["duration_sec"])),
@@ -1309,7 +1363,7 @@ func (e *TaskFlowExecutor) startFixedDurationGuard(taskID uint) {
 	if !e.markGuardStarted(key) {
 		return
 	}
-	go func() {
+	GoRecovering("task-flow-fixed-duration-guard", func() {
 		defer e.clearGuard(key)
 		for {
 			task, err := e.repo.GetDetectionTask(taskID)
@@ -1331,7 +1385,7 @@ func (e *TaskFlowExecutor) startFixedDurationGuard(taskID uint) {
 			_, _ = e.stopDetectionRun(taskID, "fixed duration reached", models.DetectionEndFixedDuration)
 			return
 		}
-	}()
+	})
 }
 
 func (e *TaskFlowExecutor) startQualifiedHoldGuard(taskID uint, hold time.Duration, interval time.Duration) bool {
@@ -1339,7 +1393,7 @@ func (e *TaskFlowExecutor) startQualifiedHoldGuard(taskID uint, hold time.Durati
 	if !e.markGuardStarted(key) {
 		return false
 	}
-	go func() {
+	GoRecovering("task-flow-qualified-hold-guard", func() {
 		defer e.clearGuard(key)
 		var since time.Time
 		ticker := time.NewTicker(interval)
@@ -1367,7 +1421,7 @@ func (e *TaskFlowExecutor) startQualifiedHoldGuard(taskID uint, hold time.Durati
 				return
 			}
 		}
-	}()
+	})
 	return true
 }
 
@@ -1427,6 +1481,7 @@ func (e *TaskFlowExecutor) enqueueDetectionStartSnapshots(task models.DetectionT
 		case e.channels.Store <- storeTask:
 			tag.MarkStorageRoutesStored(storeTask.StorageRoutes, now)
 		default:
+			e.channels.RecordDrop("store")
 			log.Printf("task-flow start snapshot dropped task_id=%d var_id=%d: store queue full", task.ID, tag.Config.VarID)
 		}
 	}
@@ -1449,6 +1504,7 @@ func (e *TaskFlowExecutor) evaluateDetectionOnStart(task models.DetectionTask) {
 			select {
 			case e.channels.Alarm <- event:
 			default:
+				e.channels.RecordDrop("alarm")
 				log.Printf("task-flow start alarm dropped task_id=%d var_id=%d: alarm queue full", task.ID, item.VarID)
 			}
 		}
@@ -1510,6 +1566,7 @@ func (e *TaskFlowExecutor) publishDetectionEventNotification(task models.Detecti
 	select {
 	case e.channels.Notify <- notification:
 	default:
+		e.channels.RecordDrop("notify")
 		log.Printf("task-flow detection notification dropped type=%s task_id=%d: notify queue full", notificationType, task.ID)
 	}
 }
@@ -1544,6 +1601,7 @@ func (e *TaskFlowExecutor) publishDetectionResult(task models.DetectionTask, sum
 	select {
 	case e.channels.Notify <- notification:
 	default:
+		e.channels.RecordDrop("notify")
 		log.Printf("task-flow detection result notification dropped task_id=%d status=%s: notify queue full", task.ID, summary.ResultStatus)
 	}
 }

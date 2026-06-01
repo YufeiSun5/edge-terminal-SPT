@@ -58,6 +58,12 @@ func getReportTemplate(db *gorm.DB, id uint) (models.ReportTemplate, error) {
 	return template, err
 }
 
+func getReportTemplateByCode(db *gorm.DB, code string) (models.ReportTemplate, error) {
+	var template models.ReportTemplate
+	err := db.First(&template, "template_code = ?", strings.TrimSpace(code)).Error
+	return template, err
+}
+
 func (r *Repository) CreateReportTemplate(template *models.ReportTemplate) error {
 	now := time.Now()
 	template.CreatedAt = now
@@ -123,4 +129,31 @@ func (r *Repository) ListDetectionRunReports(taskID uint) ([]models.DetectionRun
 	var reports []models.DetectionRunReport
 	err := r.db.Where("task_id = ?", taskID).Order("created_at desc, id desc").Find(&reports).Error
 	return reports, err
+}
+
+func (r *Repository) CreateDetectionRunReportRequests(requests []models.DetectionRunReportRequest) error {
+	if len(requests) == 0 {
+		return nil
+	}
+	now := time.Now()
+	for i := range requests {
+		if requests[i].Status == "" {
+			requests[i].Status = "pending"
+		}
+		if strings.TrimSpace(requests[i].VariablesJSON) == "" {
+			requests[i].VariablesJSON = "[]"
+		}
+		if strings.TrimSpace(requests[i].ParamsJSON) == "" {
+			requests[i].ParamsJSON = "{}"
+		}
+		requests[i].CreatedAt = now
+		requests[i].UpdatedAt = now
+	}
+	return r.db.CreateInBatches(&requests, 200).Error
+}
+
+func (r *Repository) ListDetectionRunReportRequests(taskID uint) ([]models.DetectionRunReportRequest, error) {
+	var requests []models.DetectionRunReportRequest
+	err := r.db.Where("task_id = ?", taskID).Order("id asc").Find(&requests).Error
+	return requests, err
 }

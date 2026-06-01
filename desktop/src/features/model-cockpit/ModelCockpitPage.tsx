@@ -2,35 +2,37 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
-  Activity,
-  Building2,
-  Clock3,
+  SealCheck as BadgeCheck,
+  Barcode,
   Cpu,
-  Droplets,
+  Drop as Droplets,
+  Flask as FlaskConical,
   Gauge,
-  HeartPulse,
-  Package,
+  Heartbeat as HeartPulse,
   Power,
-  ShieldCheck,
+  Pulse,
   Thermometer,
-  Volume2,
+  Timer,
+  SpeakerHigh as Volume2,
   Wind,
-  Zap,
-} from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
+  Lightning as Zap,
+} from '@phosphor-icons/react'
+import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { getActiveDetectionRuns, getCurrentDetectionRun, getRealtimeVariables } from '@/features/edge-status/api'
 import type { DetectionRunStandardItem, TagSnapshot } from '@/shared/api/types'
+import { StationLightBackground } from '@/features/station-operation/components/StationLightBackground'
 import './model-cockpit.css'
 
 type TopCardConfig = {
   labelKey: string
   hintKey: string
   value: string
-  icon: LucideIcon
+  icon: PhosphorIcon
 }
 
 type MetricCardConfig = {
@@ -41,16 +43,16 @@ type MetricCardConfig = {
   limitMin: number
   limitMax: number
   optimization: number
-  icon: LucideIcon
+  icon: PhosphorIcon
   points: number[]
 }
 
 const TOP_CARDS: TopCardConfig[] = [
-  { labelKey: 'modelCockpit.cards.model', hintKey: 'modelCockpit.cards.modelHint', value: 'CRAC-EDGE', icon: Package },
-  { labelKey: 'modelCockpit.cards.serial', hintKey: 'modelCockpit.cards.serialHint', value: 'EDGE-3D-01', icon: Cpu },
-  { labelKey: 'modelCockpit.cards.customer', hintKey: 'modelCockpit.cards.customerHint', value: 'Spindle Lab', icon: Building2 },
-  { labelKey: 'modelCockpit.cards.duration', hintKey: 'modelCockpit.cards.durationHint', value: '10:13:30', icon: Clock3 },
-  { labelKey: 'modelCockpit.cards.result', hintKey: 'modelCockpit.cards.resultHint', value: 'OK', icon: ShieldCheck },
+  { labelKey: 'modelCockpit.cards.model', hintKey: 'modelCockpit.cards.modelHint', value: 'CRAC-EDGE', icon: Cpu },
+  { labelKey: 'modelCockpit.cards.serial', hintKey: 'modelCockpit.cards.serialHint', value: 'EDGE-3D-01', icon: Barcode },
+  { labelKey: 'modelCockpit.cards.customer', hintKey: 'modelCockpit.cards.customerHint', value: 'Spindle Lab', icon: FlaskConical },
+  { labelKey: 'modelCockpit.cards.duration', hintKey: 'modelCockpit.cards.durationHint', value: '10:13:30', icon: Timer },
+  { labelKey: 'modelCockpit.cards.result', hintKey: 'modelCockpit.cards.resultHint', value: 'OK', icon: BadgeCheck },
 ]
 
 const METRIC_CARDS: MetricCardConfig[] = [
@@ -117,7 +119,7 @@ const METRIC_CARDS: MetricCardConfig[] = [
     limitMin: 0.05,
     limitMax: 2,
     optimization: 96,
-    icon: Activity,
+    icon: Pulse,
     points: [0.08, 0.12, 0.1, 0.13, 0.09, 0.11, 0.14, 0.1, 0.12, 0.13],
   },
   {
@@ -150,7 +152,7 @@ const METRIC_CARDS: MetricCardConfig[] = [
     limitMin: 70,
     limitMax: 90,
     optimization: 84,
-    icon: Activity,
+    icon: Pulse,
     points: [72, 76, 80, 82, 84, 86, 85, 84, 83, 85],
   },
   {
@@ -212,15 +214,18 @@ export function ModelCockpitPage() {
     () => resolveMetricCards(METRIC_CARDS, realtimeQuery.data ?? [], currentRunQuery.data?.standard_items ?? []),
     [currentRunQuery.data?.standard_items, realtimeQuery.data],
   )
-  const primaryMetrics = metricCards.slice(0, 8)
-  const detailMetrics = [metricCards[0], metricCards[3], metricCards[4], metricCards[7]].filter(Boolean)
+  const monitorMetrics = metricCards.slice(0, 10)
+  const trendCards = [
+    { titleKey: 'modelCockpit.charts.temperature', metric: metricCards[0] },
+    { titleKey: 'modelCockpit.charts.humidity', metric: metricCards[1] },
+  ].filter((item): item is { titleKey: string; metric: ResolvedMetricCard } => Boolean(item.metric))
 
   return (
     <div
       className="model-cockpit-page"
       style={{ '--light-x': `${lightPos.pageX}px`, '--light-y': `${lightPos.pageY}px` } as CSSProperties}
     >
-      <CockpitDynamicBackground />
+      <StationLightBackground scopeClassName="model-cockpit-page" />
 
       <header className="cockpit-title-row">
         <div className="cockpit-title-bar">
@@ -238,22 +243,55 @@ export function ModelCockpitPage() {
         ))}
       </section>
 
-      <section className="cockpit-left-grid" aria-label={t('modelCockpit.status.telemetry')}>
-        {primaryMetrics.map((metric, index) => (
-          <CockpitGlassPanel className={`cockpit-metric-card cockpit-card-tone-${index % 5}`} key={metric.labelKey} title={t(metric.labelKey)}>
-            <MetricCardContent metric={metric} />
-          </CockpitGlassPanel>
-        ))}
+      <section className="cockpit-main-card glass-panel" aria-label={t('modelCockpit.title')}>
+        <div className="cockpit-monitor-panel" aria-label={t('modelCockpit.realtime.title')}>
+          <div className="cockpit-section-title">
+            <span />
+            <strong>{t('modelCockpit.realtime.title')}</strong>
+          </div>
+          <div className="cockpit-monitor-table table-scroll-container">
+            <table>
+              <tbody>
+                {monitorMetrics.map((metric) => {
+                  const Icon = metric.icon
+                  return (
+                    <tr key={metric.labelKey}>
+                      <td>
+                        <span className="cockpit-monitor-icon">
+                          <Icon aria-hidden="true" weight="regular" />
+                        </span>
+                        {t(metric.labelKey)}
+                      </td>
+                      <td className="mono">
+                        {metric.value} {formatUnit(metric.unit)}
+                      </td>
+                      <td className="cockpit-limit-cell">
+                        {formatLimit(metric.limitMin)}-{formatLimit(metric.limitMax)} {formatUnit(metric.unit)}
+                      </td>
+                      <td>
+                        <span className={metric.status === 'OK' ? 'cockpit-state ok' : 'cockpit-state ng'}>{metric.status}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="cockpit-monitor-footer">
+            <span />
+            {t('modelCockpit.realtime.updatedAt', { value: '2026-05-31 08:18:30' })}
+          </div>
+        </div>
+
+        <main className="cockpit-center-stage" aria-label={t('modelCockpit.title')}>
+          <CockpitModelStage />
+        </main>
       </section>
 
-      <main className="cockpit-center-stage" aria-label={t('modelCockpit.title')}>
-        <CockpitModelStage />
-      </main>
-
       <aside className="cockpit-right-stack" aria-label={t('modelCockpit.status.telemetry')}>
-        {detailMetrics.map((metric, index) => (
-          <CockpitGlassPanel className={`cockpit-side-card cockpit-card-tone-${index + 2}`} key={metric.labelKey} title={t(metric.labelKey)}>
-            <MetricDetailContent metric={metric} />
+        {trendCards.map((item, index) => (
+          <CockpitGlassPanel className={`cockpit-trend-card cockpit-card-tone-${index + 2}`} key={item.titleKey} title={t(item.titleKey)}>
+            <TrendCardContent metric={item.metric} />
           </CockpitGlassPanel>
         ))}
       </aside>
@@ -319,39 +357,12 @@ function getOptimizationRate(value: number, limitMin: number, limitMax: number) 
 
 function CockpitTitleFrame() {
   return (
-    <svg className="cockpit-title-frame" viewBox="0 0 720 130" aria-hidden="true" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="cockpit-title-fill" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0" stopColor="#ffffff" stopOpacity="0.68" />
-          <stop offset="0.54" stopColor="#f4f8fb" stopOpacity="0.42" />
-          <stop offset="1" stopColor="#dce8f5" stopOpacity="0.2" />
-        </linearGradient>
-        <linearGradient id="cockpit-title-stroke" x1="0" x2="1">
-          <stop offset="0" stopColor="#9bb8d8" stopOpacity="0" />
-          <stop offset="0.18" stopColor="#dbe8f6" />
-          <stop offset="0.52" stopColor="#88a9cf" />
-          <stop offset="0.84" stopColor="#edf5ff" />
-          <stop offset="1" stopColor="#9bb8d8" stopOpacity="0" />
-        </linearGradient>
-        <filter id="cockpit-title-glow" x="-20%" y="-40%" width="140%" height="180%">
-          <feGaussianBlur stdDeviation="1.6" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      <path
-        d="M84 10 H636 L608 48 L566 48 L542 78 H178 L154 48 H112 Z"
-        fill="url(#cockpit-title-fill)"
-        opacity="0.86"
-        filter="url(#cockpit-title-glow)"
-      />
-      <path d="M84 10 H636 L608 48 L566 48 L542 78 H178 L154 48 H112 Z" fill="none" stroke="url(#cockpit-title-stroke)" strokeWidth="2" />
-      <path d="M116 20 H604 M170 86 H550" fill="none" stroke="#9bb8d8" strokeDasharray="7 8" strokeOpacity="0.2" />
-      <circle cx="130" cy="78" r="3" fill="#90a9c4" opacity="0.36" />
-      <circle cx="590" cy="78" r="3" fill="#90a9c4" opacity="0.36" />
-    </svg>
+    <>
+      <div className="cockpit-title-bg-glow" />
+      <div className="cockpit-title-glass-pill">
+        <div className="cockpit-title-glass-highlight" />
+      </div>
+    </>
   )
 }
 
@@ -372,7 +383,7 @@ function TopCardContent({ card }: { card: TopCardConfig }) {
   return (
     <div className="cockpit-top-content">
       <div className="cockpit-top-icon">
-        <Icon aria-hidden="true" strokeWidth={1.8} />
+        <Icon aria-hidden="true" weight="light" />
       </div>
       <div className="cockpit-top-copy">
         <strong>{card.value}</strong>
@@ -382,56 +393,69 @@ function TopCardContent({ card }: { card: TopCardConfig }) {
   )
 }
 
-function MetricCardContent({ metric }: { metric: ResolvedMetricCard }) {
+function TrendCardContent({ metric }: { metric: ResolvedMetricCard }) {
   const { t } = useTranslation()
-  const Icon = metric.icon
+  const data = useMemo(() => buildTrendData(metric), [metric])
+  const values = data.map((item) => item.value)
+  const min = Math.min(...values, metric.limitMin)
+  const max = Math.max(...values, metric.limitMax)
+  const buffer = Math.max((max - min) * 0.12, Math.abs(max) * 0.02, 1)
+  const domain = [Math.floor((min - buffer) * 10) / 10, Math.ceil((max + buffer) * 10) / 10]
+
   return (
-    <div className="cockpit-metric-content">
-      <Icon className="cockpit-metric-icon" aria-hidden="true" strokeWidth={1.9} />
-      <span className={metric.status === 'OK' ? 'cockpit-metric-status ok' : 'cockpit-metric-status ng'}>{metric.status}</span>
-      <strong>
-        {metric.value} <span>{formatUnit(metric.unit)}</span>
-      </strong>
-      <div className="cockpit-metric-range">
-        <span>
-          {t('modelCockpit.metric.limit')}: {formatLimit(metric.limitMin)}-{formatLimit(metric.limitMax)} {formatUnit(metric.unit)}
-        </span>
-        <span>{t('modelCockpit.metric.optimization', { value: metric.optimization })}</span>
+    <div className="cockpit-trend-content">
+      <div className="cockpit-trend-summary">
+        <span>{t(metric.labelKey)}</span>
+        <strong>
+          {metric.value} <small>{formatUnit(metric.unit)}</small>
+        </strong>
+      </div>
+      <div className="cockpit-trend-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 12, right: 8, left: -24, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 4" vertical={false} stroke="rgba(7, 48, 110, 0.08)" />
+            <XAxis dataKey="time" tickLine={false} axisLine={false} dy={6} fontSize={10} stroke="rgba(7, 48, 110, 0.45)" />
+            <YAxis tickLine={false} axisLine={false} width={42} fontSize={10} stroke="rgba(7, 48, 110, 0.45)" domain={domain} tickCount={4} />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: 'rgba(255, 255, 255, 0.92)',
+                border: '1px solid rgba(255,255,255,0.78)',
+                borderRadius: 8,
+                boxShadow: '0 12px 28px rgba(7,48,110,0.12)',
+                color: '#07306e',
+              }}
+              labelStyle={{ color: 'rgba(7,48,110,0.56)', fontSize: 11 }}
+              itemStyle={{ color: '#1677ff', fontWeight: 700 }}
+              formatter={(value) => [`${Number(value).toFixed(inferDecimals(metric.value))} ${formatUnit(metric.unit)}`, t(metric.labelKey)]}
+            />
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke="#1677ff"
+              strokeWidth={2}
+              fill="rgba(22, 119, 255, 0.12)"
+              isAnimationActive={false}
+              activeDot={{ r: 3, strokeWidth: 0, fill: '#1677ff' }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
       </div>
     </div>
   )
 }
 
-function MetricDetailContent({ metric }: { metric: ResolvedMetricCard }) {
-  const { t } = useTranslation()
-  const Icon = metric.icon
-  return (
-    <div className="cockpit-detail-content">
-      <div className="cockpit-detail-heading">
-        <span className="cockpit-detail-icon">
-          <Icon aria-hidden="true" strokeWidth={1.85} />
-        </span>
-        <span className={metric.status === 'OK' ? 'cockpit-metric-status ok' : 'cockpit-metric-status ng'}>{metric.status}</span>
-      </div>
-      <strong>
-        {metric.value}
-        <span>{formatUnit(metric.unit)}</span>
-      </strong>
-      <dl>
-        <div>
-          <dt>{t('modelCockpit.metric.limit')}</dt>
-          <dd>
-            {formatLimit(metric.limitMin)} - {formatLimit(metric.limitMax)} {formatUnit(metric.unit)}
-          </dd>
-        </div>
-        <div>
-          <dt>{t('modelCockpit.metric.optimizationLabel')}</dt>
-          <dd>{metric.optimization}%</dd>
-        </div>
-      </dl>
-      <div className="cockpit-detail-progress" style={{ '--progress': `${metric.optimization}%` } as CSSProperties} />
-    </div>
-  )
+function buildTrendData(metric: ResolvedMetricCard) {
+  const currentValue = Number(metric.value)
+  const points = [...metric.points]
+  if (Number.isFinite(currentValue)) {
+    const fallbackLast = points.at(-1) ?? currentValue
+    const offset = currentValue - fallbackLast
+    points.splice(0, points.length, ...points.map((point) => point + offset))
+  }
+  return points.map((value, index) => ({
+    time: `${String(index + 1).padStart(2, '0')}:00`,
+    value: Number(value.toFixed(2)),
+  }))
 }
 
 function formatLimit(value: number) {
@@ -489,16 +513,6 @@ function useCockpitLight() {
   }, [])
 
   return lightPos
-}
-
-function CockpitDynamicBackground() {
-  return (
-    <div className="cockpit-dynamic-background" aria-hidden="true">
-      <span className="cockpit-bg-surface cockpit-bg-surface-1" />
-      <span className="cockpit-bg-surface cockpit-bg-surface-2" />
-      <span className="cockpit-bg-light" />
-    </div>
-  )
 }
 
 function CockpitModelStage() {

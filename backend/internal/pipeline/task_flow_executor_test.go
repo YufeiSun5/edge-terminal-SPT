@@ -792,6 +792,7 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 			"custom_items":        map[string]any{"source": "trigger_param", "key": "custom_items"},
 			"process_params":      map[string]any{"source": "trigger_param", "key": "process_params", "optional": true},
 			"plc_writes":          map[string]any{"source": "trigger_param", "key": "plc_writes", "optional": true},
+			"report_request":      map[string]any{"source": "trigger_param", "key": "report_request", "optional": true},
 			"limit_check_enabled": map[string]any{"source": "trigger_param", "key": "limit_check_enabled", "default": true},
 			"end_policy":          map[string]any{"source": "trigger_param", "key": "end_policy"},
 			"duration_sec":        map[string]any{"source": "trigger_param", "key": "duration_sec"},
@@ -825,6 +826,13 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 		"duration_sec":        60,
 		"process_params":      map[string]any{"inlet_area_m2": 1.25},
 		"plc_writes":          []map[string]any{{"var_id": 3901, "value_from": "process_params.inlet_area_m2"}},
+		"report_request": map[string]any{
+			"enabled":        true,
+			"variable_names": []string{tempTag.VarName},
+			"ext_1":          "main-server",
+			"ext_2":          "reserved",
+			"ext_3":          "future",
+		},
 		"custom_items": []map[string]any{{
 			"var_id":         tempTag.VarID,
 			"var_name":       tempTag.VarName,
@@ -846,8 +854,12 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 	if task.StandardID != nil || task.StandardCode != "custom" || !task.LimitCheckEnabled || task.EndPolicy != models.DetectionEndPolicyFixedDuration || task.CustomConfigJSON == "" {
 		t.Fatalf("unexpected custom task: %+v", task)
 	}
-	if !strings.Contains(task.CustomConfigJSON, `"process_params"`) || !strings.Contains(task.CustomConfigJSON, `"inlet_area_m2"`) || !strings.Contains(task.CustomConfigJSON, `"plc_writes"`) {
-		t.Fatalf("expected process params and plc writes frozen, custom_config_json=%s", task.CustomConfigJSON)
+	if !strings.Contains(task.CustomConfigJSON, `"process_params"`) || !strings.Contains(task.CustomConfigJSON, `"inlet_area_m2"`) || !strings.Contains(task.CustomConfigJSON, `"plc_writes"`) || !strings.Contains(task.CustomConfigJSON, `"report_request"`) {
+		t.Fatalf("expected process, PLC, and report parameters frozen, custom_config_json=%s", task.CustomConfigJSON)
+	}
+	reportRequests, err := repo.ListDetectionRunReportRequests(task.ID)
+	if err != nil || len(reportRequests) != 1 || reportRequests[0].VarID != tempTag.VarID || reportRequests[0].VarName != tempTag.VarName || reportRequests[0].Ext1 != "main-server" || reportRequests[0].Ext3 != "future" {
+		t.Fatalf("unexpected report request snapshot: %+v err=%v", reportRequests, err)
 	}
 	item, err := repo.UpdateDetectionRunStandardItem(task.ID, tempTag.VarID, nil)
 	if err != nil || item.StandardID != 0 || item.StandardItemID != 0 || item.LimitH == nil || *item.LimitH != limitH {
@@ -1514,6 +1526,67 @@ func TestTaskFlowAsyncEndGuards(t *testing.T) {
 	waitForDetectionEndType(t, repo, qualifiedTask.ID, models.DetectionEndQualifiedHold)
 }
 
+func TestTaskFlowGuardRecoverClearsGuard(t *testing.T) {
+	executor := &TaskFlowExecutor{guards: make(map[string]struct{})}
+	executor.startFixedDurationGuard(999)
+	key := "fixed:999"
+	if !taskFlowGuardActive(executor, key) {
+		t.Fatal("expected fixed duration guard marker to be set before worker runs")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !taskFlowGuardActive(executor, key) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected recovered fixed duration guard to clear marker")
+}
+
+func TestTaskFlowRuntimeStats(t *testing.T) {
+	executor := NewTaskFlowExecutor(nil, NewTagManager(), NewTaskManager(), NewChannels())
+	executor.input <- taskFlowJob{}
+	executor.markGuardStarted("fixed:1")
+	stats := executor.RuntimeStats(0.0001)
+	if stats.Queue.Name != "task_flow" || stats.Queue.Len != 1 || stats.Queue.Cap != cap(executor.input) || !stats.Pressure {
+		t.Fatalf("unexpected runtime stats: %+v", stats)
+	}
+	if !stats.Queue.Pressure || stats.Queue.Impact == "" || stats.Queue.NextAction == "" {
+		t.Fatalf("expected actionable task-flow diagnostics: %+v", stats.Queue)
+	}
+	if stats.Guards != 1 || stats.PressureThreshold != 0.0001 {
+		t.Fatalf("unexpected guard or threshold stats: %+v", stats)
+	}
+	if stats.Submitted != 0 || stats.Enqueued != 0 || stats.Dropped != 0 {
+		t.Fatalf("direct queue fixture should not affect submit counters: %+v", stats)
+	}
+	nilStats := (*TaskFlowExecutor)(nil).RuntimeStats(0)
+	if nilStats.Queue.Name != "task_flow" || nilStats.Queue.Cap != 0 || nilStats.PressureThreshold != 0.8 {
+		t.Fatalf("unexpected nil executor stats: %+v", nilStats)
+	}
+}
+
+func TestTaskFlowRuntimeStatsTrackQueueDrops(t *testing.T) {
+	executor := NewTaskFlowExecutor(nil, NewTagManager(), NewTaskManager(), NewChannels())
+	flow := models.TaskFlow{ID: 1, FlowCode: "drop-check"}
+	for i := 0; i < cap(executor.input); i++ {
+		if !executor.Submit(flow, TaskFlowEvent{TriggerType: models.TaskFlowTriggerManual}) {
+			t.Fatalf("unexpected submit failure at %d", i)
+		}
+	}
+	if executor.Submit(flow, TaskFlowEvent{TriggerType: models.TaskFlowTriggerManual}) {
+		t.Fatal("expected full queue submit to fail")
+	}
+
+	stats := executor.RuntimeStats(0.8)
+	if stats.Submitted != uint64(cap(executor.input)+1) || stats.Enqueued != uint64(cap(executor.input)) || stats.Dropped != 1 {
+		t.Fatalf("unexpected queue counters: %+v", stats)
+	}
+	if !stats.Pressure || !stats.Queue.Pressure {
+		t.Fatalf("expected full queue pressure: %+v", stats)
+	}
+}
+
 func TestTaskFlowBuiltinWriteVariableTriggersAndBlocksSelfRecursion(t *testing.T) {
 	db := newTaskFlowTestDB(t)
 	repo := database.NewRepository(db)
@@ -2016,6 +2089,13 @@ func waitForDetectionEndType(t *testing.T, repo *database.Repository, taskID uin
 	}
 	task, err := repo.GetDetectionTask(taskID)
 	t.Fatalf("expected end_type=%s, got task=%+v err=%v", endType, task, err)
+}
+
+func taskFlowGuardActive(executor *TaskFlowExecutor, key string) bool {
+	executor.guardsMu.Lock()
+	defer executor.guardsMu.Unlock()
+	_, ok := executor.guards[key]
+	return ok
 }
 
 func waitForTaskFlowRunStatus(t *testing.T, db *gorm.DB, flowID uint64, status string, timeout time.Duration) models.TaskFlowRun {

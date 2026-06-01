@@ -23,6 +23,7 @@ type GatewaysHandler struct {
 	repo     *database.Repository
 	mqtt     *mqttx.Manager
 	channels *pipeline.Channels
+	notify   *services.NotificationHub
 	kio      *services.KIOWriteService
 }
 
@@ -100,12 +101,15 @@ type kioQueryAllRequest struct {
 	QOS      byte   `json:"qos"`
 }
 
-func NewGatewaysHandler(repo *database.Repository, mqtt *mqttx.Manager, channels *pipeline.Channels) *GatewaysHandler {
-	return &GatewaysHandler{repo: repo, mqtt: mqtt, channels: channels, kio: services.NewKIOWriteService(mqtt)}
+func NewGatewaysHandler(repo *database.Repository, mqtt *mqttx.Manager, channels *pipeline.Channels, notify *services.NotificationHub) *GatewaysHandler {
+	return &GatewaysHandler{repo: repo, mqtt: mqtt, channels: channels, notify: notify, kio: services.NewKIOWriteService(mqtt)}
 }
 
 func (h *GatewaysHandler) Register(group *gin.RouterGroup, authService *auth.Service) {
 	group.GET("/runtime/channels", authService.RequirePermission(auth.PermSystemSettings), h.runtimeChannels)
+	group.GET("/runtime/channels/detail", authService.RequirePermission(auth.PermSystemSettings), h.runtimeChannelDetails)
+	group.GET("/runtime/notifications", authService.RequirePermission(auth.PermSystemSettings), h.runtimeNotifications)
+	group.GET("/runtime/workers", authService.RequirePermission(auth.PermSystemSettings), h.runtimeWorkers)
 	group.GET("/gateways", authService.RequirePermission(auth.PermViewRealtime), h.status)
 	group.GET("/gateway-configs", authService.RequirePermission(auth.PermManageGateways), h.listConfigs)
 	group.GET("/gateway-configs/:gateway_id", authService.RequirePermission(auth.PermManageGateways), h.getConfig)
@@ -121,6 +125,23 @@ func (h *GatewaysHandler) Register(group *gin.RouterGroup, authService *auth.Ser
 
 func (h *GatewaysHandler) runtimeChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, h.channels.Stats())
+}
+
+func (h *GatewaysHandler) runtimeChannelDetails(c *gin.Context) {
+	const pressureThreshold = 0.8
+	c.JSON(http.StatusOK, gin.H{
+		"items":              h.channels.DetailedStatsWithDiagnosis(pressureThreshold),
+		"pressure":           h.channels.Pressure(pressureThreshold),
+		"pressure_threshold": pressureThreshold,
+	})
+}
+
+func (h *GatewaysHandler) runtimeNotifications(c *gin.Context) {
+	c.JSON(http.StatusOK, h.notify.RuntimeStats())
+}
+
+func (h *GatewaysHandler) runtimeWorkers(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"items": pipeline.WorkerRecoveryStats()})
 }
 
 func (h *GatewaysHandler) status(c *gin.Context) {

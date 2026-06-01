@@ -364,11 +364,13 @@ func (gw *Gateway) messageHandler(channels *pipeline.Channels) MQTT.MessageHandl
 		select {
 		case channels.Logic <- mqttMsg:
 		default:
+			channels.RecordDrop("logic")
 			log.Printf("[mqtt-%d] logic queue full, drop topic=%s", gw.config.ID, msg.Topic())
 		}
 		select {
 		case channels.Discovery <- mqttMsg:
 		default:
+			channels.RecordDrop("discovery")
 		}
 	}
 }

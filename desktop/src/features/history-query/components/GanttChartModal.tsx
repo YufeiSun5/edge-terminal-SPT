@@ -1,17 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { Empty, Spin } from 'antd'
+import { useTranslation } from 'react-i18next'
 import { PlayCircle, X } from 'lucide-react'
-import { buildGanttData } from '../model'
+import type { TaskLane } from '../model'
 
 type GanttChartModalProps = {
   isOpen: boolean
+  lanes: TaskLane[]
+  loading?: boolean
   onClose: () => void
-  onSelect: (machineId: string, sn: string, startTime: string, endTime: string) => void
+  onSelect: (taskId: number) => void
 }
 
-export function GanttChartModal({ isOpen, onClose, onSelect }: GanttChartModalProps) {
-  const [lanes] = useState(() => buildGanttData())
-
+export function GanttChartModal({ isOpen, lanes, loading, onClose, onSelect }: GanttChartModalProps) {
+  const { t } = useTranslation()
   useEffect(() => {
     document.body.style.overflow = isOpen ? 'hidden' : ''
     return () => {
@@ -30,45 +33,52 @@ export function GanttChartModal({ isOpen, onClose, onSelect }: GanttChartModalPr
         </button>
 
         <div className="history-gantt-title">
-          <h2>Mission Timeline.</h2>
-          <p>点击任意任务胶囊，即可将该时段及设备参数同步至主界面查询面板</p>
+          <h2>{t('history.timeline.title')}</h2>
+          <p>{t('history.timeline.hint')}</p>
         </div>
 
-        <div className="history-gantt-chart">
-          <div className="history-gantt-axis">
-            {[0, 4, 8, 12, 16, 20, 24].map((hour) => (
-              <span key={hour} style={{ left: `${(hour / 24) * 100}%` }}>
-                {hour}:00
-              </span>
-            ))}
-          </div>
-          <div className="history-gantt-lines" aria-hidden="true">
-            {[0, 4, 8, 12, 16, 20, 24].map((hour) => (
-              <span key={hour} style={{ left: `${(hour / 24) * 100}%` }} />
-            ))}
-          </div>
-
-          <div className="history-gantt-lanes">
-            {lanes.map((lane) => (
-              <div className="history-gantt-lane" key={lane.machineId}>
-                <div className="history-gantt-machine">{lane.machineId}</div>
-                <div className="history-gantt-track">
-                  {lane.blocks.map((block) => (
-                    <button
-                      key={block.id}
-                      className="history-gantt-block"
-                      style={{ left: `${block.startPercent}%`, width: `${block.widthPercent}%` }}
-                      onClick={() => onSelect(lane.machineId, block.sn, block.startStr, block.endStr)}
-                    >
-                      <PlayCircle size={12} />
-                      <span>{block.sn}</span>
-                    </button>
-                  ))}
-                </div>
+        <Spin spinning={loading}>
+          {lanes.length > 0 ? (
+            <div className="history-gantt-chart">
+              <div className="history-gantt-axis">
+                {[0, 20, 40, 60, 80, 100].map((point) => (
+                  <span key={point} style={{ left: `${point}%` }}>
+                    {point}%
+                  </span>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+              <div className="history-gantt-lines" aria-hidden="true">
+                {[0, 20, 40, 60, 80, 100].map((point) => (
+                  <span key={point} style={{ left: `${point}%` }} />
+                ))}
+              </div>
+
+              <div className="history-gantt-lanes">
+                {lanes.map((lane) => (
+                  <div className="history-gantt-lane" key={lane.projectCode}>
+                    <div className="history-gantt-machine">{lane.projectCode}</div>
+                    <div className="history-gantt-track">
+                      {lane.blocks.map((block) => (
+                        <button
+                          key={block.id}
+                          className="history-gantt-block"
+                          style={{ left: `${block.startPercent}%`, width: `${block.widthPercent}%` }}
+                          title={`${block.testNo} ${block.startStr}-${block.endStr} ${block.status}`}
+                          onClick={() => onSelect(block.id)}
+                        >
+                          <PlayCircle size={12} />
+                          <span>{block.testNo}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <Empty description={t('history.timeline.empty')} />
+          )}
+        </Spin>
       </div>
     </div>,
     document.body,

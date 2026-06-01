@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 
-export function StationLightBackground() {
+type StationLightBackgroundProps = {
+  scopeClassName?: string
+}
+
+export function StationLightBackground({ scopeClassName = 'station-page' }: StationLightBackgroundProps) {
   const [lightPos, setLightPos] = useState({ x: '50vw', y: '50vh' })
 
   useEffect(() => {
@@ -16,7 +20,7 @@ export function StationLightBackground() {
       const y = window.innerHeight / 2 + Math.sin(angle) * window.innerHeight * 0.25
 
       setLightPos({ x: `${x}px`, y: `${y}px` })
-      document.querySelectorAll<HTMLElement>('.station-page .glass-panel').forEach((panel) => {
+      document.querySelectorAll<HTMLElement>(`.${scopeClassName} .glass-panel`).forEach((panel) => {
         const rect = panel.getBoundingClientRect()
         panel.style.setProperty('--mouse-x', `${x - rect.left}px`)
         panel.style.setProperty('--mouse-y', `${y - rect.top}px`)
@@ -27,7 +31,7 @@ export function StationLightBackground() {
 
     frame = window.requestAnimationFrame(animate)
     return () => window.cancelAnimationFrame(frame)
-  }, [])
+  }, [scopeClassName])
 
   return (
     <>
@@ -53,7 +57,7 @@ export function StationLightBackground() {
           50% { transform: translate(10vw, -15vh) scale(1.1); }
         }
 
-        .station-page .ambient-background {
+        .${scopeClassName} .ambient-background {
           position: absolute;
           top: 0;
           left: 0;
@@ -64,7 +68,7 @@ export function StationLightBackground() {
           pointer-events: none;
         }
 
-        .station-page .silk-orb {
+        .${scopeClassName} .silk-orb {
           position: absolute;
           border-radius: 50%;
           filter: blur(80px);
@@ -73,7 +77,7 @@ export function StationLightBackground() {
           mix-blend-mode: normal;
         }
 
-        .station-page .orb-1 {
+        .${scopeClassName} .orb-1 {
           top: -10%;
           left: -10%;
           width: 90vw;
@@ -82,7 +86,7 @@ export function StationLightBackground() {
           animation: silk-drift-1 18s ease-in-out infinite;
         }
 
-        .station-page .orb-2 {
+        .${scopeClassName} .orb-2 {
           bottom: -20%;
           right: -10%;
           width: 100vw;
@@ -91,7 +95,7 @@ export function StationLightBackground() {
           animation: silk-drift-2 22s ease-in-out infinite;
         }
 
-        .station-page .orb-3 {
+        .${scopeClassName} .orb-3 {
           top: var(--light-y);
           left: var(--light-x);
           transform: translate(-50%, -50%);

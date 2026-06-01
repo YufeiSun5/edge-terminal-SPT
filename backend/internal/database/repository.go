@@ -69,6 +69,7 @@ type StartDetectionOptions struct {
 	CustomItems       []models.DetectionStandardItem
 	ProcessParams     any
 	PLCWrites         any
+	ReportRequest     any
 	LimitCheckEnabled *bool
 	EndPolicy         string
 	DurationSec       int

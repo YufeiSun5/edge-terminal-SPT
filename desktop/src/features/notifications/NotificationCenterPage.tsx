@@ -1,0 +1,363 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Badge, Button, DatePicker, Empty, Input, Select, Table, Tag, message } from 'antd'
+import type { TableColumnsType, TablePaginationConfig } from 'antd'
+import dayjs from 'dayjs'
+import type { Dayjs } from 'dayjs'
+import { useNavigate } from 'react-router'
+import { CheckCheck, RefreshCw, Search } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { getDevices, getNotificationUnreadCount, getNotifications, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
+import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
+import type { Device, NotificationListParams, UserNotification } from '@/shared/api/types'
+import { queryClient } from '@/app/queryClient'
+import './notification-center.css'
+
+const notificationTypeOptions = [
+  { value: 'alarm.limit.enter', labelKey: 'notifications.types.alarmEnter' },
+  { value: 'alarm.limit.recover', labelKey: 'notifications.types.alarmRecover' },
+  { value: 'alarm.limit.level_change', labelKey: 'notifications.types.alarmLevelChange' },
+  { value: 'detection.run_started', labelKey: 'notifications.types.runStarted' },
+  { value: 'detection.run_stopped', labelKey: 'notifications.types.runStopped' },
+  { value: 'detection.result_ok', labelKey: 'notifications.types.resultOk' },
+  { value: 'detection.result_ng', labelKey: 'notifications.types.resultNg' },
+]
+
+const levelOptions = ['info', 'success', 'warning', 'error']
+
+type NotificationFilters = {
+  unread?: boolean
+  type?: string
+  level?: string
+  project_id?: number
+  keyword?: string
+  from?: string
+  to?: string
+}
+
+export function NotificationCenterPage() {
+  const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
+  const [messageApi, contextHolder] = message.useMessage()
+  const [filters, setFilters] = useState<NotificationFilters>({})
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 20 })
+
+  const projectsQuery = useQuery({
+    queryKey: ['notification-center', 'projects'],
+    queryFn: getDevices,
+    staleTime: 30000,
+    retry: false,
+  })
+
+  const queryParams = useMemo<NotificationListParams>(
+    () => ({
+      ...filters,
+      limit: pagination.pageSize,
+      offset: (pagination.current - 1) * pagination.pageSize,
+    }),
+    [filters, pagination],
+  )
+
+  const notificationsQuery = useQuery({
+    queryKey: ['notification-center', 'items', queryParams],
+    queryFn: () => getNotifications(queryParams),
+    refetchInterval: 10000,
+    retry: false,
+  })
+
+  const unreadQuery = useQuery({
+    queryKey: ['notification-center', 'unread', filters],
+    queryFn: () => getNotificationUnreadCount(filters),
+    refetchInterval: 10000,
+    retry: false,
+  })
+
+  const timeRangeValue = useMemo<[Dayjs, Dayjs] | null>(() => {
+    if (!filters.from || !filters.to) return null
+    const from = dayjs(filters.from)
+    const to = dayjs(filters.to)
+    if (!from.isValid() || !to.isValid()) return null
+    return [from, to]
+  }, [filters.from, filters.to])
+
+  const markReadMutation = useMutation({
+    mutationFn: (id: number) => markNotificationRead(id),
+    onSuccess: async () => {
+      await invalidateNotifications()
+    },
+  })
+
+  const markAllMutation = useMutation({
+    mutationFn: () => markAllNotificationsRead(filters),
+    onSuccess: async (response) => {
+      messageApi.success(t('notifications.center.readAllDone', { count: response.updated }))
+      await invalidateNotifications()
+    },
+  })
+
+  useEffect(() => {
+    let reconnectTimer = 0
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+
+    const connect = () => {
+      const scheduleReconnect = () => {
+        if (disposed || reconnectTimer) return
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = 0
+          connect()
+        }, 3000)
+      }
+
+      unsubscribe = subscribeRealtimeWebSocket({
+        subscription: { topics: ['notifications'] },
+        onMessage: (message) => {
+          if (message.type !== 'notification.event') return
+          void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['notification-center'] }),
+            queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
+          ])
+        },
+        onClose: scheduleReconnect,
+        onError: scheduleReconnect,
+      })
+    }
+
+    connect()
+
+    return () => {
+      disposed = true
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+      unsubscribe?.()
+    }
+  }, [])
+
+  async function invalidateNotifications() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['notification-center'] }),
+      queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
+    ])
+  }
+
+  function updateFilters(next: Partial<NotificationFilters>) {
+    setPagination((value) => ({ ...value, current: 1 }))
+    setFilters((value) => ({ ...value, ...next }))
+  }
+
+  function notificationTitle(notification: UserNotification) {
+    return notification.display_name || notification.var_name || notification.test_no || notification.type
+  }
+
+  function displayProject(project?: Pick<Device, 'device_code' | 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) {
+    if (!project) return ''
+    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || project.project_code || project.device_code
+    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || project.project_code || project.device_code
+    return project.display_name || project.name || project.project_code || project.device_code
+  }
+
+  function openNotification(notification: UserNotification) {
+    if (!notification.read_at) markReadMutation.mutate(notification.id)
+    const params = new URLSearchParams()
+    if (notification.project_id) params.set('project_id', String(notification.project_id))
+    if (notification.task_id) params.set('task_id', String(notification.task_id))
+    if (notification.var_id_text ?? notification.var_id) params.set('var_id', String(notification.var_id_text ?? notification.var_id))
+
+    if (notification.type.startsWith('alarm.')) {
+      if (notification.task_id) params.set('scope', 'detection')
+      params.set('status', 'active')
+      navigate(`/alarms?${params.toString()}`)
+      return
+    }
+
+    if (notification.task_id) {
+      navigate(`/history?${params.toString()}`)
+      return
+    }
+
+    navigate({ pathname: '/', search: params.toString() })
+  }
+
+  const columns: TableColumnsType<UserNotification> = [
+      {
+        title: t('notifications.center.columns.status'),
+        key: 'status',
+        width: 96,
+        render: (_, record) => (
+          <Badge status={record.read_at ? 'default' : 'processing'} text={record.read_at ? t('notifications.center.read') : t('notifications.center.unread')} />
+        ),
+      },
+      {
+        title: t('notifications.center.columns.type'),
+        dataIndex: 'type',
+        key: 'type',
+        width: 180,
+        render: (value: string, record) => <Tag color={levelColor(record.level)}>{typeLabel(value, t)}</Tag>,
+      },
+      {
+        title: t('notifications.center.columns.message'),
+        key: 'message',
+        render: (_, record) => (
+          <button className="center-link-cell" onClick={() => openNotification(record)}>
+            <strong>{notificationTitle(record)}</strong>
+            <span>{record.message || record.type}</span>
+          </button>
+        ),
+      },
+      {
+        title: t('notifications.center.columns.project'),
+        dataIndex: 'project_code',
+        key: 'project',
+        width: 140,
+        render: (value: string, record) => value || record.project_id || '-',
+      },
+      {
+        title: t('notifications.center.columns.time'),
+        dataIndex: 'occurred_at',
+        key: 'occurred_at',
+        width: 190,
+        render: (value: string, record) => formatDate(value || record.created_at),
+      },
+      {
+        title: t('notifications.center.columns.actions'),
+        key: 'actions',
+        width: 116,
+        render: (_, record) => (
+          <Button size="small" disabled={Boolean(record.read_at)} onClick={() => markReadMutation.mutate(record.id)}>
+            {t('notifications.center.markRead')}
+          </Button>
+        ),
+      },
+    ]
+
+  function handleTableChange(next: TablePaginationConfig) {
+    setPagination({
+      current: next.current ?? 1,
+      pageSize: next.pageSize ?? pagination.pageSize,
+    })
+  }
+
+  return (
+    <div className="ops-center-page notification-center-page">
+      {contextHolder}
+      <div className="ops-center-bg" aria-hidden="true" />
+      <section className="ops-center-header glass-panel">
+        <div>
+          <span className="ops-center-eyebrow">{t('notifications.center.eyebrow')}</span>
+          <h2>{t('notifications.center.title')}</h2>
+          <p>{t('notifications.center.desc')}</p>
+        </div>
+        <div className="ops-center-summary">
+          <strong>{unreadQuery.data?.unread ?? 0}</strong>
+          <span>{t('notifications.center.unreadCount')}</span>
+        </div>
+      </section>
+
+      <section className="ops-center-panel glass-panel">
+        <div className="ops-center-toolbar">
+          <Select
+            allowClear
+            className="ops-center-filter"
+            placeholder={t('notifications.filters.all')}
+            value={filters.unread === undefined ? undefined : String(filters.unread)}
+            options={[
+              { value: 'true', label: t('notifications.filters.unread') },
+              { value: 'false', label: t('notifications.center.read') },
+            ]}
+            onChange={(value) => updateFilters({ unread: value === undefined ? undefined : value === 'true' })}
+          />
+          <Select
+            allowClear
+            className="ops-center-filter"
+            placeholder={t('notifications.filters.type')}
+            value={filters.type}
+            options={notificationTypeOptions.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+            onChange={(value) => updateFilters({ type: value })}
+          />
+          <Select
+            allowClear
+            className="ops-center-filter"
+            placeholder={t('notifications.center.level')}
+            value={filters.level}
+            options={levelOptions.map((value) => ({ value, label: t(`notifications.levels.${value}`) }))}
+            onChange={(value) => updateFilters({ level: value })}
+          />
+          <Select
+            allowClear
+            showSearch
+            className="ops-center-filter"
+            optionFilterProp="label"
+            placeholder={t('notifications.filters.project')}
+            value={filters.project_id}
+            options={(projectsQuery.data ?? []).map((project) => ({ value: project.id, label: displayProject(project) }))}
+            onChange={(value) => updateFilters({ project_id: value })}
+          />
+          <Input
+            allowClear
+            className="ops-center-search"
+            prefix={<Search size={14} />}
+            placeholder={t('notifications.center.keyword')}
+            value={filters.keyword}
+            onChange={(event) => updateFilters({ keyword: event.target.value || undefined })}
+          />
+          <DatePicker.RangePicker
+            allowClear
+            showTime
+            className="ops-center-date-range"
+            value={timeRangeValue}
+            placeholder={[t('notifications.center.from'), t('notifications.center.to')]}
+            onChange={(value) => {
+              updateFilters({
+                from: value?.[0]?.toISOString(),
+                to: value?.[1]?.toISOString(),
+              })
+            }}
+          />
+          <div className="ops-center-actions">
+            <Button icon={<RefreshCw size={14} />} onClick={() => notificationsQuery.refetch()} loading={notificationsQuery.isFetching}>
+              {t('actions.refresh')}
+            </Button>
+            <Button type="primary" icon={<CheckCheck size={14} />} onClick={() => markAllMutation.mutate()} loading={markAllMutation.isPending}>
+              {t('notifications.readAll')}
+            </Button>
+          </div>
+        </div>
+
+        <Table<UserNotification>
+          rowKey="id"
+          className="ops-center-table"
+          columns={columns}
+          dataSource={notificationsQuery.data?.items ?? []}
+          loading={notificationsQuery.isFetching}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('notifications.empty')} /> }}
+          pagination={{
+            current: pagination.current,
+            pageSize: pagination.pageSize,
+            total: notificationsQuery.data?.total ?? 0,
+            showSizeChanger: true,
+            pageSizeOptions: [20, 50, 100],
+          }}
+          scroll={{ x: 960, y: 'calc(100vh - 370px)' }}
+          onChange={handleTableChange}
+        />
+      </section>
+    </div>
+  )
+}
+
+function typeLabel(type: string, t: (key: string) => string) {
+  const option = notificationTypeOptions.find((item) => item.value === type)
+  return option ? t(option.labelKey) : type
+}
+
+function levelColor(level: string) {
+  if (level === 'success') return 'green'
+  if (level === 'warning') return 'gold'
+  if (level === 'error') return 'red'
+  return 'blue'
+}
+
+function formatDate(value?: string) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}

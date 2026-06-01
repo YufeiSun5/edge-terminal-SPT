@@ -7,38 +7,39 @@ import (
 )
 
 type DetectionTask struct {
-	ID                    uint                       `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TestNo                string                     `gorm:"column:test_no;size:128;uniqueIndex;not null" json:"test_no"`
-	ProjectID             uint                       `gorm:"column:project_id;index;not null" json:"project_id"`
-	ProjectCode           string                     `gorm:"column:project_code;size:64;index" json:"project_code"`
-	Mode                  string                     `gorm:"column:mode;size:64;not null" json:"mode"`
-	Status                string                     `gorm:"column:status;size:32;index;not null" json:"status"`
-	StandardID            *uint                      `gorm:"column:standard_id;index" json:"standard_id,omitempty"`
-	StandardCode          string                     `gorm:"column:standard_code;size:64" json:"standard_code"`
-	StandardVer           int                        `gorm:"column:standard_version;default:0" json:"standard_version"`
-	StartedAt             *time.Time                 `gorm:"column:started_at" json:"started_at,omitempty"`
-	EndedAt               *time.Time                 `gorm:"column:ended_at" json:"ended_at,omitempty"`
-	LimitCheckEnabled     bool                       `gorm:"column:limit_check_enabled;default:true" json:"limit_check_enabled"`
-	EndPolicy             string                     `gorm:"column:end_policy;size:32;default:manual;index" json:"end_policy"`
-	DurationSec           int                        `gorm:"column:duration_sec;default:0" json:"duration_sec"`
-	QualifiedHoldMS       int                        `gorm:"column:qualified_hold_ms;default:0" json:"qualified_hold_ms"`
-	ExpectedEndAt         *time.Time                 `gorm:"column:expected_end_at" json:"expected_end_at,omitempty"`
-	PauseStartedAt        *time.Time                 `gorm:"column:pause_started_at" json:"pause_started_at,omitempty"`
-	PausedDurationMS      int64                      `gorm:"column:paused_duration_ms;default:0" json:"paused_duration_ms"`
-	EndType               string                     `gorm:"column:end_type;size:32" json:"end_type"`
-	StopReason            string                     `gorm:"column:stop_reason;size:255" json:"stop_reason"`
-	OperatorNote          string                     `gorm:"column:operator_note;size:512" json:"operator_note"`
-	CustomConfigJSON      string                     `gorm:"column:custom_config_json;type:text" json:"custom_config_json,omitempty"`
-	TemplateRef           string                     `gorm:"column:template_ref;size:128" json:"template_ref"`
-	ReportTemplateID      *uint                      `gorm:"column:report_template_id;index" json:"report_template_id,omitempty"`
-	ReportTemplateCode    string                     `gorm:"column:report_template_code;size:64" json:"report_template_code"`
-	ReportTemplateVersion int                        `gorm:"column:report_template_version;default:0" json:"report_template_version"`
-	CreatedAt             time.Time                  `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt             time.Time                  `gorm:"column:updated_at" json:"updated_at"`
-	StandardItems         []DetectionRunStandardItem `gorm:"-" json:"standard_items,omitempty"`
-	StorageRoutes         []DetectionRunStorageRoute `gorm:"-" json:"storage_routes,omitempty"`
-	Reports               []DetectionRunReport       `gorm:"-" json:"reports,omitempty"`
-	RecentNotes           []DetectionRunNote         `gorm:"-" json:"recent_notes,omitempty"`
+	ID                    uint                        `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	TestNo                string                      `gorm:"column:test_no;size:128;uniqueIndex;not null" json:"test_no"`
+	ProjectID             uint                        `gorm:"column:project_id;index;not null" json:"project_id"`
+	ProjectCode           string                      `gorm:"column:project_code;size:64;index" json:"project_code"`
+	Mode                  string                      `gorm:"column:mode;size:64;not null" json:"mode"`
+	Status                string                      `gorm:"column:status;size:32;index;not null" json:"status"`
+	StandardID            *uint                       `gorm:"column:standard_id;index" json:"standard_id,omitempty"`
+	StandardCode          string                      `gorm:"column:standard_code;size:64" json:"standard_code"`
+	StandardVer           int                         `gorm:"column:standard_version;default:0" json:"standard_version"`
+	StartedAt             *time.Time                  `gorm:"column:started_at" json:"started_at,omitempty"`
+	EndedAt               *time.Time                  `gorm:"column:ended_at" json:"ended_at,omitempty"`
+	LimitCheckEnabled     bool                        `gorm:"column:limit_check_enabled;default:true" json:"limit_check_enabled"`
+	EndPolicy             string                      `gorm:"column:end_policy;size:32;default:manual;index" json:"end_policy"`
+	DurationSec           int                         `gorm:"column:duration_sec;default:0" json:"duration_sec"`
+	QualifiedHoldMS       int                         `gorm:"column:qualified_hold_ms;default:0" json:"qualified_hold_ms"`
+	ExpectedEndAt         *time.Time                  `gorm:"column:expected_end_at" json:"expected_end_at,omitempty"`
+	PauseStartedAt        *time.Time                  `gorm:"column:pause_started_at" json:"pause_started_at,omitempty"`
+	PausedDurationMS      int64                       `gorm:"column:paused_duration_ms;default:0" json:"paused_duration_ms"`
+	EndType               string                      `gorm:"column:end_type;size:32" json:"end_type"`
+	StopReason            string                      `gorm:"column:stop_reason;size:255" json:"stop_reason"`
+	OperatorNote          string                      `gorm:"column:operator_note;size:512" json:"operator_note"`
+	CustomConfigJSON      string                      `gorm:"column:custom_config_json;type:text" json:"custom_config_json,omitempty"`
+	TemplateRef           string                      `gorm:"column:template_ref;size:128" json:"template_ref"`
+	ReportTemplateID      *uint                       `gorm:"column:report_template_id;index" json:"report_template_id,omitempty"`
+	ReportTemplateCode    string                      `gorm:"column:report_template_code;size:64" json:"report_template_code"`
+	ReportTemplateVersion int                         `gorm:"column:report_template_version;default:0" json:"report_template_version"`
+	CreatedAt             time.Time                   `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt             time.Time                   `gorm:"column:updated_at" json:"updated_at"`
+	StandardItems         []DetectionRunStandardItem  `gorm:"-" json:"standard_items,omitempty"`
+	StorageRoutes         []DetectionRunStorageRoute  `gorm:"-" json:"storage_routes,omitempty"`
+	Reports               []DetectionRunReport        `gorm:"-" json:"reports,omitempty"`
+	ReportRequests        []DetectionRunReportRequest `gorm:"-" json:"report_requests,omitempty"`
+	RecentNotes           []DetectionRunNote          `gorm:"-" json:"recent_notes,omitempty"`
 }
 
 func (DetectionTask) TableName() string {

@@ -85,6 +85,7 @@ func (s *DetectionRunsService) enqueueStartSnapshots(task models.DetectionTask) 
 		case s.channels.Store <- storeTask:
 			tag.MarkStorageRoutesStored(storeTask.StorageRoutes, now)
 		default:
+			s.channels.RecordDrop("store")
 			log.Printf("detection start snapshot dropped task_id=%d var_id=%d: store queue full", task.ID, tag.Config.VarID)
 		}
 	}
@@ -107,6 +108,7 @@ func (s *DetectionRunsService) evaluateOnStart(task models.DetectionTask) {
 			select {
 			case s.channels.Alarm <- event:
 			default:
+				s.channels.RecordDrop("alarm")
 				log.Printf("detection start alarm dropped task_id=%d var_id=%d: alarm queue full", task.ID, item.VarID)
 			}
 		}
@@ -197,6 +199,13 @@ func (s *DetectionRunsService) StorageRoutes(taskID uint) ([]models.DetectionRun
 	return s.repo.ListRunStorageRoutes(taskID)
 }
 
+func (s *DetectionRunsService) ReportRequests(taskID uint) ([]models.DetectionRunReportRequest, error) {
+	if _, err := s.repo.GetDetectionTask(taskID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListDetectionRunReportRequests(taskID)
+}
+
 func (s *DetectionRunsService) Summary(taskID uint) (models.DetectionRunSummary, error) {
 	return s.repo.RefreshDetectionRunSummary(taskID)
 }
@@ -284,6 +293,7 @@ func (s *DetectionRunsService) publishRunEventNotification(task models.Detection
 	select {
 	case s.channels.Notify <- notification:
 	default:
+		s.channels.RecordDrop("notify")
 		log.Printf("detection notification dropped type=%s task_id=%d: notify queue full", notificationType, task.ID)
 	}
 }
@@ -338,6 +348,7 @@ func (s *DetectionRunsService) publishDetectionResult(task models.DetectionTask,
 	select {
 	case s.channels.Notify <- notification:
 	default:
+		s.channels.RecordDrop("notify")
 		log.Printf("detection result notification dropped task_id=%d status=%s: notify queue full", task.ID, summary.ResultStatus)
 	}
 }

@@ -302,7 +302,15 @@ func (r *Repository) queryWideHistoryTable(filter HistoryFilter, tableName strin
 		return nil, nil
 	}
 	sort.Strings(columns)
-	selectColumns := []string{"id", "task_id", "test_no", "project_id", "project_code", "sample_time", "sample_bucket_ms"}
+	hasProjectID := r.db.Migrator().HasColumn(tableName, "project_id")
+	hasProjectCode := r.db.Migrator().HasColumn(tableName, "project_code")
+	selectColumns := []string{"id", "task_id", "test_no", "sample_time", "sample_bucket_ms"}
+	if hasProjectID {
+		selectColumns = append(selectColumns, "project_id")
+	}
+	if hasProjectCode {
+		selectColumns = append(selectColumns, "project_code")
+	}
 	selectColumns = append(selectColumns, columns...)
 	quoted := make([]string, 0, len(selectColumns))
 	dialect := r.db.Name()
@@ -316,7 +324,7 @@ func (r *Repository) queryWideHistoryTable(filter HistoryFilter, tableName strin
 	if filter.TestNo != "" {
 		query = query.Where("test_no = ?", filter.TestNo)
 	}
-	if filter.ProjectCode != "" {
+	if filter.ProjectCode != "" && hasProjectCode {
 		query = query.Where("project_code = ?", filter.ProjectCode)
 	}
 	if filter.Start != nil {
@@ -394,14 +402,19 @@ func scanWideHistoryRows(sqlRows *sql.Rows, dynamicColumns []string, routeByColu
 				continue
 			}
 			route := routeByColumn[column]
+			projectID := uint(int64FromSQL(fixed["project_id"]))
+			if projectID == 0 {
+				projectID = route.ProjectID
+			}
+			projectCode := stringFromSQL(fixed["project_code"])
 			row := models.HistoryData{
 				ID:          uint64(int64FromSQL(fixed["id"])),
-				ProjectID:   uint(int64FromSQL(fixed["project_id"])),
+				ProjectID:   projectID,
 				TaskID:      uint(int64FromSQL(fixed["task_id"])),
 				TestNo:      stringFromSQL(fixed["test_no"]),
 				VarID:       route.VarID,
 				VarName:     firstStorageName(route.QueryAlias, route.FormFieldKey, route.ColumnName),
-				ProjectCode: stringFromSQL(fixed["project_code"]),
+				ProjectCode: projectCode,
 				Quality:     1,
 				SourceTime:  timeFromSQL(fixed["sample_time"]),
 			}
@@ -461,6 +474,8 @@ func floatFromSQL(value any) float64 {
 
 func stringFromSQL(value any) string {
 	switch v := value.(type) {
+	case nil:
+		return ""
 	case string:
 		return v
 	case []byte:

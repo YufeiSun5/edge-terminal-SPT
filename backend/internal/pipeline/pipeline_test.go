@@ -1,6 +1,9 @@
 package pipeline
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +22,73 @@ func TestChannelsStats(t *testing.T) {
 	stats := channels.Stats()
 	if stats["logic"] != 1 || stats["discovery"] != 1 || stats["store"] != 1 || stats["alarm"] != 1 || stats["notify"] != 1 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	details := channels.DetailedStats()
+	if len(details) != 5 {
+		t.Fatalf("expected five detailed stats, got %+v", details)
+	}
+	if details[0].Name != "alarm" || details[0].Len != 1 || details[0].Cap != cap(channels.Alarm) {
+		t.Fatalf("unexpected first detailed stat: %+v", details[0])
+	}
+	channels.RecordDrop("alarm")
+	channels.RecordDrop("store")
+	details = channels.DetailedStats()
+	if details[0].Dropped != 1 || channels.DropCount("store") != 1 {
+		t.Fatalf("unexpected drop counters: details=%+v store=%d", details[0], channels.DropCount("store"))
+	}
+	diagnostics := channels.DetailedStatsWithDiagnosis(0.0001)
+	if len(diagnostics) != 5 || !diagnostics[0].Pressure || diagnostics[0].Impact == "" || diagnostics[0].NextAction == "" {
+		t.Fatalf("expected actionable diagnostics, got %+v", diagnostics)
+	}
+	if pressure := channels.Pressure(0.0001); len(pressure) != 5 {
+		t.Fatalf("expected all channels to be under pressure at low threshold, got %+v", pressure)
+	} else if pressure[0].Impact == "" || pressure[0].NextAction == "" {
+		t.Fatalf("expected pressure diagnostics, got %+v", pressure[0])
+	}
+	if pressure := channels.Pressure(1.0); len(pressure) != 0 {
+		t.Fatalf("expected no channel to be full, got %+v", pressure)
+	}
+}
+
+func TestRunRecoveringLogsPanic(t *testing.T) {
+	resetWorkerRecoveryStatsForTest()
+	var buffer bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&buffer)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+	}()
+
+	RunRecovering("unit-worker", func() {
+		panic("boom")
+	})
+
+	output := buffer.String()
+	if !strings.Contains(output, "[worker] panic recovered name=unit-worker") || !strings.Contains(output, "boom") {
+		t.Fatalf("expected panic recovery log, got %q", output)
+	}
+	stats := WorkerRecoveryStats()
+	if len(stats) != 1 || stats[0].Name != "unit-worker" || stats[0].Panics != 1 || stats[0].Active != 0 || stats[0].Health != "stopped_after_panic" {
+		t.Fatalf("unexpected worker recovery stats: %+v", stats)
+	}
+	if stats[0].Impact == "" || stats[0].NextAction == "" || !strings.Contains(stats[0].LastError, "boom") {
+		t.Fatalf("expected actionable worker diagnostics: %+v", stats[0])
+	}
+}
+
+func TestRunRecoveringTracksNormalExit(t *testing.T) {
+	resetWorkerRecoveryStatsForTest()
+	RunRecovering("short-worker", func() {})
+
+	stats := WorkerRecoveryStats()
+	if len(stats) != 1 || stats[0].Name != "short-worker" || stats[0].Starts != 1 || stats[0].Exits != 1 || stats[0].Panics != 0 || stats[0].Active != 0 {
+		t.Fatalf("unexpected worker recovery stats: %+v", stats)
+	}
+	if stats[0].Health != "ok" || stats[0].NextAction != "No action needed." || stats[0].LastStartedAt == nil || stats[0].LastExitedAt == nil {
+		t.Fatalf("expected normal worker diagnostics: %+v", stats[0])
 	}
 }
 

@@ -1,34 +1,27 @@
 import { Table } from 'antd'
 import type { TableColumnsType } from 'antd'
-import type { HistoryRow } from '../model'
+import { useTranslation } from 'react-i18next'
+import type { HistoryMetricColumn, HistorySeriesRow } from '../model'
 
 type HistoryTableProps = {
-  data: HistoryRow[]
+  data: HistorySeriesRow[]
+  metrics: HistoryMetricColumn[]
+  loading?: boolean
 }
 
-export function HistoryTable({ data }: HistoryTableProps) {
-  const columns: TableColumnsType<HistoryRow> = [
-    { title: '时间戳', dataIndex: 'time', key: 'time', fixed: 'left', width: 100, align: 'center' },
-    { title: '吹出口温度(℃)', dataIndex: 'tempOut', key: 'tempOut', width: 140, align: 'center' },
-    { title: '吹出口湿度(%RH)', dataIndex: 'humidOut', key: 'humidOut', width: 150, align: 'center' },
-    { title: '吸入口温度(℃)', dataIndex: 'tempIn', key: 'tempIn', width: 140, align: 'center' },
-    { title: '吸入口湿度(%RH)', dataIndex: 'humidIn', key: 'humidIn', width: 150, align: 'center' },
-    { title: '吸入风量(m³/h)', dataIndex: 'windIn', key: 'windIn', width: 140, align: 'center' },
-    { title: '设备噪音(dB)', dataIndex: 'noise', key: 'noise', width: 130, align: 'center' },
-    { title: '系统压力(kPa)', dataIndex: 'pressure', key: 'pressure', width: 130, align: 'center' },
-    { title: '设备功率(kW)', dataIndex: 'power', key: 'power', width: 130, align: 'center' },
-    { title: '震动位移(mm)', dataIndex: 'vibration', key: 'vibration', width: 130, align: 'center' },
+export function HistoryTable({ data, metrics, loading }: HistoryTableProps) {
+  const { t } = useTranslation()
+  const columns: TableColumnsType<HistorySeriesRow> = [
+    { title: t('history.table.time'), dataIndex: 'time', key: 'time', fixed: 'left', width: 150, align: 'center' },
+    ...metrics.map((metric) => ({
+      title: metric.title,
+      dataIndex: metric.key,
+      key: metric.key,
+      width: Math.max(150, Math.min(260, metric.title.length * 12)),
+      align: 'center' as const,
+      render: (value: number | string | null | undefined) => value ?? '--',
+    })),
   ]
-
-  for (let index = 1; index <= 32; index += 1) {
-    columns.push({
-      title: `测试指标 V${index}`,
-      dataIndex: `var${index}`,
-      key: `var${index}`,
-      width: 120,
-      align: 'center',
-    })
-  }
 
   return (
     <div className="history-table-wrap">
@@ -36,6 +29,7 @@ export function HistoryTable({ data }: HistoryTableProps) {
         className="antd-custom-table"
         columns={columns}
         dataSource={data}
+        loading={loading}
         rowKey="id"
         rowClassName={(_, index) => (index % 2 === 0 ? 'row-even' : 'row-odd')}
         scroll={{ x: 'max-content', y: 'calc(100cqh - 80px)' }}
@@ -44,7 +38,7 @@ export function HistoryTable({ data }: HistoryTableProps) {
           defaultPageSize: 100,
           showSizeChanger: true,
           pageSizeOptions: ['100', '200', '500'],
-          showTotal: (total) => `共 ${total} 条数据`,
+          showTotal: (total) => t('history.table.total', { total }),
           size: 'small',
           style: { marginTop: '12px', marginBottom: 0 },
         }}

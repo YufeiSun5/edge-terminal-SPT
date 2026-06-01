@@ -16,6 +16,7 @@ import type {
   DetectionRunListResponse,
   DetectionRunNotePayload,
   DetectionRunNotesResponse,
+  DetectionRunReportRequestsResponse,
   DetectionRunStartPayload,
   DetectionRunStopPayload,
   DetectionRunStorageRoutesResponse,
@@ -36,6 +37,9 @@ import type {
   NotificationListParams,
   NotificationListResponse,
   NotificationUnreadCount,
+  Project,
+  ProjectPatchPayload,
+  ProjectPayload,
   ProjectMemberUpdate,
   ProjectMembersResponse,
   RealtimeVariableListParams,
@@ -43,6 +47,9 @@ import type {
   ReportTemplate,
   ReportTemplateListParams,
   ReportTemplatePayload,
+  RuntimeChannelDetailsResponse,
+  RuntimeNotificationStats,
+  RuntimeWorkersResponse,
   StorageRoute,
   StorageRouteListParams,
   StorageRoutePayload,
@@ -54,6 +61,7 @@ import type {
   TaskFlowRunAccepted,
   TaskFlowRunListParams,
   TaskFlowRunListResponse,
+  TaskFlowRuntimeStats,
   TaskFlowSqlLog,
   TaskFlowTemplate,
   VariableAssignmentPayload,
@@ -70,6 +78,22 @@ export function getHealth() {
 
 export function getChannels() {
   return getJson<ChannelStats>("/api/v1/runtime/channels");
+}
+
+export function getRuntimeWorkers() {
+  return getJson<RuntimeWorkersResponse>("/api/v1/runtime/workers");
+}
+
+export function getRuntimeChannelDetails() {
+  return getJson<RuntimeChannelDetailsResponse>("/api/v1/runtime/channels/detail");
+}
+
+export function getRuntimeNotifications() {
+  return getJson<RuntimeNotificationStats>("/api/v1/runtime/notifications");
+}
+
+export function getTaskFlowRuntime() {
+  return getJson<TaskFlowRuntimeStats>("/api/v1/task-flows/runtime");
 }
 
 export function getDatabaseConfig() {
@@ -109,27 +133,47 @@ export function getAuditLogs(params: AuditLogListParams = {}) {
 }
 
 export function getNotifications(params: NotificationListParams = {}) {
-  const query = new URLSearchParams();
-  if (params.unread !== undefined) query.set("unread", String(params.unread));
-  if (params.type) query.set("type", params.type);
-  if (params.level) query.set("level", params.level);
-  if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  if (params.limit !== undefined) query.set("limit", String(params.limit));
-  if (params.offset !== undefined) query.set("offset", String(params.offset));
-  const suffix = query.toString();
-  return getJson<NotificationListResponse>(`/api/v1/notifications${suffix ? `?${suffix}` : ""}`);
+	const query = new URLSearchParams();
+	if (params.unread !== undefined) query.set("unread", String(params.unread));
+	if (params.type) query.set("type", params.type);
+	if (params.level) query.set("level", params.level);
+	if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+	if (params.from) query.set("from", params.from);
+	if (params.to) query.set("to", params.to);
+	if (params.keyword) query.set("keyword", params.keyword);
+	if (params.limit !== undefined) query.set("limit", String(params.limit));
+	if (params.offset !== undefined) query.set("offset", String(params.offset));
+	const suffix = query.toString();
+	return getJson<NotificationListResponse>(`/api/v1/notifications${suffix ? `?${suffix}` : ""}`);
 }
 
-export function getNotificationUnreadCount() {
-  return getJson<NotificationUnreadCount>("/api/v1/notifications/unread-count");
+export function getNotificationUnreadCount(params: NotificationListParams = {}) {
+	const query = new URLSearchParams();
+	if (params.type) query.set("type", params.type);
+	if (params.level) query.set("level", params.level);
+	if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+	if (params.from) query.set("from", params.from);
+	if (params.to) query.set("to", params.to);
+	if (params.keyword) query.set("keyword", params.keyword);
+	const suffix = query.toString();
+	return getJson<NotificationUnreadCount>(`/api/v1/notifications/unread-count${suffix ? `?${suffix}` : ""}`);
 }
 
 export function markNotificationRead(notificationId: number) {
   return postJson<{ ok: true }, Record<string, never>>(`/api/v1/notifications/${notificationId}/read`, {});
 }
 
-export function markAllNotificationsRead() {
-  return postJson<{ updated: number }, Record<string, never>>("/api/v1/notifications/read-all", {});
+export function markAllNotificationsRead(params: NotificationListParams = {}) {
+	const query = new URLSearchParams();
+	if (params.unread !== undefined) query.set("unread", String(params.unread));
+	if (params.type) query.set("type", params.type);
+	if (params.level) query.set("level", params.level);
+	if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+	if (params.from) query.set("from", params.from);
+	if (params.to) query.set("to", params.to);
+	if (params.keyword) query.set("keyword", params.keyword);
+	const suffix = query.toString();
+	return postJson<{ updated: number }, Record<string, never>>(`/api/v1/notifications/read-all${suffix ? `?${suffix}` : ""}`, {});
 }
 
 export function getLimitAlarms(params: LimitAlarmListParams = {}) {
@@ -159,8 +203,12 @@ export function getGatewayConfigs() {
   return getJson<GatewayConfig[]>("/api/v1/gateway-configs");
 }
 
+export function getProjects() {
+  return getJson<Project[]>("/api/v1/projects").then((items) => items.map(withProjectAliases));
+}
+
 export function getDevices() {
-  return getJson<Device[]>("/api/v1/projects").then((items) => items.map(withDeviceAliases));
+  return getProjects().then((items) => items.map(withDeviceAliases) as Device[]);
 }
 
 export function getProjectMembers(projectId: number) {
@@ -174,12 +222,20 @@ export function replaceProjectMembers(projectId: number, members: ProjectMemberU
   );
 }
 
+export function createProject(payload: ProjectPayload) {
+  return postJson<Project, Record<string, unknown>>("/api/v1/projects", withProjectPayload(payload)).then(withProjectAliases);
+}
+
 export function createDevice(payload: DevicePayload) {
   return postJson<Device, Record<string, unknown>>("/api/v1/projects", withProjectPayload(payload)).then(withDeviceAliases);
 }
 
+export function updateProject(projectId: number, payload: ProjectPatchPayload) {
+  return patchJson<Project, ProjectPatchPayload>(`/api/v1/projects/${projectId}`, payload).then(withProjectAliases);
+}
+
 export function updateDevice(deviceId: number, payload: DevicePatchPayload) {
-  return patchJson<Device, DevicePatchPayload>(`/api/v1/projects/${deviceId}`, payload).then(withDeviceAliases);
+  return updateProject(deviceId, payload).then(withDeviceAliases);
 }
 
 export function createGatewayConfig(payload: GatewayConfigPayload) {
@@ -339,6 +395,10 @@ export function getDetectionRunEvents(runId: number, limit = 200) {
     .then((response) => ({ ...response, items: response.items.map(withRunAliases) }));
 }
 
+export function getDetectionRunReportRequests(runId: number) {
+  return getJson<DetectionRunReportRequestsResponse>(`/api/v1/detection-runs/${runId}/report-requests`);
+}
+
 export function getDetectionRunStorageRoutes(runId: number) {
   return getJson<DetectionRunStorageRoutesResponse>(`/api/v1/detection-runs/${runId}/storage-routes`)
     .then((response) => ({ ...response, items: response.items.map(withStorageRouteAliases) }));
@@ -483,9 +543,16 @@ export function getTaskFlowSqlLogs(flowRunId: number, limit = 100) {
   return getJson<TaskFlowSqlLog[]>(`/api/v1/task-flow-runs/${flowRunId}/sql-logs?${query.toString()}`);
 }
 
-function withDeviceAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
+function withProjectAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
   return {
     ...item,
+    project_code: item.project_code || item.device_code || "",
+  };
+}
+
+function withDeviceAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
+  return {
+    ...withProjectAliases(item),
     device_code: item.device_code || item.project_code || "",
   };
 }

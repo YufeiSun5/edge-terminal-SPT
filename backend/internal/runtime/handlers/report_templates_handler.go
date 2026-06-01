@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"spindle-edge/backend/internal/auth"
 	"spindle-edge/backend/internal/database"
@@ -17,25 +19,29 @@ type ReportTemplatesHandler struct {
 }
 
 type reportTemplateCreateRequest struct {
-	TemplateCode string `json:"template_code" binding:"required"`
-	Name         string `json:"name" binding:"required"`
-	DisplayName  string `json:"display_name"`
-	FileRef      string `json:"file_ref" binding:"required"`
-	FileKind     string `json:"file_kind"`
-	Version      int    `json:"version"`
-	Enabled      *bool  `json:"enabled"`
-	Remark       string `json:"remark"`
+	TemplateCode     string           `json:"template_code" binding:"required"`
+	Name             string           `json:"name" binding:"required"`
+	DisplayName      string           `json:"display_name"`
+	FileRef          string           `json:"file_ref" binding:"required"`
+	FileKind         string           `json:"file_kind"`
+	Version          int              `json:"version"`
+	ParamsSchema     *json.RawMessage `json:"params_schema"`
+	ParamsSchemaJSON *string          `json:"params_schema_json"`
+	Enabled          *bool            `json:"enabled"`
+	Remark           string           `json:"remark"`
 }
 
 type reportTemplatePatchRequest struct {
-	TemplateCode *string `json:"template_code"`
-	Name         *string `json:"name"`
-	DisplayName  *string `json:"display_name"`
-	FileRef      *string `json:"file_ref"`
-	FileKind     *string `json:"file_kind"`
-	Version      *int    `json:"version"`
-	Enabled      *bool   `json:"enabled"`
-	Remark       *string `json:"remark"`
+	TemplateCode     *string          `json:"template_code"`
+	Name             *string          `json:"name"`
+	DisplayName      *string          `json:"display_name"`
+	FileRef          *string          `json:"file_ref"`
+	FileKind         *string          `json:"file_kind"`
+	Version          *int             `json:"version"`
+	ParamsSchema     *json.RawMessage `json:"params_schema"`
+	ParamsSchemaJSON *string          `json:"params_schema_json"`
+	Enabled          *bool            `json:"enabled"`
+	Remark           *string          `json:"remark"`
 }
 
 func NewReportTemplatesHandler(service *services.ReportTemplatesService) *ReportTemplatesHandler {
@@ -70,14 +76,15 @@ func (h *ReportTemplatesHandler) create(c *gin.Context) {
 		return
 	}
 	template, err := h.service.Create(services.CreateReportTemplateInput{
-		TemplateCode: req.TemplateCode,
-		Name:         req.Name,
-		DisplayName:  req.DisplayName,
-		FileRef:      req.FileRef,
-		FileKind:     req.FileKind,
-		Version:      req.Version,
-		Enabled:      req.Enabled,
-		Remark:       req.Remark,
+		TemplateCode:     req.TemplateCode,
+		Name:             req.Name,
+		DisplayName:      req.DisplayName,
+		FileRef:          req.FileRef,
+		FileKind:         req.FileKind,
+		Version:          req.Version,
+		ParamsSchemaJSON: reportTemplateParamsSchemaText(req.ParamsSchema, req.ParamsSchemaJSON),
+		Enabled:          req.Enabled,
+		Remark:           req.Remark,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -143,6 +150,9 @@ func reportTemplateUpdates(req reportTemplatePatchRequest) (map[string]interface
 	setString(updates, "display_name", req.DisplayName)
 	setString(updates, "file_ref", req.FileRef)
 	setString(updates, "file_kind", req.FileKind)
+	if req.ParamsSchema != nil || req.ParamsSchemaJSON != nil {
+		updates["params_schema_json"] = reportTemplateParamsSchemaText(req.ParamsSchema, req.ParamsSchemaJSON)
+	}
 	if req.Version != nil {
 		if *req.Version <= 0 {
 			return nil, fmt.Errorf("version must be positive")
@@ -154,6 +164,16 @@ func reportTemplateUpdates(req reportTemplatePatchRequest) (map[string]interface
 	}
 	setString(updates, "remark", req.Remark)
 	return updates, nil
+}
+
+func reportTemplateParamsSchemaText(raw *json.RawMessage, rawText *string) string {
+	if rawText != nil {
+		return *rawText
+	}
+	if raw != nil {
+		return strings.TrimSpace(string(*raw))
+	}
+	return ""
 }
 
 func setString(updates map[string]interface{}, column string, value *string) {

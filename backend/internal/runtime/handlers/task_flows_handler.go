@@ -81,6 +81,7 @@ func (h *TaskFlowsHandler) Register(group *gin.RouterGroup, authService *auth.Se
 	group.GET("/task-modules", authService.RequirePermission(auth.PermSystemSettings), h.modules)
 	group.GET("/task-flow-templates", authService.RequirePermission(auth.PermSystemSettings), h.templates)
 	group.GET("/task-flows", authService.RequirePermission(auth.PermSystemSettings), h.list)
+	group.GET("/task-flows/runtime", authService.RequirePermission(auth.PermSystemSettings), h.runtime)
 	group.GET("/task-flows/:id", authService.RequirePermission(auth.PermSystemSettings), h.get)
 	group.POST("/task-flows", authService.RequirePermission(auth.PermSystemSettings), h.create)
 	group.PATCH("/task-flows/:id", authService.RequirePermission(auth.PermSystemSettings), h.patch)
@@ -110,6 +111,7 @@ func (h *TaskFlowsHandler) modules(c *gin.Context) {
 				"qualified_hold_ms":     gin.H{"type": "number", "required": false, "source": []string{"literal", "trigger_param", "context"}},
 				"operator_note":         gin.H{"type": "text", "required": false, "source": []string{"literal", "trigger_param", "context"}},
 				"report_template_id":    gin.H{"type": "report_template", "required": false, "source": []string{"literal", "trigger_param", "context"}},
+				"report_request":        gin.H{"type": "object", "required": false, "source": []string{"trigger_param", "context"}, "description": "本次检测需要主服务器生成报表的请求快照；推荐 reports[]，每项选择模板、变量组和 params 参数。旧 variables/var_ids/variable_names/ext_* 仍兼容。"},
 				"process_params":        gin.H{"type": "object", "required": false, "source": []string{"trigger_param", "context"}, "description": "本次检测的工艺/报表参数，例如进风口面积、工装编号或环境修正参数；随检测冻结用于追溯。"},
 				"plc_writes":            gin.H{"type": "array", "required": false, "source": []string{"trigger_param", "context"}, "description": "本次检测关联的 PLC 下设计划；实际写入应由 builtin.write_control_variables 执行。"},
 				"enable_storage":        gin.H{"type": "boolean", "required": false, "default": true},
@@ -339,6 +341,7 @@ func (h *TaskFlowsHandler) templates(c *gin.Context) {
 						"qualified_hold_ms":     gin.H{"source": "trigger_param", "key": "qualified_hold_ms", "optional": true},
 						"operator_note":         gin.H{"source": "trigger_param", "key": "operator_note", "optional": true},
 						"report_template_id":    gin.H{"source": "trigger_param", "key": "report_template_id", "optional": true},
+						"report_request":        gin.H{"source": "trigger_param", "key": "report_request", "optional": true},
 						"enable_storage":        gin.H{"source": "trigger_param", "key": "enable_storage", "default": true},
 						"enable_alarm":          gin.H{"source": "trigger_param", "key": "enable_alarm", "default": true},
 						"auto_stop_on_duration": gin.H{"source": "trigger_param", "key": "auto_stop_on_duration", "default": false},
@@ -424,6 +427,7 @@ func (h *TaskFlowsHandler) templates(c *gin.Context) {
 						"duration_sec":          gin.H{"source": "trigger_param", "key": "duration_sec"},
 						"operator_note":         gin.H{"source": "trigger_param", "key": "operator_note", "optional": true},
 						"report_template_id":    gin.H{"source": "trigger_param", "key": "report_template_id", "optional": true},
+						"report_request":        gin.H{"source": "trigger_param", "key": "report_request", "optional": true},
 						"enable_storage":        gin.H{"source": "trigger_param", "key": "enable_storage", "default": true},
 						"enable_alarm":          gin.H{"source": "trigger_param", "key": "enable_alarm", "default": true},
 						"auto_stop_on_duration": true,
@@ -462,6 +466,7 @@ func (h *TaskFlowsHandler) templates(c *gin.Context) {
 						"qualified_hold_ms":   gin.H{"source": "trigger_param", "key": "qualified_hold_ms"},
 						"operator_note":       gin.H{"source": "trigger_param", "key": "operator_note", "optional": true},
 						"report_template_id":  gin.H{"source": "trigger_param", "key": "report_template_id", "optional": true},
+						"report_request":      gin.H{"source": "trigger_param", "key": "report_request", "optional": true},
 						"enable_storage":      gin.H{"source": "trigger_param", "key": "enable_storage", "default": true},
 						"enable_alarm":        gin.H{"source": "trigger_param", "key": "enable_alarm", "default": true},
 					},
@@ -610,6 +615,14 @@ func (h *TaskFlowsHandler) templates(c *gin.Context) {
 			"condition_script": `task_params.command === "write_control_variables"`,
 		},
 	})
+}
+
+func (h *TaskFlowsHandler) runtime(c *gin.Context) {
+	if h.flows == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "task flow executor is not available"})
+		return
+	}
+	c.JSON(http.StatusOK, h.flows.RuntimeStats(0.8))
 }
 
 func (h *TaskFlowsHandler) list(c *gin.Context) {

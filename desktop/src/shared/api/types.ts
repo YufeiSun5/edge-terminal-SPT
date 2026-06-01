@@ -6,6 +6,66 @@ export type ChannelStats = {
   notify?: number;
 };
 
+export type RuntimeQueueDiagnostic = {
+  name: string;
+  len: number;
+  cap: number;
+  usage: number;
+  dropped: number;
+  pressure: boolean;
+  impact: string;
+  next_action: string;
+};
+
+export type RuntimeChannelDetailsResponse = {
+  items: RuntimeQueueDiagnostic[];
+  pressure: RuntimeQueueDiagnostic[];
+  pressure_threshold: number;
+};
+
+export type RuntimeNotificationStats = {
+  subscribers: number;
+  buffered: number;
+  capacity: number;
+  usage: number;
+  pressure_threshold: number;
+  pressure: boolean;
+  impact: string;
+  next_action: string;
+  published: number;
+  delivered: number;
+  dropped: number;
+};
+
+export type RuntimeWorkerStat = {
+  name: string;
+  active: number;
+  starts: number;
+  exits: number;
+  panics: number;
+  health: "ok" | "degraded" | "stopped_after_panic" | string;
+  impact: string;
+  next_action: string;
+  last_started_at?: string;
+  last_exited_at?: string;
+  last_panic_at?: string;
+  last_error?: string;
+};
+
+export type RuntimeWorkersResponse = {
+  items: RuntimeWorkerStat[];
+};
+
+export type TaskFlowRuntimeStats = {
+  queue: RuntimeQueueDiagnostic;
+  guards: number;
+  submitted: number;
+  enqueued: number;
+  dropped: number;
+  pressure_threshold: number;
+  pressure: boolean;
+};
+
 export type GatewayStatus = {
   active: boolean;
   client_id: string;
@@ -106,6 +166,7 @@ export type UserNotification = {
   message: string;
   payload: Record<string, unknown>;
   occurred_at: string;
+  expires_at?: string;
   created_at: string;
   read_at?: string;
 };
@@ -115,6 +176,9 @@ export type NotificationListParams = {
   type?: string;
   level?: string;
   project_id?: number;
+  from?: string;
+  to?: string;
+  keyword?: string;
   limit?: number;
   offset?: number;
 };
@@ -425,10 +489,10 @@ export type CommandAcceptedResponse = {
   status?: string;
 };
 
-export type Device = {
+export type Project = {
   id: number;
   project_code: string;
-  device_code: string;
+  device_code?: string;
   site_no: string;
   name: string;
   display_name: string;
@@ -444,6 +508,22 @@ export type Device = {
   updated_at: string;
 };
 
+export type Device = Project & {
+  device_code: string;
+};
+
+export type ProjectPayload = {
+  project_code: string;
+  site_no?: string;
+  name?: string;
+  display_name?: string;
+  display_name_en?: string;
+  display_name_ja?: string;
+  model_name?: string;
+  image_ref?: string;
+  placeholder?: boolean;
+};
+
 export type DevicePayload = {
   project_code?: string;
   device_code: string;
@@ -457,7 +537,7 @@ export type DevicePayload = {
   placeholder?: boolean;
 };
 
-export type DevicePatchPayload = Partial<{
+export type ProjectPatchPayload = Partial<{
   site_no: string;
   name: string;
   display_name: string;
@@ -469,6 +549,8 @@ export type DevicePatchPayload = Partial<{
   blocked: boolean;
   placeholder: boolean;
 }>;
+
+export type DevicePatchPayload = ProjectPatchPayload;
 
 export type VariableAssignmentPayload = {
   project_id?: number;
@@ -643,6 +725,50 @@ export type DetectionRunReport = {
   updated_at: string;
 };
 
+export type DetectionRunReportRequestVariable = {
+  var_id?: VarIdentifier;
+  var_name?: string;
+  report_name?: string;
+  ext_1?: string;
+  ext_2?: string;
+  ext_3?: string;
+};
+
+export type DetectionRunReportRequestPayload = {
+  variables?: DetectionRunReportRequestVariable[];
+  var_ids?: VarIdentifier[];
+  variable_names?: string[];
+  ext_1?: string;
+  ext_2?: string;
+  ext_3?: string;
+};
+
+export type DetectionRunReportRequest = {
+  id: number;
+  task_id: number;
+  test_no: string;
+  project_id: number;
+  project_code: string;
+  var_id: VarIdentifier;
+  var_id_text?: string;
+  var_name: string;
+  display_name: string;
+  display_name_en: string;
+  display_name_ja: string;
+  report_name: string;
+  status: string;
+  ext_1: string;
+  ext_2: string;
+  ext_3: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DetectionRunReportRequestsResponse = {
+  items: DetectionRunReportRequest[];
+  count: number;
+};
+
 export type DetectionRunEvent = {
   id: number;
   task_id: number;
@@ -714,6 +840,7 @@ export type DetectionRun = {
   standard_items?: DetectionRunStandardItem[];
   storage_routes?: DetectionRunStorageRoute[];
   reports?: DetectionRunReport[];
+  report_requests?: DetectionRunReportRequest[];
   recent_notes?: DetectionRunNote[];
 };
 
@@ -744,6 +871,7 @@ export type DetectionRunStartPayload = {
   duration_sec?: number;
   operator_note?: string;
   report_template_id?: number;
+  report_request?: DetectionRunReportRequestPayload;
 };
 
 export type DetectionRunStopPayload = {

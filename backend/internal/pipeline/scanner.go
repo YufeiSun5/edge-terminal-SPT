@@ -6,7 +6,7 @@ import (
 )
 
 func StartCycleScanner(channels *Channels, tags *TagManager, tasks *TaskManager) {
-	go func() {
+	GoRecovering("cycle-scanner", func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 
@@ -22,9 +22,10 @@ func StartCycleScanner(channels *Channels, tags *TagManager, tasks *TaskManager)
 				case channels.Store <- task:
 					tag.MarkStorageRoutesStored(task.StorageRoutes, now)
 				default:
+					channels.RecordDrop("store")
 					log.Printf("[scanner] store queue full, drop var_id=%d", task.VarID)
 				}
 			}
 		}
-	}()
+	})
 }

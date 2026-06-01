@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +77,7 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 	}
 	var snapshotItems []models.DetectionRunStandardItem
 	var runStorageRoutes []models.DetectionRunStorageRoute
+	var reportRequests []models.DetectionRunReportRequest
 
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		var Project models.Project
@@ -188,6 +190,15 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 			}
 		}
 		var err error
+		reportRequests, err = buildDetectionRunReportRequests(tx, task, opts.ReportRequest, snapshotItems)
+		if err != nil {
+			return err
+		}
+		if len(reportRequests) > 0 {
+			if err := NewRepository(tx).CreateDetectionRunReportRequests(reportRequests); err != nil {
+				return err
+			}
+		}
 		runStorageRoutes, err = freezeDetectionRunStorageRoutes(tx, task, snapshotItems, now)
 		if err != nil {
 			return err
@@ -204,6 +215,7 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 	}
 	task.StandardItems = snapshotItems
 	task.StorageRoutes = runStorageRoutes
+	task.ReportRequests = reportRequests
 	return task, nil
 }
 
@@ -400,6 +412,7 @@ func (r *Repository) GetDetectionTask(id uint) (models.DetectionTask, error) {
 	task.StorageRoutes = routes
 	task.RecentNotes, _ = r.ListDetectionRunNotes(id, 5)
 	task.Reports, _ = r.ListDetectionRunReports(id)
+	task.ReportRequests, _ = r.ListDetectionRunReportRequests(id)
 	return task, nil
 }
 
@@ -888,8 +901,14 @@ func (r *Repository) CreateDetectionStandard(standard *models.DetectionStandard,
 	if standard.Version == 0 {
 		standard.Version = 1
 	}
+	if err := validateDetectionStandardItems(items); err != nil {
+		return err
+	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(standard).Error; err != nil {
+			return err
+		}
+		if err := hydrateDetectionStandardItemDisplayFields(tx, items); err != nil {
 			return err
 		}
 		for i := range items {
@@ -918,12 +937,18 @@ func (r *Repository) UpdateDetectionStandard(id uint, updates map[string]interfa
 
 func (r *Repository) ReplaceDetectionStandardItems(standardID uint, items []models.DetectionStandardItem) (models.DetectionStandard, error) {
 	now := time.Now()
+	if err := validateDetectionStandardItems(items); err != nil {
+		return models.DetectionStandard{}, err
+	}
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		var standard models.DetectionStandard
 		if err := tx.First(&standard, "id = ?", standardID).Error; err != nil {
 			return err
 		}
 		if err := tx.Delete(&models.DetectionStandardItem{}, "standard_id = ?", standardID).Error; err != nil {
+			return err
+		}
+		if err := hydrateDetectionStandardItemDisplayFields(tx, items); err != nil {
 			return err
 		}
 		for i := range items {
@@ -1067,6 +1092,58 @@ func applyDetectionStandardItemDefaults(item *models.DetectionStandardItem) {
 	}
 }
 
+func hydrateDetectionStandardItemDisplayFields(db *gorm.DB, items []models.DetectionStandardItem) error {
+	varIDs := make([]int64, 0, len(items))
+	seen := make(map[int64]struct{}, len(items))
+	for _, item := range items {
+		if item.VarID == 0 {
+			continue
+		}
+		if _, ok := seen[item.VarID]; ok {
+			continue
+		}
+		seen[item.VarID] = struct{}{}
+		varIDs = append(varIDs, item.VarID)
+	}
+	if len(varIDs) == 0 {
+		return nil
+	}
+	var tags []models.TagConfig
+	if err := db.Where("var_id IN ?", varIDs).Find(&tags).Error; err != nil {
+		return err
+	}
+	tagByVarID := make(map[int64]models.TagConfig, len(tags))
+	for _, tag := range tags {
+		tagByVarID[tag.VarID] = tag
+	}
+	for i := range items {
+		tag, ok := tagByVarID[items[i].VarID]
+		if !ok {
+			continue
+		}
+		fillDetectionStandardItemDisplayFields(&items[i], tag)
+	}
+	return nil
+}
+
+func fillDetectionStandardItemDisplayFields(item *models.DetectionStandardItem, tag models.TagConfig) {
+	if strings.TrimSpace(item.DisplayName) == "" {
+		item.DisplayName = tag.DisplayName
+	}
+	if strings.TrimSpace(item.DisplayNameEN) == "" {
+		item.DisplayNameEN = tag.DisplayNameEN
+	}
+	if strings.TrimSpace(item.DisplayNameJA) == "" {
+		item.DisplayNameJA = tag.DisplayNameJA
+	}
+	if strings.TrimSpace(item.Unit) == "" {
+		item.Unit = tag.Unit
+	}
+	if item.DecimalPlaces == 0 && tag.DecimalPlaces > 0 {
+		item.DecimalPlaces = tag.DecimalPlaces
+	}
+}
+
 func isValidDetectionEndPolicy(value string) bool {
 	switch value {
 	case models.DetectionEndPolicyManual, models.DetectionEndPolicyFixedDuration, models.DetectionEndPolicyQualifiedHold:
@@ -1076,8 +1153,616 @@ func isValidDetectionEndPolicy(value string) bool {
 	}
 }
 
+type reportRequestSpec struct {
+	Enabled         *bool
+	Reports         []reportRequestReportSpec
+	TemplateID      *uint
+	TemplateCode    string
+	TemplateVersion int
+	ReportName      string
+	Status          string
+	ParamsJSON      string
+	Ext1            string
+	Ext2            string
+	Ext3            string
+}
+
+type reportRequestReportSpec struct {
+	TemplateID      *uint
+	TemplateCode    string
+	TemplateVersion int
+	ReportName      string
+	Status          string
+	Variables       []reportRequestVariableSpec
+	ParamsJSON      string
+	Ext1            string
+	Ext2            string
+	Ext3            string
+}
+
+type reportRequestVariableSpec struct {
+	VarID         int64
+	VarName       string
+	DisplayName   string
+	DisplayNameEN string
+	DisplayNameJA string
+	ReportName    string
+	Status        string
+	Ext1          string
+	Ext2          string
+	Ext3          string
+}
+
+func buildDetectionRunReportRequests(db *gorm.DB, task *models.DetectionTask, raw any, snapshotItems []models.DetectionRunStandardItem) ([]models.DetectionRunReportRequest, error) {
+	spec, err := parseReportRequestSpec(raw)
+	if err != nil {
+		return nil, err
+	}
+	if spec.Enabled != nil && !*spec.Enabled {
+		return nil, nil
+	}
+	if len(spec.Reports) == 0 {
+		return nil, nil
+	}
+	byID := make(map[int64]models.DetectionRunStandardItem, len(snapshotItems))
+	byName := make(map[string]models.DetectionRunStandardItem, len(snapshotItems))
+	for _, item := range snapshotItems {
+		byID[item.VarID] = item
+		if strings.TrimSpace(item.VarName) != "" {
+			byName[item.VarName] = item
+		}
+	}
+	allVariables := make([]reportRequestVariableSpec, 0)
+	for _, report := range spec.Reports {
+		allVariables = append(allVariables, report.Variables...)
+	}
+	tagByID, tagByName, err := loadReportRequestTags(db, task.ProjectID, allVariables)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]models.DetectionRunReportRequest, 0, len(spec.Reports))
+	for _, report := range spec.Reports {
+		if len(report.Variables) == 0 {
+			return nil, fmt.Errorf("report_request reports require at least one variable")
+		}
+		variables := make([]reportRequestVariableSpec, 0, len(report.Variables))
+		seen := make(map[string]struct{}, len(report.Variables))
+		for _, variable := range report.Variables {
+			resolved, err := resolveReportRequestVariable(variable, byID, byName, tagByID, tagByName)
+			if err != nil {
+				return nil, err
+			}
+			key := reportRequestDedupeKey(resolved)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			variables = append(variables, resolved)
+		}
+		if len(variables) == 0 {
+			return nil, fmt.Errorf("report_request reports require at least one variable")
+		}
+		templateID, templateCode, templateVersion, err := resolveReportRequestTemplate(db, task, report)
+		if err != nil {
+			return nil, err
+		}
+		variablesJSON, err := reportVariablesJSON(variables)
+		if err != nil {
+			return nil, err
+		}
+		paramsJSON := firstNonEmpty(report.ParamsJSON, "{}")
+		if _, err := normalizeJSONObject(paramsJSON, "report_request.params"); err != nil {
+			return nil, err
+		}
+		primary := variables[0]
+		status := firstNonEmpty(primary.Status, report.Status, spec.Status, "pending")
+		out = append(out, models.DetectionRunReportRequest{
+			TaskID:          task.ID,
+			TestNo:          task.TestNo,
+			ProjectID:       task.ProjectID,
+			ProjectCode:     task.ProjectCode,
+			TemplateID:      templateID,
+			TemplateCode:    templateCode,
+			TemplateVersion: templateVersion,
+			VarID:           primary.VarID,
+			VarName:         primary.VarName,
+			DisplayName:     primary.DisplayName,
+			DisplayNameEN:   primary.DisplayNameEN,
+			DisplayNameJA:   primary.DisplayNameJA,
+			ReportName:      firstNonEmpty(primary.ReportName, report.ReportName, spec.ReportName),
+			VariablesJSON:   variablesJSON,
+			ParamsJSON:      paramsJSON,
+			Status:          status,
+			Ext1:            firstNonEmpty(primary.Ext1, report.Ext1, spec.Ext1),
+			Ext2:            firstNonEmpty(primary.Ext2, report.Ext2, spec.Ext2),
+			Ext3:            firstNonEmpty(primary.Ext3, report.Ext3, spec.Ext3),
+		})
+	}
+	return out, nil
+}
+
+func parseReportRequestSpec(raw any) (reportRequestSpec, error) {
+	var spec reportRequestSpec
+	if raw == nil {
+		return spec, nil
+	}
+	var decoded map[string]any
+	switch typed := raw.(type) {
+	case map[string]any:
+		decoded = typed
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return spec, nil
+		}
+		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+			return spec, fmt.Errorf("report_request is invalid JSON")
+		}
+	default:
+		buf, err := json.Marshal(raw)
+		if err != nil {
+			return spec, fmt.Errorf("report_request is invalid")
+		}
+		if err := json.Unmarshal(buf, &decoded); err != nil {
+			return spec, fmt.Errorf("report_request is invalid")
+		}
+	}
+	if decoded == nil {
+		return spec, nil
+	}
+	if rawEnabled, ok := decoded["enabled"]; ok {
+		value := boolFromReportAny(rawEnabled, true)
+		spec.Enabled = &value
+	}
+	spec.TemplateID = uintPtrFromReportAny(firstMapValue(decoded, "template_id", "report_template_id"))
+	spec.TemplateCode = reportString(firstMapValue(decoded, "template_code", "report_template_code"))
+	spec.TemplateVersion = int(reportInt64(firstMapValue(decoded, "template_version", "report_template_version")))
+	spec.ReportName = reportString(decoded["report_name"])
+	spec.Status = reportString(decoded["status"])
+	paramsJSON, err := reportParamsJSON(firstMapValue(decoded, "params", "params_json"))
+	if err != nil {
+		return spec, err
+	}
+	spec.ParamsJSON = paramsJSON
+	spec.Ext1 = reportString(firstMapValue(decoded, "ext_1", "ext1"))
+	spec.Ext2 = reportString(firstMapValue(decoded, "ext_2", "ext2"))
+	spec.Ext3 = reportString(firstMapValue(decoded, "ext_3", "ext3"))
+	reports, err := reportRequestsFromAny(firstMapValue(decoded, "reports", "report_requests"), spec)
+	if err != nil {
+		return spec, err
+	}
+	spec.Reports = append(spec.Reports, reports...)
+	if len(spec.Reports) == 0 {
+		variables := make([]reportRequestVariableSpec, 0)
+		variables = append(variables, reportVariablesFromAny(decoded["variables"])...)
+		variables = append(variables, reportVariablesFromIDs(decoded["var_ids"])...)
+		variables = append(variables, reportVariablesFromNames(decoded["variable_names"])...)
+		if len(variables) == 0 && (decoded["var_id"] != nil || decoded["var_name"] != nil) {
+			variables = append(variables, reportVariableFromMap(decoded))
+		}
+		for _, variable := range variables {
+			spec.Reports = append(spec.Reports, reportRequestReportSpec{
+				TemplateID:      spec.TemplateID,
+				TemplateCode:    spec.TemplateCode,
+				TemplateVersion: spec.TemplateVersion,
+				ReportName:      spec.ReportName,
+				Status:          spec.Status,
+				Variables:       []reportRequestVariableSpec{variable},
+				ParamsJSON:      firstNonEmpty(spec.ParamsJSON, "{}"),
+				Ext1:            spec.Ext1,
+				Ext2:            spec.Ext2,
+				Ext3:            spec.Ext3,
+			})
+		}
+	}
+	return spec, nil
+}
+
+func reportRequestsFromAny(raw any, parent reportRequestSpec) ([]reportRequestReportSpec, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, nil
+	}
+	out := make([]reportRequestReportSpec, 0, len(items))
+	for _, item := range items {
+		value, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("report_request.reports must contain objects")
+		}
+		paramsJSON, err := reportParamsJSON(firstMapValue(value, "params", "params_json"))
+		if err != nil {
+			return nil, err
+		}
+		variables := make([]reportRequestVariableSpec, 0)
+		variables = append(variables, reportVariablesFromAny(value["variables"])...)
+		variables = append(variables, reportVariablesFromIDs(value["var_ids"])...)
+		variables = append(variables, reportVariablesFromNames(value["variable_names"])...)
+		if len(variables) == 0 && (value["var_id"] != nil || value["var_name"] != nil) {
+			variables = append(variables, reportVariableFromMap(value))
+		}
+		out = append(out, reportRequestReportSpec{
+			TemplateID:      firstUintPtr(uintPtrFromReportAny(firstMapValue(value, "template_id", "report_template_id")), parent.TemplateID),
+			TemplateCode:    firstNonEmpty(reportString(firstMapValue(value, "template_code", "report_template_code")), parent.TemplateCode),
+			TemplateVersion: firstPositiveInt(int(reportInt64(firstMapValue(value, "template_version", "report_template_version"))), parent.TemplateVersion),
+			ReportName:      firstNonEmpty(reportString(value["report_name"]), parent.ReportName),
+			Status:          firstNonEmpty(reportString(value["status"]), parent.Status),
+			Variables:       variables,
+			ParamsJSON:      firstNonEmpty(paramsJSON, parent.ParamsJSON, "{}"),
+			Ext1:            firstNonEmpty(reportString(firstMapValue(value, "ext_1", "ext1")), parent.Ext1),
+			Ext2:            firstNonEmpty(reportString(firstMapValue(value, "ext_2", "ext2")), parent.Ext2),
+			Ext3:            firstNonEmpty(reportString(firstMapValue(value, "ext_3", "ext3")), parent.Ext3),
+		})
+	}
+	return out, nil
+}
+
+func reportVariablesFromAny(raw any) []reportRequestVariableSpec {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]reportRequestVariableSpec, 0, len(items))
+	for _, item := range items {
+		if value, ok := item.(map[string]any); ok {
+			out = append(out, reportVariableFromMap(value))
+		} else {
+			text := reportString(item)
+			if text != "" {
+				out = append(out, reportRequestVariableSpec{VarName: text})
+			}
+		}
+	}
+	return out
+}
+
+func reportVariablesFromIDs(raw any) []reportRequestVariableSpec {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]reportRequestVariableSpec, 0, len(items))
+	for _, item := range items {
+		if id := reportInt64(item); id != 0 {
+			out = append(out, reportRequestVariableSpec{VarID: id})
+		}
+	}
+	return out
+}
+
+func reportVariablesFromNames(raw any) []reportRequestVariableSpec {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]reportRequestVariableSpec, 0, len(items))
+	for _, item := range items {
+		if name := reportString(item); name != "" {
+			out = append(out, reportRequestVariableSpec{VarName: name})
+		}
+	}
+	return out
+}
+
+func reportVariableFromMap(value map[string]any) reportRequestVariableSpec {
+	return reportRequestVariableSpec{
+		VarID:         reportInt64(firstMapValue(value, "var_id", "var_id_text")),
+		VarName:       reportString(value["var_name"]),
+		DisplayName:   reportString(value["display_name"]),
+		DisplayNameEN: reportString(value["display_name_en"]),
+		DisplayNameJA: reportString(value["display_name_ja"]),
+		ReportName:    reportString(value["report_name"]),
+		Status:        reportString(value["status"]),
+		Ext1:          reportString(firstMapValue(value, "ext_1", "ext1")),
+		Ext2:          reportString(firstMapValue(value, "ext_2", "ext2")),
+		Ext3:          reportString(firstMapValue(value, "ext_3", "ext3")),
+	}
+}
+
+func resolveReportRequestVariable(variable reportRequestVariableSpec, byID map[int64]models.DetectionRunStandardItem, byName map[string]models.DetectionRunStandardItem, tagByID map[int64]models.TagConfig, tagByName map[string]models.TagConfig) (reportRequestVariableSpec, error) {
+	if variable.VarID == 0 && strings.TrimSpace(variable.VarName) == "" {
+		return variable, fmt.Errorf("report_request variables require var_id or var_name")
+	}
+	if variable.VarID == 0 {
+		if item, ok := byName[variable.VarName]; ok {
+			variable.VarID = item.VarID
+		} else if tag, ok := tagByName[variable.VarName]; ok {
+			variable.VarID = tag.VarID
+		}
+	}
+	if item, ok := byID[variable.VarID]; ok {
+		fillReportRequestVariableFromRunItem(&variable, item)
+	}
+	if tag, ok := tagByID[variable.VarID]; ok {
+		fillReportRequestVariableFromTag(&variable, tag)
+	} else if tag, ok := tagByName[variable.VarName]; ok {
+		fillReportRequestVariableFromTag(&variable, tag)
+	}
+	variable.VarName = strings.TrimSpace(variable.VarName)
+	if variable.VarName == "" {
+		return variable, fmt.Errorf("report_request variable name is required for var_id %d", variable.VarID)
+	}
+	return variable, nil
+}
+
+func resolveReportRequestTemplate(db *gorm.DB, task *models.DetectionTask, report reportRequestReportSpec) (*uint, string, int, error) {
+	if report.TemplateID != nil && *report.TemplateID > 0 {
+		template, err := getReportTemplate(db, *report.TemplateID)
+		if err != nil {
+			return nil, "", 0, err
+		}
+		return &template.ID, template.TemplateCode, template.Version, nil
+	}
+	if strings.TrimSpace(report.TemplateCode) != "" {
+		template, err := getReportTemplateByCode(db, report.TemplateCode)
+		if err == nil {
+			return &template.ID, template.TemplateCode, template.Version, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", 0, err
+		}
+		return nil, strings.TrimSpace(report.TemplateCode), report.TemplateVersion, nil
+	}
+	if task.ReportTemplateID != nil {
+		return task.ReportTemplateID, task.ReportTemplateCode, task.ReportTemplateVersion, nil
+	}
+	return nil, "", 0, nil
+}
+
+func reportVariablesJSON(variables []reportRequestVariableSpec) (string, error) {
+	items := make([]map[string]any, 0, len(variables))
+	for _, variable := range variables {
+		item := map[string]any{
+			"var_id":      variable.VarID,
+			"var_id_text": strconv.FormatInt(variable.VarID, 10),
+			"var_name":    variable.VarName,
+		}
+		setCompactString(item, "display_name", variable.DisplayName)
+		setCompactString(item, "display_name_en", variable.DisplayNameEN)
+		setCompactString(item, "display_name_ja", variable.DisplayNameJA)
+		items = append(items, item)
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func loadReportRequestTags(db *gorm.DB, projectID uint, variables []reportRequestVariableSpec) (map[int64]models.TagConfig, map[string]models.TagConfig, error) {
+	ids := make([]int64, 0, len(variables))
+	names := make([]string, 0, len(variables))
+	seenIDs := map[int64]struct{}{}
+	seenNames := map[string]struct{}{}
+	for _, variable := range variables {
+		if variable.VarID != 0 {
+			if _, ok := seenIDs[variable.VarID]; !ok {
+				seenIDs[variable.VarID] = struct{}{}
+				ids = append(ids, variable.VarID)
+			}
+		}
+		name := strings.TrimSpace(variable.VarName)
+		if name != "" {
+			if _, ok := seenNames[name]; !ok {
+				seenNames[name] = struct{}{}
+				names = append(names, name)
+			}
+		}
+	}
+	if len(ids) == 0 && len(names) == 0 {
+		return map[int64]models.TagConfig{}, map[string]models.TagConfig{}, nil
+	}
+	query := db.Model(&models.TagConfig{})
+	switch {
+	case len(ids) > 0 && len(names) > 0:
+		query = query.Where("var_id IN ? OR (project_id = ? AND var_name IN ?)", ids, projectID, names)
+	case len(ids) > 0:
+		query = query.Where("var_id IN ?", ids)
+	default:
+		query = query.Where("project_id = ? AND var_name IN ?", projectID, names)
+	}
+	var tags []models.TagConfig
+	if err := query.Find(&tags).Error; err != nil {
+		return nil, nil, err
+	}
+	byID := make(map[int64]models.TagConfig, len(tags))
+	byName := make(map[string]models.TagConfig, len(tags))
+	for _, tag := range tags {
+		byID[tag.VarID] = tag
+		if strings.TrimSpace(tag.VarName) != "" {
+			byName[tag.VarName] = tag
+		}
+	}
+	return byID, byName, nil
+}
+
+func fillReportRequestVariableFromRunItem(variable *reportRequestVariableSpec, item models.DetectionRunStandardItem) {
+	if variable.VarID == 0 {
+		variable.VarID = item.VarID
+	}
+	if strings.TrimSpace(variable.VarName) == "" {
+		variable.VarName = item.VarName
+	}
+	if strings.TrimSpace(variable.DisplayName) == "" {
+		variable.DisplayName = item.DisplayName
+	}
+	if strings.TrimSpace(variable.DisplayNameEN) == "" {
+		variable.DisplayNameEN = item.DisplayNameEN
+	}
+	if strings.TrimSpace(variable.DisplayNameJA) == "" {
+		variable.DisplayNameJA = item.DisplayNameJA
+	}
+}
+
+func fillReportRequestVariableFromTag(variable *reportRequestVariableSpec, tag models.TagConfig) {
+	if variable.VarID == 0 {
+		variable.VarID = tag.VarID
+	}
+	if strings.TrimSpace(variable.VarName) == "" {
+		variable.VarName = tag.VarName
+	}
+	if strings.TrimSpace(variable.DisplayName) == "" {
+		variable.DisplayName = tag.DisplayName
+	}
+	if strings.TrimSpace(variable.DisplayNameEN) == "" {
+		variable.DisplayNameEN = tag.DisplayNameEN
+	}
+	if strings.TrimSpace(variable.DisplayNameJA) == "" {
+		variable.DisplayNameJA = tag.DisplayNameJA
+	}
+}
+
+func reportRequestDedupeKey(variable reportRequestVariableSpec) string {
+	if variable.VarID != 0 {
+		return fmt.Sprintf("id:%d", variable.VarID)
+	}
+	return "name:" + variable.VarName
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstMapValue(values map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func boolFromReportAny(value any, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
+		default:
+			return fallback
+		}
+	default:
+		return reportInt64(value) != 0
+	}
+}
+
+func reportString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func reportInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case int32:
+		return int64(typed)
+	case uint:
+		return int64(typed)
+	case uint64:
+		if typed > uint64(^uint64(0)>>1) {
+			return 0
+		}
+		return int64(typed)
+	case uint32:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	case json.Number:
+		value, err := typed.Int64()
+		if err == nil {
+			return value
+		}
+		return 0
+	case string:
+		value, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		if err == nil {
+			return value
+		}
+		return 0
+	default:
+		return 0
+	}
+}
+
+func uintPtrFromReportAny(value any) *uint {
+	parsed := reportInt64(value)
+	if parsed <= 0 {
+		return nil
+	}
+	out := uint(parsed)
+	return &out
+}
+
+func firstUintPtr(values ...*uint) *uint {
+	for _, value := range values {
+		if value != nil && *value > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func reportParamsJSON(raw any) (string, error) {
+	if raw == nil {
+		return "", nil
+	}
+	switch typed := raw.(type) {
+	case string:
+		return normalizeJSONObject(typed, "report_request.params")
+	default:
+		buf, err := json.Marshal(typed)
+		if err != nil {
+			return "", fmt.Errorf("report_request.params is invalid")
+		}
+		return normalizeJSONObject(string(buf), "report_request.params")
+	}
+}
+
+func normalizeJSONObject(value string, field string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return "", fmt.Errorf("%s is invalid JSON", field)
+	}
+	if _, ok := decoded.(map[string]any); !ok {
+		return "", fmt.Errorf("%s must be a JSON object", field)
+	}
+	raw, _ := json.Marshal(decoded)
+	return string(raw), nil
+}
+
 func customDetectionConfigJSON(opts StartDetectionOptions) string {
-	if len(opts.CustomItems) == 0 && opts.ProcessParams == nil && opts.PLCWrites == nil {
+	if len(opts.CustomItems) == 0 && opts.ProcessParams == nil && opts.PLCWrites == nil && opts.ReportRequest == nil {
 		return ""
 	}
 	items := make([]map[string]interface{}, 0, len(opts.CustomItems))
@@ -1121,6 +1806,9 @@ func customDetectionConfigJSON(opts StartDetectionOptions) string {
 	}
 	if opts.PLCWrites != nil {
 		out["plc_writes"] = opts.PLCWrites
+	}
+	if opts.ReportRequest != nil {
+		out["report_request"] = opts.ReportRequest
 	}
 	raw, _ := json.Marshal(out)
 	return string(raw)

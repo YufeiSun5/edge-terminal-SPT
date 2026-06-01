@@ -285,6 +285,7 @@ CREATE TABLE IF NOT EXISTS sys_report_templates (
   file_ref VARCHAR(512) NOT NULL,
   file_kind VARCHAR(32) NOT NULL DEFAULT 'xlsx',
   version INT NOT NULL DEFAULT 1,
+  params_schema_json TEXT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   remark VARCHAR(255) DEFAULT '',
   created_at DATETIME(3) NULL,
@@ -424,6 +425,39 @@ CREATE TABLE IF NOT EXISTS detection_run_reports (
   INDEX idx_detection_run_reports_task_id (task_id),
   INDEX idx_detection_run_reports_template_id (template_id),
   INDEX idx_detection_run_reports_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS detection_run_report_requests (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  task_id BIGINT UNSIGNED NOT NULL,
+  test_no VARCHAR(128) DEFAULT '',
+  project_id BIGINT UNSIGNED NOT NULL,
+  project_code VARCHAR(64) DEFAULT '',
+  template_id BIGINT UNSIGNED NULL,
+  template_code VARCHAR(64) DEFAULT '',
+  template_version INT NOT NULL DEFAULT 0,
+  var_id BIGINT NOT NULL DEFAULT 0,
+  var_name VARCHAR(128) NOT NULL,
+  display_name VARCHAR(128) DEFAULT '',
+  display_name_en VARCHAR(128) DEFAULT '',
+  display_name_ja VARCHAR(128) DEFAULT '',
+  report_name VARCHAR(128) DEFAULT '',
+  variables_json TEXT NULL,
+  params_json TEXT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  ext_1 VARCHAR(255) DEFAULT '',
+  ext_2 VARCHAR(255) DEFAULT '',
+  ext_3 VARCHAR(255) DEFAULT '',
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  INDEX idx_detection_run_report_requests_task_id (task_id),
+  INDEX idx_detection_run_report_requests_project_id (project_id),
+  INDEX idx_detection_run_report_requests_test_no (test_no),
+  INDEX idx_detection_run_report_requests_template_id (template_id),
+  INDEX idx_detection_run_report_requests_template_code (template_code),
+  INDEX idx_detection_run_report_requests_var_id (var_id),
+  INDEX idx_detection_run_report_requests_var_name (var_name),
+  INDEX idx_detection_run_report_requests_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS detection_run_standard_items (
@@ -724,6 +758,7 @@ CREATE TABLE IF NOT EXISTS sys_notifications (
   message VARCHAR(512) DEFAULT '',
   payload JSON NULL,
   occurred_at DATETIME(3) NOT NULL,
+  expires_at DATETIME(3) NULL,
   created_at DATETIME(3) NULL,
   INDEX idx_notifications_type (type),
   INDEX idx_notifications_level (level),
@@ -735,7 +770,8 @@ CREATE TABLE IF NOT EXISTS sys_notifications (
   INDEX idx_notifications_test_no (test_no),
   INDEX idx_notifications_var_id (var_id),
   INDEX idx_notifications_var_name (var_name),
-  INDEX idx_notifications_occurred_at (occurred_at)
+  INDEX idx_notifications_occurred_at (occurred_at),
+  INDEX idx_notifications_expires_at (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_notification_recipients (

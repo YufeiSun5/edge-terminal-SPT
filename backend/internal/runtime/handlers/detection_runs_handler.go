@@ -18,13 +18,14 @@ type DetectionRunsHandler struct {
 }
 
 type startDetectionRequest struct {
-	ProjectID        uint   `json:"project_id" binding:"required"`
-	TestNo           string `json:"test_no" binding:"required"`
-	Mode             string `json:"mode" binding:"required"`
-	StandardID       *uint  `json:"standard_id"`
-	DurationSec      int    `json:"duration_sec"`
-	OperatorNote     string `json:"operator_note"`
-	ReportTemplateID *uint  `json:"report_template_id"`
+	ProjectID        uint           `json:"project_id" binding:"required"`
+	TestNo           string         `json:"test_no" binding:"required"`
+	Mode             string         `json:"mode" binding:"required"`
+	StandardID       *uint          `json:"standard_id"`
+	DurationSec      int            `json:"duration_sec"`
+	OperatorNote     string         `json:"operator_note"`
+	ReportTemplateID *uint          `json:"report_template_id"`
+	ReportRequest    map[string]any `json:"report_request"`
 }
 
 type stopDetectionRequest struct {
@@ -49,6 +50,7 @@ func (h *DetectionRunsHandler) Register(group *gin.RouterGroup, authService *aut
 	group.GET("/detection-runs/:id/features", authService.RequirePermission(auth.PermViewRealtime), h.features)
 	group.GET("/detection-runs/:id/events", authService.RequirePermission(auth.PermViewRealtime), h.listEvents)
 	group.GET("/detection-runs/:id/storage-routes", authService.RequirePermission(auth.PermViewRealtime), h.storageRoutes)
+	group.GET("/detection-runs/:id/report-requests", authService.RequirePermission(auth.PermViewRealtime), h.reportRequests)
 	group.POST("/detection-runs", authService.RequirePermission(auth.PermStartDetection), h.start)
 	group.POST("/detection-runs/:id/stop", authService.RequirePermission(auth.PermStopDetection), h.stop)
 	group.POST("/detection-runs/:id/abnormal-stop", authService.RequirePermission(auth.PermStopDetection), h.abnormalStop)
@@ -170,6 +172,20 @@ func (h *DetectionRunsHandler) storageRoutes(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": routes, "count": len(routes)})
 }
 
+func (h *DetectionRunsHandler) reportRequests(c *gin.Context) {
+	id, err := parseUintParam(c, "id", "invalid task id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	requests, err := h.service.ReportRequests(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": requests, "count": len(requests)})
+}
+
 func (h *DetectionRunsHandler) start(c *gin.Context) {
 	var req startDetectionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -184,6 +200,7 @@ func (h *DetectionRunsHandler) start(c *gin.Context) {
 		DurationSec:      req.DurationSec,
 		OperatorNote:     req.OperatorNote,
 		ReportTemplateID: req.ReportTemplateID,
+		ReportRequest:    req.ReportRequest,
 	})
 	if err != nil {
 		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})

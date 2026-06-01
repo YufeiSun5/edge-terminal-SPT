@@ -61,3 +61,17 @@ func TestRuntimeNotificationBuilders(t *testing.T) {
 		t.Fatalf("unexpected result notification: %+v", result)
 	}
 }
+
+func TestNotificationExpiresAt(t *testing.T) {
+	at := time.Date(2026, 5, 30, 18, 0, 0, 0, time.UTC)
+	expiresAt := NotificationExpiresAt(NotificationAlarmLimitEnter, at)
+	if expiresAt == nil || !expiresAt.Equal(at.AddDate(0, 0, AlarmNotificationRetentionDays)) {
+		t.Fatalf("unexpected alarm expires_at: %+v", expiresAt)
+	}
+	if expiresAt := NotificationExpiresAt(NotificationDetectionResultNG, at); expiresAt != nil {
+		t.Fatalf("non-alarm notification should not expire, got %+v", expiresAt)
+	}
+	if !IsAlarmNotificationType(NotificationAlarmLimitLevelChange) || IsAlarmNotificationType(NotificationDetectionRunStarted) {
+		t.Fatal("unexpected alarm notification type classification")
+	}
+}

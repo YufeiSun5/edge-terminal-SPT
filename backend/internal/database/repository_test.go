@@ -200,6 +200,128 @@ func TestRepositoryNotificationMethods(t *testing.T) {
 		t.Fatalf("expected duplicate event_uid to be ignored, got %d", totalNotifications)
 	}
 
+	expiredOccurredAt := time.Now().AddDate(0, 0, -models.AlarmNotificationRetentionDays-1)
+	expiredAlarm, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:          "event-expired-alarm",
+		Type:        models.NotificationAlarmLimitEnter,
+		Level:       models.NotificationLevelWarning,
+		ProjectID:   7,
+		ProjectCode: "AC-07",
+		Message:     "expired alarm",
+		OccurredAt:  expiredOccurredAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiredAlarm.ExpiresAt == nil || !expiredAlarm.ExpiresAt.Equal(expiredOccurredAt.AddDate(0, 0, models.AlarmNotificationRetentionDays)) {
+		t.Fatalf("unexpected expired alarm expires_at: %+v", expiredAlarm)
+	}
+	if unread, err := repo.CountUnreadNotifications(admin.ID); err != nil || unread != 0 {
+		t.Fatalf("expired alarm should not count as unread unread=%d err=%v", unread, err)
+	}
+	alarmItems, alarmTotal, err := repo.ListUserNotifications(NotificationListFilter{UserID: admin.ID, Type: models.NotificationAlarmLimitEnter, Limit: 10})
+	if err != nil || alarmTotal != 0 || len(alarmItems) != 0 {
+		t.Fatalf("expired alarm should be hidden items=%+v total=%d err=%v", alarmItems, alarmTotal, err)
+	}
+	if err := repo.MarkNotificationRead(admin.ID, expiredAlarm.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expired alarm should not be readable from notification center, got %v", err)
+	}
+	oldNonAlarm, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "event-old-non-alarm",
+		Type:       models.NotificationDetectionFeatures,
+		Level:      models.NotificationLevelInfo,
+		TargetType: models.NotificationTargetUser,
+		TargetID:   strconv.FormatUint(uint64(admin.ID), 10),
+		Message:    "old non-alarm",
+		OccurredAt: expiredOccurredAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldNonAlarm.ExpiresAt != nil {
+		t.Fatalf("non-alarm notification should not expire: %+v", oldNonAlarm)
+	}
+	if unread, err := repo.CountUnreadNotifications(admin.ID); err != nil || unread != 1 {
+		t.Fatalf("old non-alarm should remain visible unread=%d err=%v", unread, err)
+	}
+	if err := repo.MarkNotificationRead(admin.ID, oldNonAlarm.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	filterStart := time.Now().Add(-time.Minute)
+	filteredMatch, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "event-filter-match",
+		Type:       models.NotificationDetectionRunPaused,
+		Level:      models.NotificationLevelInfo,
+		TargetType: models.NotificationTargetUser,
+		TargetID:   strconv.FormatUint(uint64(admin.ID), 10),
+		ProjectID:  7,
+		Message:    "match target",
+		OccurredAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "event-filter-project-miss",
+		Type:       models.NotificationDetectionRunPaused,
+		Level:      models.NotificationLevelInfo,
+		TargetType: models.NotificationTargetUser,
+		TargetID:   strconv.FormatUint(uint64(admin.ID), 10),
+		ProjectID:  8,
+		Message:    "match target",
+		OccurredAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "event-filter-keyword-miss",
+		Type:       models.NotificationDetectionRunPaused,
+		Level:      models.NotificationLevelInfo,
+		TargetType: models.NotificationTargetUser,
+		TargetID:   strconv.FormatUint(uint64(admin.ID), 10),
+		ProjectID:  7,
+		Message:    "other target",
+		OccurredAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unread, err := repo.CountUnreadNotifications(admin.ID); err != nil || unread != 3 {
+		t.Fatalf("filtered setup unread=%d err=%v", unread, err)
+	}
+	if unread, err := repo.CountUnreadNotificationsWithFilter(NotificationListFilter{
+		UserID:    admin.ID,
+		Type:      models.NotificationDetectionRunPaused,
+		ProjectID: &projectID,
+		From:      &filterStart,
+		Keyword:   "match",
+	}); err != nil || unread != 1 {
+		t.Fatalf("filtered unread count=%d err=%v", unread, err)
+	}
+	updated, err = repo.MarkUserNotificationsRead(NotificationListFilter{
+		UserID:    admin.ID,
+		Type:      models.NotificationDetectionRunPaused,
+		ProjectID: &projectID,
+		From:      &filterStart,
+		Keyword:   "match",
+	})
+	if err != nil || updated != 1 {
+		t.Fatalf("filtered mark read updated=%d err=%v", updated, err)
+	}
+	var recipient models.SysNotificationRecipient
+	if err := db.Where("notification_id = ? AND user_id = ?", filteredMatch.ID, admin.ID).First(&recipient).Error; err != nil || recipient.ReadAt == nil {
+		t.Fatalf("filtered match should be read recipient=%+v err=%v", recipient, err)
+	}
+	if unread, err := repo.CountUnreadNotifications(admin.ID); err != nil || unread != 2 {
+		t.Fatalf("filtered mark should leave two unread notifications unread=%d err=%v", unread, err)
+	}
+	if updated, err := repo.MarkUserNotificationsRead(NotificationListFilter{UserID: admin.ID, Unread: boolTestPtr(false)}); err != nil || updated != 0 {
+		t.Fatalf("read-all with unread=false should be no-op updated=%d err=%v", updated, err)
+	}
+	if _, err := repo.MarkAllNotificationsRead(admin.ID); err != nil {
+		t.Fatal(err)
+	}
+
 	roleNotification := &models.RuntimeNotification{
 		ID:         "event-role",
 		Type:       models.NotificationDetectionRunPaused,
@@ -678,6 +800,15 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 			StoreEnabled: true,
 			LimitH:       &limitH,
 		}},
+		ReportRequest: map[string]any{
+			"report_name": "default variable report",
+			"ext_2":       "global-ext",
+			"variables": []any{map[string]any{
+				"var_id":      "100",
+				"report_name": "temp report",
+				"ext_1":       "operator-note",
+			}},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -685,8 +816,21 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if customTask.StandardID != nil || customTask.StandardCode != "custom" || customTask.CustomConfigJSON == "" || customTask.LimitCheckEnabled || strings.Contains(customTask.CustomConfigJSON, "created_at") {
 		t.Fatalf("unexpected custom task: %+v", customTask)
 	}
+	if !strings.Contains(customTask.CustomConfigJSON, `"report_request"`) {
+		t.Fatalf("expected report request frozen in custom_config_json=%s", customTask.CustomConfigJSON)
+	}
 	if len(customTask.StandardItems) != 1 || customTask.StandardItems[0].CheckEnabled || customTask.StandardItems[0].AlarmEnabled {
 		t.Fatalf("limit_check_enabled=false should disable check/alarm in snapshot: %+v", customTask.StandardItems)
+	}
+	if len(customTask.ReportRequests) != 1 || customTask.ReportRequests[0].VarID != 100 || customTask.ReportRequests[0].VarName != "temp" || customTask.ReportRequests[0].ReportName != "temp report" || customTask.ReportRequests[0].Ext1 != "operator-note" || customTask.ReportRequests[0].Ext2 != "global-ext" {
+		t.Fatalf("unexpected report request snapshot: %+v", customTask.ReportRequests)
+	}
+	customDetail, err := repo.GetDetectionTask(customTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(customDetail.ReportRequests) != 1 || customDetail.ReportRequests[0].DisplayName != "Temperature" {
+		t.Fatalf("expected report requests attached to task detail: %+v", customDetail.ReportRequests)
 	}
 	if _, err := repo.StopDetectionTask(customTask.ID, "custom done"); err != nil {
 		t.Fatal(err)
@@ -708,6 +852,51 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if got, err := repo.UpdateReportTemplate(template.ID, map[string]interface{}{"remark": "updated"}); err != nil || got.Remark != "updated" {
 		t.Fatalf("update template got=%+v err=%v", got, err)
 	}
+	reportTag := models.TagConfig{
+		VarID:       103,
+		GatewayID:   1,
+		SourcePath:  "humidity",
+		RawName:     "humidity",
+		VarName:     "humidity",
+		DisplayName: "Humidity",
+		JSONPath:    "humidity",
+		DataType:    "FLOAT",
+		ScaleFactor: 1,
+		ProjectID:   &Project.ID,
+		ProjectCode: Project.ProjectCode,
+		Discovered:  true,
+		Enabled:     true,
+	}
+	if err := repo.CreateTag(&reportTag); err != nil {
+		t.Fatal(err)
+	}
+	reportTask, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{
+		ProjectID: Project.ID,
+		TestNo:    "T-REPORT",
+		Mode:      "custom",
+		CustomItems: []models.DetectionStandardItem{
+			{VarID: 100, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
+			{VarID: reportTag.VarID, VarName: reportTag.VarName, CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
+		},
+		ReportRequest: map[string]any{
+			"reports": []any{map[string]any{
+				"template_id":   template.ID,
+				"report_name":   "performance report",
+				"variables":     []any{map[string]any{"var_id": "100"}, map[string]any{"var_name": "humidity"}},
+				"params":        map[string]any{"inlet_area_m2": 1.25, "remark": "formula input"},
+				"template_code": "ignored-because-id-wins",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reportTask.ReportRequests) != 1 || reportTask.ReportRequests[0].TemplateID == nil || *reportTask.ReportRequests[0].TemplateID != template.ID || reportTask.ReportRequests[0].TemplateCode != template.TemplateCode || !strings.Contains(reportTask.ReportRequests[0].VariablesJSON, `"humidity"`) || !strings.Contains(reportTask.ReportRequests[0].ParamsJSON, `"inlet_area_m2":1.25`) {
+		t.Fatalf("unexpected report request row: %+v", reportTask.ReportRequests)
+	}
+	if _, err := repo.StopDetectionTask(reportTask.ID, "report done"); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.CreateDetectionRunReport(&models.DetectionRunReport{TaskID: task.ID, TemplateID: &template.ID, TemplateCode: template.TemplateCode, TemplateVersion: template.Version, FileRef: "reports/out.xlsx", Status: "generated"}); err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +916,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if notes, err := repo.ListDetectionRunNotes(task.ID, 10); err != nil || len(notes) != 1 {
 		t.Fatalf("notes len=%d err=%v", len(notes), err)
 	}
-	if tasks, err := repo.ListDetectionTasks(DetectionTaskFilter{ProjectID: &Project.ID, Status: models.DetectionStatusStopped}); err != nil || len(tasks) != 2 {
+	if tasks, err := repo.ListDetectionTasks(DetectionTaskFilter{ProjectID: &Project.ID, Status: models.DetectionStatusStopped}); err != nil || len(tasks) != 3 {
 		t.Fatalf("tasks len=%d err=%v", len(tasks), err)
 	}
 	if got, err := repo.GetDetectionTask(task.ID); err != nil || got.ID != task.ID || len(got.RecentNotes) != 1 || len(got.Reports) != 1 {
@@ -872,6 +1061,75 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}
 	if summary.ResultStatus != models.DetectionSummaryStatusNG || summary.HistoryRows != 2 || summary.AlarmTotal != 1 || summary.AlarmRecovered != 1 || summary.AlarmAboveH != 1 {
 		t.Fatalf("unexpected detection summary: %+v", summary)
+	}
+}
+
+func TestDetectionStandardItemsFreezeVariableDisplaySnapshot(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	project := &models.Project{ProjectCode: "AC-SNAP", Name: "Snapshot Project", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	tag := models.TagConfig{
+		VarID:         91001,
+		GatewayID:     1,
+		SourcePath:    "temp",
+		RawName:       "temp",
+		VarName:       "temp",
+		DisplayName:   "温度",
+		DisplayNameEN: "Temperature",
+		DisplayNameJA: "温度",
+		JSONPath:      "temp",
+		DataType:      "FLOAT",
+		Unit:          "C",
+		DecimalPlaces: 1,
+		ScaleFactor:   1,
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		Discovered:    true,
+		Enabled:       true,
+	}
+	if err := repo.CreateTag(&tag); err != nil {
+		t.Fatal(err)
+	}
+	standard := &models.DetectionStandard{StandardCode: "STD-SNAPSHOT", Name: "Snapshot", ProjectID: &project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Enabled: true}
+	if err := repo.CreateDetectionStandard(standard, []models.DetectionStandardItem{{
+		VarID:        tag.VarID,
+		VarName:      tag.VarName,
+		CheckEnabled: true,
+		AlarmEnabled: true,
+		StoreEnabled: true,
+		CheckOnStart: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetDetectionStandard(standard.ID)
+	if err != nil || len(got.Items) != 1 {
+		t.Fatalf("get standard got=%+v err=%v", got, err)
+	}
+	if got.Items[0].DisplayName != "温度" || got.Items[0].DisplayNameEN != "Temperature" || got.Items[0].DisplayNameJA != "温度" || got.Items[0].Unit != "C" {
+		t.Fatalf("expected item display snapshot from tag, got %+v", got.Items[0])
+	}
+	if _, err := repo.ReplaceDetectionStandardItems(standard.ID, []models.DetectionStandardItem{{VarID: tag.VarID, VarName: tag.VarName, CheckMethod: "bad"}}); err == nil {
+		t.Fatal("expected invalid check_method to be rejected")
+	}
+	if _, err := repo.ReplaceDetectionStandardItems(standard.ID, []models.DetectionStandardItem{{VarID: tag.VarID, VarName: tag.VarName, QualityPolicy: "bad"}}); err == nil {
+		t.Fatal("expected invalid quality_policy to be rejected")
+	}
+	task, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: project.ID, TestNo: "SNAP-1", Mode: "standard", StandardID: &standard.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateTag(tag.VarID, map[string]interface{}{"display_name": "改名后温度", "display_name_en": "Renamed Temperature", "display_name_ja": "変更後温度"}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := repo.GetDetectionTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.StandardItems) != 1 || detail.StandardItems[0].DisplayName != "温度" || detail.StandardItems[0].DisplayNameEN != "Temperature" || detail.StandardItems[0].DisplayNameJA != "温度" {
+		t.Fatalf("expected run item to keep original display snapshot, got %+v", detail.StandardItems)
 	}
 }
 

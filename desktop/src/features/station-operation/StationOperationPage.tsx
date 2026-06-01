@@ -46,6 +46,8 @@ import {
 } from 'lucide-react'
 import type {
   DetectionRunStandardItem,
+  DetectionRunReportRequest,
+  DetectionRunReportRequestPayload,
   DetectionRunStartPayload,
   DetectionRunStorageRoute,
   LimitAlarm,
@@ -57,9 +59,10 @@ import {
   abnormalStopDetectionRun,
   getActiveDetectionRuns,
   getDetectionRun,
+  getDetectionRunReportRequests,
   getDetectionRunStorageRoutes,
   getDetectionStandards,
-  getDevices,
+  getProjects,
   getLimitAlarms,
   getRealtimeVariables,
   getReportTemplates,
@@ -91,6 +94,10 @@ type StartDetectionFormValues = {
   mode: string
   standard_id?: number
   report_template_id?: number
+  report_var_ids?: Array<string | number>
+  report_ext_1?: string
+  report_ext_2?: string
+  report_ext_3?: string
   duration_min?: number
   operator_note?: string
 }
@@ -144,6 +151,20 @@ function alarmDisplayName(
   return alarm.display_name || alarm.var_name
 }
 
+function buildReportRequest(values: StartDetectionFormValues): DetectionRunReportRequestPayload | undefined {
+  const varIds = (values.report_var_ids ?? []).filter((item) => item !== undefined && item !== null && item !== '')
+  const payload: DetectionRunReportRequestPayload = {}
+  if (varIds.length > 0) payload.var_ids = varIds
+  if (values.report_ext_1?.trim()) payload.ext_1 = values.report_ext_1.trim()
+  if (values.report_ext_2?.trim()) payload.ext_2 = values.report_ext_2.trim()
+  if (values.report_ext_3?.trim()) payload.ext_3 = values.report_ext_3.trim()
+  return Object.keys(payload).length > 0 ? payload : undefined
+}
+
+function tagWireId(variable: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
+  return variable.var_id_text ?? variable.var_id
+}
+
 export function StationOperationPage() {
   const { t, i18n } = useTranslation()
   const [searchParams] = useSearchParams()
@@ -173,9 +194,9 @@ export function StationOperationPage() {
     refetchInterval: 3000,
     retry: false,
   })
-  const devicesQuery = useQuery({
-    queryKey: ['edge', 'devices'],
-    queryFn: getDevices,
+  const projectsQuery = useQuery({
+    queryKey: ['edge', 'projects'],
+    queryFn: getProjects,
     refetchInterval: 8000,
     retry: false,
   })
@@ -204,10 +225,10 @@ export function StationOperationPage() {
     retry: false,
   })
   const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
-  const devices = useMemo(() => devicesQuery.data ?? [], [devicesQuery.data])
+  const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
   const selectedProject = useMemo(
-    () => devices.find((device) => device.id === validSelectedProjectId),
-    [devices, validSelectedProjectId],
+    () => projects.find((project) => project.id === validSelectedProjectId),
+    [projects, validSelectedProjectId],
   )
   const stationVariables = useMemo(
     () =>
@@ -232,6 +253,13 @@ export function StationOperationPage() {
     refetchInterval: runSnapshotOpen ? 10000 : false,
     retry: false,
   })
+  const reportRequestsQuery = useQuery({
+    queryKey: ['station', 'run-report-requests', activeRun?.id],
+    queryFn: () => getDetectionRunReportRequests(activeRun!.id),
+    enabled: runSnapshotOpen && activeRun !== undefined,
+    refetchInterval: runSnapshotOpen ? 10000 : false,
+    retry: false,
+  })
   const selectedRunProjectId = activeRun?.project_id ?? activeRun?.device_id ?? validSelectedProjectId
   const standards = useMemo(() => standardsQuery.data ?? [], [standardsQuery.data])
   const reportTemplates = useMemo(() => reportTemplatesQuery.data ?? [], [reportTemplatesQuery.data])
@@ -244,9 +272,9 @@ export function StationOperationPage() {
   )
   const selectedProjectName = useMemo(() => {
     if (!selectedProject) return undefined
-    if (i18n.resolvedLanguage === 'en') return selectedProject.display_name_en || selectedProject.display_name || selectedProject.name || selectedProject.device_code
-    if (i18n.resolvedLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.display_name || selectedProject.name || selectedProject.device_code
-    return selectedProject.display_name || selectedProject.name || selectedProject.device_code
+    if (i18n.resolvedLanguage === 'en') return selectedProject.display_name_en || selectedProject.display_name || selectedProject.name || selectedProject.project_code
+    if (i18n.resolvedLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.display_name || selectedProject.name || selectedProject.project_code
+    return selectedProject.display_name || selectedProject.name || selectedProject.project_code
   }, [i18n.resolvedLanguage, selectedProject])
   const [cardOrder, setCardOrder] = useState(metricSeed.map((item) => item.id))
   const [isStatusCollapsed, setStatusCollapsed] = useState(false)
@@ -324,6 +352,7 @@ export function StationOperationPage() {
         mode: values.mode,
         standard_id: values.standard_id,
         report_template_id: values.report_template_id,
+        report_request: buildReportRequest(values),
         duration_sec: values.duration_min ? values.duration_min * 60 : undefined,
         operator_note: values.operator_note?.trim() || undefined,
       }
@@ -356,13 +385,14 @@ export function StationOperationPage() {
   }
 
   function openStartModal() {
-    const targetProject = selectedProject ?? devices[0]
+    const targetProject = selectedProject ?? projects[0]
     startForm.setFieldsValue({
       project_id: targetProject?.id,
       test_no: `RUN-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}`,
       mode: availableStandards[0]?.mode ?? 'standard',
       standard_id: availableStandards[0]?.id,
       report_template_id: reportTemplates[0]?.id,
+      report_var_ids: [],
       duration_min: 60,
     })
     setStartModalOpen(true)
@@ -395,7 +425,7 @@ export function StationOperationPage() {
     navigate(`/history?${params.toString()}`)
   }
 
-  const statusProjectCode = selectedProject?.device_code ?? activeRun?.project_code ?? activeRun?.device_code ?? 'SN-20230912'
+  const statusProjectCode = selectedProject?.project_code ?? activeRun?.project_code ?? activeRun?.device_code ?? 'SN-20230912'
   const statusProject = selectedProjectName ?? activeRun?.test_no ?? t('station.status.mockProject')
   const statusConfig = selectedProject?.model_name || activeRun?.mode || 'A'
   const statusTask = activeRun?.test_no ?? t('station.run.idle')
@@ -613,6 +643,48 @@ export function StationOperationPage() {
     ],
     [i18n.resolvedLanguage, t],
   )
+  const reportRequestColumns = useMemo(
+    () => [
+      {
+        title: t('station.snapshot.reportVariable'),
+        key: 'variable',
+        width: 220,
+        render: (_: unknown, record: DetectionRunReportRequest) => (
+          <div className="station-alarm-variable">
+            <strong>{alarmDisplayName(record, i18n.resolvedLanguage)}</strong>
+            <span>{record.var_name || record.var_id_text || record.var_id}</span>
+          </div>
+        ),
+      },
+      {
+        title: t('station.snapshot.reportName'),
+        dataIndex: 'report_name',
+        key: 'report_name',
+        width: 180,
+        render: (value: string) => value || '-',
+      },
+      {
+        title: t('station.alarms.status'),
+        dataIndex: 'status',
+        key: 'status',
+        width: 110,
+        render: (value: string) => <Tag>{value || 'pending'}</Tag>,
+      },
+      {
+        title: t('station.snapshot.reportExt'),
+        key: 'ext',
+        width: 280,
+        render: (_: unknown, record: DetectionRunReportRequest) => (
+          <div className="station-alarm-values">
+            <span>{record.ext_1 || '-'}</span>
+            <span>{record.ext_2 || '-'}</span>
+            <span>{record.ext_3 || '-'}</span>
+          </div>
+        ),
+      },
+    ],
+    [i18n.resolvedLanguage, t],
+  )
 
   return (
     <div className="station-page">
@@ -724,7 +796,7 @@ export function StationOperationPage() {
                 className="station-start-action"
                 type="primary"
                 icon={<Play size={15} />}
-                disabled={!canStartDetection || devices.length === 0}
+                disabled={!canStartDetection || projects.length === 0}
                 onClick={openStartModal}
               >
                 {t('station.actions.start')}
@@ -789,9 +861,9 @@ export function StationOperationPage() {
           <div className="station-run-form-grid">
             <Form.Item name="project_id" label={t('station.run.device')} rules={[{ required: true }]}>
               <Select
-                options={devices.map((device) => ({
-                  label: `${device.display_name || device.name || device.device_code} / ${device.device_code}`,
-                  value: device.id,
+                options={projects.map((project) => ({
+                  label: `${project.display_name || project.name || project.project_code} / ${project.project_code}`,
+                  value: project.id,
                 }))}
               />
             </Form.Item>
@@ -828,6 +900,26 @@ export function StationOperationPage() {
                   value: template.id,
                 }))}
               />
+            </Form.Item>
+            <Form.Item className="station-run-form-wide" name="report_var_ids" label={t('station.run.reportVariables')}>
+              <Select
+                allowClear
+                mode="multiple"
+                optionFilterProp="label"
+                options={stationVariables.map((variable) => ({
+                  label: `${alarmDisplayName(variable, i18n.resolvedLanguage)} / ${variable.var_name}`,
+                  value: tagWireId(variable),
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="report_ext_1" label={t('station.run.reportExt1')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="report_ext_2" label={t('station.run.reportExt2')}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="report_ext_3" label={t('station.run.reportExt3')}>
+              <Input />
             </Form.Item>
             <Form.Item className="station-run-form-wide" name="operator_note" label={t('station.run.note')}>
               <Input.TextArea rows={3} />
@@ -908,6 +1000,24 @@ export function StationOperationPage() {
           loading={runSnapshotQuery.isFetching}
           pagination={{ pageSize: 20, showSizeChanger: false }}
           scroll={{ x: 1180, y: 480 }}
+        />
+        <div className="station-alarm-toolbar">
+          <span>{t('station.snapshot.reportRequests')}</span>
+          <div className="station-alarm-toolbar-right">
+            <span>{t('station.snapshot.reportRequestCount', { count: reportRequestsQuery.data?.count ?? runSnapshotQuery.data?.report_requests?.length ?? 0 })}</span>
+            <Button size="small" onClick={() => reportRequestsQuery.refetch()} loading={reportRequestsQuery.isFetching}>
+              {t('actions.refresh')}
+            </Button>
+          </div>
+        </div>
+        <Table<DetectionRunReportRequest>
+          rowKey={(record) => record.id}
+          size="small"
+          columns={reportRequestColumns}
+          dataSource={reportRequestsQuery.data?.items ?? runSnapshotQuery.data?.report_requests ?? []}
+          loading={reportRequestsQuery.isFetching || runSnapshotQuery.isFetching}
+          pagination={false}
+          scroll={{ x: 820, y: 220 }}
         />
       </Modal>
       <Modal

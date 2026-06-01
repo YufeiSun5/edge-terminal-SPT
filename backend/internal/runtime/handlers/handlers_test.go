@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -302,6 +303,13 @@ func TestTaskFlowsHandlerCRUDAndManualRun(t *testing.T) {
 	}
 	if body := modulesResp.Body.String(); !strings.Contains(body, "process_params") || !strings.Contains(body, "plc_writes") || !strings.Contains(body, "进风口面积") {
 		t.Fatalf("expected task module schema to expose process params and PLC writes, body=%s", body)
+	}
+	runtimeResp := callHandler(t, http.MethodGet, "/task-flows/runtime", nil, handler.runtime)
+	if runtimeResp.Code != http.StatusOK {
+		t.Fatalf("task flow runtime status=%d body=%s", runtimeResp.Code, runtimeResp.Body.String())
+	}
+	if body := runtimeResp.Body.String(); !strings.Contains(body, `"queue"`) || !strings.Contains(body, `"guards"`) || !strings.Contains(body, `"pressure_threshold"`) || !strings.Contains(body, `"submitted"`) || !strings.Contains(body, `"dropped"`) {
+		t.Fatalf("expected task flow runtime diagnostics, body=%s", body)
 	}
 	badCreateResp := callHandler(t, http.MethodPost, "/task-flows", map[string]any{
 		"flow_code":    "missing-project",
@@ -827,6 +835,9 @@ func TestHandlerHelpers(t *testing.T) {
 	if _, err := detectionStandardItemsFromRequests([]detectionStandardItemRequest{{VarID: 1, VarName: "temp", CheckMethod: "bad"}}); err == nil {
 		t.Fatal("expected invalid check_method error")
 	}
+	if _, err := detectionStandardItemsFromRequests([]detectionStandardItemRequest{{VarID: 1, VarName: "temp", QualityPolicy: "bad"}}); err == nil {
+		t.Fatal("expected invalid quality_policy error")
+	}
 }
 
 func TestHandlerRouteRegistration(t *testing.T) {
@@ -845,7 +856,7 @@ func TestHandlerRouteRegistration(t *testing.T) {
 	NewStorageRoutesHandler(repo).Register(group, authService)
 	NewHistoryHandler(repo).Register(group, authService)
 	NewDetectionStandardsHandler(repo).Register(group, authService)
-	NewGatewaysHandler(repo, mqttx.NewManager(channels), channels).Register(group, authService)
+	NewGatewaysHandler(repo, mqttx.NewManager(channels), channels, services.NewNotificationHub(nil)).Register(group, authService)
 	NewReportTemplatesHandler(services.NewReportTemplatesService(repo)).Register(group, authService)
 	NewDetectionRunsHandler(services.NewDetectionRunsService(repo, tasks)).Register(group, authService)
 	NewNotificationsHandler(repo).Register(group, authService)
@@ -861,10 +872,11 @@ func TestHandlerRouteRegistration(t *testing.T) {
 func TestNotificationResponseKeepsPayloadAsObject(t *testing.T) {
 	at := time.Date(2026, 5, 30, 19, 0, 0, 0, time.UTC)
 	readAt := at.Add(time.Minute)
+	expiresAt := at.AddDate(0, 0, models.AlarmNotificationRetentionDays)
 	responses := notificationResponses([]models.UserNotification{{
 		ID:          1,
 		EventUID:    "event-1",
-		Type:        models.NotificationDetectionResultNG,
+		Type:        models.NotificationAlarmLimitEnter,
 		Level:       models.NotificationLevelWarning,
 		TargetType:  models.NotificationTargetProject,
 		TargetID:    "2",
@@ -874,10 +886,11 @@ func TestNotificationResponseKeepsPayloadAsObject(t *testing.T) {
 		Message:     "NG",
 		Payload:     `{"result_status":"NG"}`,
 		OccurredAt:  at,
+		ExpiresAt:   &expiresAt,
 		CreatedAt:   at,
 		ReadAt:      &readAt,
 	}})
-	if len(responses) != 1 || string(responses[0].Payload) != `{"result_status":"NG"}` || responses[0].ReadAt == nil {
+	if len(responses) != 1 || string(responses[0].Payload) != `{"result_status":"NG"}` || responses[0].ReadAt == nil || responses[0].ExpiresAt == nil {
 		t.Fatalf("unexpected response: %+v", responses)
 	}
 	if responses[0].VarIDText != "9212397624135540846" {
@@ -958,6 +971,48 @@ func TestNotificationsHandlerRoutes(t *testing.T) {
 	if missingResp.Code != http.StatusNotFound {
 		t.Fatalf("missing status=%d body=%s", missingResp.Code, missingResp.Body.String())
 	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "route-notification-batch-match",
+		Type:       models.NotificationDetectionRunPaused,
+		Level:      models.NotificationLevelInfo,
+		ProjectID:  3,
+		Message:    "batch match",
+		OccurredAt: time.Date(2026, 5, 30, 19, 6, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "route-notification-batch-project-miss",
+		Type:       models.NotificationDetectionRunPaused,
+		Level:      models.NotificationLevelInfo,
+		ProjectID:  4,
+		Message:    "batch match",
+		OccurredAt: time.Date(2026, 5, 30, 19, 7, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRuntimeNotification(&models.RuntimeNotification{
+		ID:         "route-notification-batch-type-miss",
+		Type:       models.NotificationDetectionRunResumed,
+		Level:      models.NotificationLevelInfo,
+		ProjectID:  3,
+		Message:    "batch match",
+		OccurredAt: time.Date(2026, 5, 30, 19, 8, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	countFilteredResp := callRouterWithToken(t, router, http.MethodGet, "/api/v1/notifications/unread-count?type=detection.run_paused&project_id=3&keyword=batch&from="+url.QueryEscape("2026-05-30T19:00:00Z"), nil, token)
+	if countFilteredResp.Code != http.StatusOK || !strings.Contains(countFilteredResp.Body.String(), `"unread":1`) {
+		t.Fatalf("filtered unread status=%d body=%s", countFilteredResp.Code, countFilteredResp.Body.String())
+	}
+	readSomeResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/notifications/read-all?type=detection.run_paused&project_id=3&keyword=batch&from="+url.QueryEscape("2026-05-30T19:00:00Z"), map[string]any{}, token)
+	if readSomeResp.Code != http.StatusOK || !strings.Contains(readSomeResp.Body.String(), `"updated":1`) {
+		t.Fatalf("filtered read all status=%d body=%s", readSomeResp.Code, readSomeResp.Body.String())
+	}
+	countAfterFilteredResp := callRouterWithToken(t, router, http.MethodGet, "/api/v1/notifications/unread-count", nil, token)
+	if countAfterFilteredResp.Code != http.StatusOK || !strings.Contains(countAfterFilteredResp.Body.String(), `"unread":2`) {
+		t.Fatalf("filtered unread status=%d body=%s", countAfterFilteredResp.Code, countAfterFilteredResp.Body.String())
+	}
 	readAllResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/notifications/read-all", map[string]any{}, token)
 	if readAllResp.Code != http.StatusOK {
 		t.Fatalf("read all status=%d body=%s", readAllResp.Code, readAllResp.Body.String())
@@ -965,6 +1020,10 @@ func TestNotificationsHandlerRoutes(t *testing.T) {
 	badResp := callRouterWithToken(t, router, http.MethodGet, "/api/v1/notifications?unread=maybe", nil, token)
 	if badResp.Code != http.StatusBadRequest {
 		t.Fatalf("bad query status=%d body=%s", badResp.Code, badResp.Body.String())
+	}
+	badTimeRangeResp := callRouterWithToken(t, router, http.MethodGet, "/api/v1/notifications?from=2026-05-31T02:00:00Z&to=2026-05-31T01:00:00Z", nil, token)
+	if badTimeRangeResp.Code != http.StatusBadRequest {
+		t.Fatalf("bad time range status=%d body=%s", badTimeRangeResp.Code, badTimeRangeResp.Body.String())
 	}
 }
 
@@ -1090,12 +1149,16 @@ func TestReportTemplatesHandler(t *testing.T) {
 		"template_code": "RPT-H",
 		"name":          "Report",
 		"file_ref":      "templates/report.xlsx",
+		"params_schema": []map[string]any{{"key": "inlet_area_m2", "type": "number"}},
 	}, handler.create)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("create status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	var template models.ReportTemplate
 	mustDecodeHandler(t, resp, &template)
+	if !strings.Contains(template.ParamsSchemaJSON, "inlet_area_m2") {
+		t.Fatalf("expected params schema snapshot, got %+v", template)
+	}
 
 	resp = callHandler(t, http.MethodGet, "/report-templates?enabled=true&keyword=RPT", nil, handler.list)
 	if resp.Code != http.StatusOK {
@@ -1104,6 +1167,10 @@ func TestReportTemplatesHandler(t *testing.T) {
 	resp = callHandlerWithParams(t, http.MethodPatch, "/report-templates/1", map[string]any{"remark": "updated"}, gin.Params{{Key: "id", Value: "1"}}, handler.patch)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("patch status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	resp = callHandlerWithParams(t, http.MethodPatch, "/report-templates/1", map[string]any{"params_schema": "bad"}, gin.Params{{Key: "id", Value: "1"}}, handler.patch)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad params schema status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	resp = callHandlerWithParams(t, http.MethodPatch, "/report-templates/404", map[string]any{"remark": "missing"}, gin.Params{{Key: "id", Value: "404"}}, handler.patch)
 	if resp.Code != http.StatusNotFound {
@@ -1294,10 +1361,26 @@ func TestGatewaysHandler(t *testing.T) {
 	repo := database.NewRepository(db)
 	channels := pipeline.NewChannels()
 	manager := mqttx.NewManager(channels)
-	handler := NewGatewaysHandler(repo, manager, channels)
+	hub := services.NewNotificationHub(nil)
+	handler := NewGatewaysHandler(repo, manager, channels, hub)
 
 	if resp := callHandler(t, http.MethodGet, "/runtime/channels", nil, handler.runtimeChannels); resp.Code != http.StatusOK {
 		t.Fatalf("runtime channels status=%d", resp.Code)
+	}
+	if resp := callHandler(t, http.MethodGet, "/runtime/channels/detail", nil, handler.runtimeChannelDetails); resp.Code != http.StatusOK {
+		t.Fatalf("runtime channel details status=%d", resp.Code)
+	} else if !strings.Contains(resp.Body.String(), `"pressure_threshold"`) || !strings.Contains(resp.Body.String(), `"items"`) || !strings.Contains(resp.Body.String(), `"next_action"`) || !strings.Contains(resp.Body.String(), `"dropped"`) {
+		t.Fatalf("runtime channel details missing fields: %s", resp.Body.String())
+	}
+	if resp := callHandler(t, http.MethodGet, "/runtime/notifications", nil, handler.runtimeNotifications); resp.Code != http.StatusOK {
+		t.Fatalf("runtime notifications status=%d", resp.Code)
+	} else if !strings.Contains(resp.Body.String(), `"subscribers"`) || !strings.Contains(resp.Body.String(), `"published"`) || !strings.Contains(resp.Body.String(), `"dropped"`) || !strings.Contains(resp.Body.String(), `"next_action"`) {
+		t.Fatalf("runtime notifications missing fields: %s", resp.Body.String())
+	}
+	if resp := callHandler(t, http.MethodGet, "/runtime/workers", nil, handler.runtimeWorkers); resp.Code != http.StatusOK {
+		t.Fatalf("runtime workers status=%d", resp.Code)
+	} else if !strings.Contains(resp.Body.String(), `"items"`) {
+		t.Fatalf("runtime workers missing fields: %s", resp.Body.String())
 	}
 	if resp := callHandler(t, http.MethodGet, "/gateways", nil, handler.status); resp.Code != http.StatusOK {
 		t.Fatalf("gateway status=%d", resp.Code)

@@ -1,21 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useTranslation } from 'react-i18next'
-import { Copy, Edit3, Plus, Save, ShieldCheck, Trash2 } from 'lucide-react'
+import { Edit3, Plus, Save, Trash2 } from 'lucide-react'
 import { queryClient } from '@/app/queryClient'
 import {
   createDetectionStandard,
   deleteDetectionStandard,
   getDetectionStandard,
   getDetectionStandards,
-  getDevices as getProjects,
+  getProjects,
+  getReportTemplates,
   getVariables,
   replaceDetectionStandardItems,
   updateDetectionStandard,
 } from '@/features/edge-status/api'
-import type { DetectionStandard, DetectionStandardItemPayload, DetectionStandardPayload, Device as Project, VarIdentifier, VariableConfig } from '@/shared/api/types'
+import type { DetectionStandard, DetectionStandardItemPayload, DetectionStandardPayload, Project, ReportTemplate, VarIdentifier, VariableConfig } from '@/shared/api/types'
 import '@/features/settings/settings.css'
 import './detection-config.css'
 
@@ -79,12 +80,47 @@ function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
   return project?.project_code || project?.device_code || ''
 }
 
+function reportTemplateTitle(template?: Pick<ReportTemplate, 'template_code' | 'display_name' | 'name'>) {
+  if (!template) return ''
+  return template.display_name || template.name || template.template_code
+}
+
+function normalizeStandardItems(items: DetectionStandard['items'] = []): DetectionStandardItemPayload[] {
+  return items.map((item) => ({
+    var_id: item.var_id_text ?? item.var_id,
+    var_name: item.var_name,
+    display_name: item.display_name,
+    display_name_en: item.display_name_en,
+    display_name_ja: item.display_name_ja,
+    check_enabled: item.check_enabled,
+    alarm_enabled: item.alarm_enabled,
+    store_enabled: item.store_enabled,
+    check_cycle_ms: item.check_cycle_ms,
+    check_on_start: item.check_on_start,
+    required: item.required,
+    check_method: item.check_method,
+    target_value: item.target_value,
+    limit_ll: item.limit_ll ?? null,
+    limit_l: item.limit_l ?? null,
+    limit_h: item.limit_h ?? null,
+    limit_hh: item.limit_hh ?? null,
+    limit_deadband: item.limit_deadband,
+    violation_hold_ms: item.violation_hold_ms,
+    recover_hold_ms: item.recover_hold_ms,
+    quality_policy: item.quality_policy,
+    unit: item.unit,
+    decimal_places: item.decimal_places,
+    sort_order: item.sort_order,
+  }))
+}
+
 export function DetectionConfigPage() {
   const { t, i18n } = useTranslation()
   const [messageApi, contextHolder] = message.useMessage()
   const [selectedStandardId, setSelectedStandardId] = useState<number | undefined>()
   const [editingStandard, setEditingStandard] = useState<DetectionStandard | undefined>()
   const [standardItems, setStandardItems] = useState<DetectionStandardItemPayload[]>([])
+  const [draftStandardId, setDraftStandardId] = useState<number | undefined>()
   const [standardVariableId, setStandardVariableId] = useState<VarIdentifier | undefined>()
   const [standardModalOpen, setStandardModalOpen] = useState(false)
   const [standardForm] = Form.useForm<DetectionStandardFormValues>()
@@ -104,10 +140,16 @@ export function DetectionConfigPage() {
     queryFn: () => getVariables(),
     retry: false,
   })
+  const reportTemplatesQuery = useQuery({
+    queryKey: ['detection-config', 'report-templates'],
+    queryFn: () => getReportTemplates({ enabled: true }),
+    retry: false,
+  })
 
   const standards = useMemo(() => standardsQuery.data ?? [], [standardsQuery.data])
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
   const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
+  const reportTemplates = useMemo(() => reportTemplatesQuery.data ?? [], [reportTemplatesQuery.data])
   const standardVariables = useMemo(() => {
     const byName = new Map<string, VariableConfig>()
     variables.forEach((variable) => {
@@ -130,19 +172,42 @@ export function DetectionConfigPage() {
     retry: false,
   })
   const selectedStandardDetail = selectedStandardDetailQuery.data ?? selectedStandard
+  const selectedStandardItems = useMemo(() => {
+    if (!selectedStandardDetail) return []
+    if (draftStandardId === selectedStandardDetail.id) return standardItems
+    return normalizeStandardItems(selectedStandardDetail.items)
+  }, [draftStandardId, selectedStandardDetail, standardItems])
 
-  const displayProjectName = (project: Project) => {
+  const displayProjectName = useCallback((project: Project) => {
     const code = projectCode(project)
     if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || code
     if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || code
     return project.display_name || project.name || code
-  }
+  }, [i18n.resolvedLanguage])
 
-  const displayStandardName = (standard: DetectionStandard) => {
+  const displayStandardName = useCallback((standard: DetectionStandard) => {
     if (i18n.resolvedLanguage === 'en') return standard.display_name_en || standard.display_name || standard.name || standard.standard_code
     if (i18n.resolvedLanguage === 'ja') return standard.display_name_ja || standard.display_name || standard.name || standard.standard_code
     return standard.display_name || standard.name || standard.standard_code
-  }
+  }, [i18n.resolvedLanguage])
+
+  const standardOptions = useMemo(() => standards.map((standard) => ({
+    label: `${displayStandardName(standard)} · ${standard.standard_code}`,
+    value: standard.id,
+  })), [displayStandardName, standards])
+  const projectOptions = useMemo(() => projects.map((project) => ({
+    label: `${displayProjectName(project)} · ${projectCode(project)}`,
+    value: project.id,
+  })), [displayProjectName, projects])
+  const reportTemplateOptions = useMemo(() => reportTemplates.map((template) => ({
+    label: `${reportTemplateTitle(template)} · ${template.template_code}`,
+    value: template.id,
+  })), [reportTemplates])
+
+  const standardVariableOptions = useMemo(() => standardVariables.map((variable) => ({
+    label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
+    value: variableWireId(variable),
+  })), [i18n.resolvedLanguage, standardVariables])
 
   async function openStandardModal(standard?: DetectionStandard) {
     setEditingStandard(standard)
@@ -158,42 +223,24 @@ export function DetectionConfigPage() {
         project_id: standardProjectId(detail),
         project_code: standardProjectCode(detail),
         mode: detail.mode,
+        report_template_id: detail.report_template_id,
         version: detail.version,
         enabled: detail.enabled,
         remark: detail.remark,
       })
-      setStandardItems((detail.items ?? []).map((item) => ({
-        var_id: item.var_id_text ?? item.var_id,
-        var_name: item.var_name,
-        display_name: item.display_name,
-        display_name_en: item.display_name_en,
-        display_name_ja: item.display_name_ja,
-        check_enabled: item.check_enabled,
-        store_enabled: item.store_enabled,
-        required: item.required,
-        check_method: item.check_method,
-        target_value: item.target_value,
-        limit_ll: item.limit_ll ?? null,
-        limit_l: item.limit_l ?? null,
-        limit_h: item.limit_h ?? null,
-        limit_hh: item.limit_hh ?? null,
-        limit_deadband: item.limit_deadband,
-        violation_hold_ms: item.violation_hold_ms,
-        recover_hold_ms: item.recover_hold_ms,
-        quality_policy: item.quality_policy,
-        unit: item.unit,
-        decimal_places: item.decimal_places,
-        sort_order: item.sort_order,
-      })))
+      setStandardItems(normalizeStandardItems(detail.items))
+      setDraftStandardId(detail.id)
     } else {
       standardForm.setFieldsValue({
         standard_code: `STD-${Date.now().toString().slice(-6)}`,
         mode: 'standard',
         version: 1,
         enabled: true,
+        report_template_id: undefined,
         remark: '',
       })
       setStandardItems([])
+      setDraftStandardId(undefined)
     }
     setStandardModalOpen(true)
   }
@@ -201,9 +248,13 @@ export function DetectionConfigPage() {
   function addStandardItem(variableId?: VarIdentifier) {
     if (!variableId) return
     const variable = standardVariables.find((item) => sameVarId(variableWireId(item), variableId))
-    if (!variable || standardItems.some((item) => item.var_name === variable.var_name)) return
+    const currentItems = standardModalOpen ? standardItems : selectedStandardItems
+    if (!variable || currentItems.some((item) => item.var_name === variable.var_name)) return
+    if (!standardModalOpen && selectedStandardDetail) {
+      setDraftStandardId(selectedStandardDetail.id)
+    }
     setStandardItems((items) => [
-      ...items,
+      ...(standardModalOpen ? items : currentItems),
       {
         var_id: variableWireId(variable),
         var_name: variable.var_name,
@@ -211,7 +262,10 @@ export function DetectionConfigPage() {
         display_name_en: variable.display_name_en,
         display_name_ja: variable.display_name_ja,
         check_enabled: true,
+        alarm_enabled: true,
         store_enabled: true,
+        check_cycle_ms: 0,
+        check_on_start: true,
         required: true,
         check_method: variable.data_type === 'BOOL' ? 'bool_equals' : 'numeric_range',
         target_value: '',
@@ -225,18 +279,30 @@ export function DetectionConfigPage() {
         quality_policy: 'ignore_bad',
         unit: variable.unit,
         decimal_places: variable.decimal_places,
-        sort_order: standardItems.length + 1,
+        sort_order: currentItems.length + 1,
       },
     ])
     setStandardVariableId(undefined)
   }
 
   function patchStandardItem(varId: VarIdentifier, patch: Partial<DetectionStandardItemPayload>) {
-    setStandardItems((items) => items.map((item) => sameVarId(item.var_id, varId) ? { ...item, ...patch } : item))
+    if (!standardModalOpen && selectedStandardDetail) {
+      setDraftStandardId(selectedStandardDetail.id)
+    }
+    setStandardItems((items) => {
+      const currentItems = standardModalOpen ? items : selectedStandardItems
+      return currentItems.map((item) => sameVarId(item.var_id, varId) ? { ...item, ...patch } : item)
+    })
   }
 
   function removeStandardItem(varId: VarIdentifier) {
-    setStandardItems((items) => items.filter((item) => !sameVarId(item.var_id, varId)).map((item, index) => ({ ...item, sort_order: index + 1 })))
+    if (!standardModalOpen && selectedStandardDetail) {
+      setDraftStandardId(selectedStandardDetail.id)
+    }
+    setStandardItems((items) => {
+      const currentItems = standardModalOpen ? items : selectedStandardItems
+      return currentItems.filter((item) => !sameVarId(item.var_id, varId)).map((item, index) => ({ ...item, sort_order: index + 1 }))
+    })
   }
 
   const saveStandardMutation = useMutation({
@@ -260,8 +326,38 @@ export function DetectionConfigPage() {
       setStandardModalOpen(false)
       setEditingStandard(undefined)
       setStandardItems([])
+      setDraftStandardId(undefined)
       setStandardVariableId(undefined)
       standardForm.resetFields()
+      messageApi.success(t('settings.messages.standardSaved'))
+      await queryClient.invalidateQueries({ queryKey: ['detection-config', 'standards'] })
+      await queryClient.invalidateQueries({ queryKey: ['settings', 'detection-standards'] })
+    },
+    onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
+  })
+
+  const saveCurrentStandardMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedStandardDetail) throw new Error(t('detectionConfig.noSelection'))
+      const payload: DetectionStandardPayload = {
+        standard_code: selectedStandardDetail.standard_code,
+        name: selectedStandardDetail.name,
+        display_name: selectedStandardDetail.display_name,
+        display_name_en: selectedStandardDetail.display_name_en,
+        display_name_ja: selectedStandardDetail.display_name_ja,
+        project_id: standardProjectId(selectedStandardDetail),
+        project_code: standardProjectCode(selectedStandardDetail),
+        mode: selectedStandardDetail.mode || 'standard',
+        report_template_id: selectedStandardDetail.report_template_id,
+        version: selectedStandardDetail.version ?? 1,
+        enabled: selectedStandardDetail.enabled ?? true,
+        remark: selectedStandardDetail.remark,
+        items: selectedStandardItems,
+      }
+      await updateDetectionStandard(selectedStandardDetail.id, payload)
+      return replaceDetectionStandardItems(selectedStandardDetail.id, selectedStandardItems)
+    },
+    onSuccess: async () => {
       messageApi.success(t('settings.messages.standardSaved'))
       await queryClient.invalidateQueries({ queryKey: ['detection-config', 'standards'] })
       await queryClient.invalidateQueries({ queryKey: ['settings', 'detection-standards'] })
@@ -274,117 +370,19 @@ export function DetectionConfigPage() {
     onSuccess: async () => {
       messageApi.success(t('settings.messages.standardDeleted'))
       setSelectedStandardId(undefined)
+      setDraftStandardId(undefined)
       await queryClient.invalidateQueries({ queryKey: ['detection-config', 'standards'] })
       await queryClient.invalidateQueries({ queryKey: ['settings', 'detection-standards'] })
     },
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
   })
 
-  const standardColumns: TableColumnsType<DetectionStandard> = [
-    {
-      title: t('settings.standards.name'),
-      dataIndex: 'display_name',
-      key: 'display_name',
-      width: 220,
-      render: (_, record) => (
-        <button className="detection-link-button" onClick={() => setSelectedStandardId(record.id)}>
-          <strong>{displayStandardName(record)}</strong>
-          <span>{record.standard_code}</span>
-        </button>
-      ),
-    },
-    {
-      title: t('settings.variables.device'),
-      dataIndex: 'project_code',
-      key: 'project_code',
-      width: 130,
-      render: (_, record) => standardProjectId(record) ? standardProjectCode(record) : <Tag>{t('settings.standards.global')}</Tag>,
-    },
-    { title: t('settings.standards.mode'), dataIndex: 'mode', key: 'mode', width: 110 },
-    { title: t('settings.standards.version'), dataIndex: 'version', key: 'version', width: 80 },
-    {
-      title: t('settings.standards.items'),
-      dataIndex: 'items',
-      key: 'items',
-      width: 90,
-      render: (items?: unknown[]) => items?.length ?? 0,
-    },
-    {
-      title: t('settings.variables.enabled'),
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 90,
-      render: (enabled: boolean) => <Tag color={enabled ? 'success' : 'default'}>{enabled ? t('status.online') : t('status.offline')}</Tag>,
-    },
-    {
-      title: t('settings.users.actions'),
-      key: 'actions',
-      width: 150,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space size={6}>
-          <Button size="small" icon={<Edit3 size={13} />} onClick={() => void openStandardModal(record)} />
-          <Popconfirm
-            title={t('settings.standards.deleteConfirm', { code: record.standard_code })}
-            okText={t('settings.users.delete')}
-            cancelText={t('settings.actions.cancel')}
-            onConfirm={() => deleteStandardMutation.mutate(record)}
-          >
-            <Button danger size="small" icon={<Trash2 size={13} />} loading={deleteStandardMutation.isPending} />
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ]
-
-  const itemColumns: TableColumnsType<DetectionStandardItemPayload> = [
-    {
-      title: t('settings.variables.name'),
-      dataIndex: 'display_name',
-      key: 'display_name',
-      width: 220,
-      fixed: 'left',
-      render: (_, record) => (
-        <div className="detection-variable-name">
-          <strong>{standardItemTitle(record, i18n.resolvedLanguage)}</strong>
-          <span>{record.var_name}</span>
-        </div>
-      ),
-    },
-    {
-      title: t('settings.standards.check'),
-      dataIndex: 'check_enabled',
-      key: 'check_enabled',
-      width: 90,
-      render: (value: boolean) => <Tag color={value ? 'success' : 'default'}>{value ? t('settings.standards.check') : t('settings.standards.skip')}</Tag>,
-    },
-    {
-      title: t('settings.standards.store'),
-      dataIndex: 'store_enabled',
-      key: 'store_enabled',
-      width: 90,
-      render: (value: boolean) => <Tag color={value ? 'processing' : 'default'}>{value ? t('settings.standards.store') : '-'}</Tag>,
-    },
-    { title: t('settings.standards.checkMethod'), dataIndex: 'check_method', key: 'check_method', width: 140 },
-    { title: t('settings.standards.targetValue'), dataIndex: 'target_value', key: 'target_value', width: 120 },
-    { title: 'LL', dataIndex: 'limit_ll', key: 'limit_ll', width: 90, render: (value) => value ?? '-' },
-    { title: 'L', dataIndex: 'limit_l', key: 'limit_l', width: 90, render: (value) => value ?? '-' },
-    { title: 'H', dataIndex: 'limit_h', key: 'limit_h', width: 90, render: (value) => value ?? '-' },
-    { title: 'HH', dataIndex: 'limit_hh', key: 'limit_hh', width: 90, render: (value) => value ?? '-' },
-    { title: t('settings.standards.limitDeadband'), dataIndex: 'limit_deadband', key: 'limit_deadband', width: 110 },
-    { title: t('settings.standards.violationHold'), dataIndex: 'violation_hold_ms', key: 'violation_hold_ms', width: 130 },
-    { title: t('settings.standards.recoverHold'), dataIndex: 'recover_hold_ms', key: 'recover_hold_ms', width: 130 },
-    { title: t('settings.standards.qualityPolicy'), dataIndex: 'quality_policy', key: 'quality_policy', width: 140 },
-    { title: t('settings.variables.unit'), dataIndex: 'unit', key: 'unit', width: 80 },
-  ]
-
   const editableItemColumns: TableColumnsType<DetectionStandardItemPayload> = [
     {
       title: t('settings.variables.name'),
       dataIndex: 'display_name',
       key: 'display_name',
-      width: 220,
-      fixed: 'left',
+      width: 210,
       render: (_, record) => (
         <div className="detection-variable-name">
           <strong>{standardItemTitle(record, i18n.resolvedLanguage)}</strong>
@@ -407,6 +405,27 @@ export function DetectionConfigPage() {
       render: (_, record) => <Switch size="small" checked={record.store_enabled ?? true} onChange={(checked) => patchStandardItem(record.var_id, { store_enabled: checked })} />,
     },
     {
+      title: t('settings.standards.alarm'),
+      dataIndex: 'alarm_enabled',
+      key: 'alarm_enabled',
+      width: 80,
+      render: (_, record) => <Switch size="small" checked={record.alarm_enabled ?? true} onChange={(checked) => patchStandardItem(record.var_id, { alarm_enabled: checked })} />,
+    },
+    {
+      title: t('settings.standards.checkOnStart'),
+      dataIndex: 'check_on_start',
+      key: 'check_on_start',
+      width: 110,
+      render: (_, record) => <Switch size="small" checked={record.check_on_start ?? true} onChange={(checked) => patchStandardItem(record.var_id, { check_on_start: checked })} />,
+    },
+    {
+      title: t('settings.standards.checkCycle'),
+      dataIndex: 'check_cycle_ms',
+      key: 'check_cycle_ms',
+      width: 130,
+      render: (_, record) => <InputNumber size="small" min={0} precision={0} value={record.check_cycle_ms ?? 0} onChange={(value) => patchStandardItem(record.var_id, { check_cycle_ms: value ?? 0 })} />,
+    },
+    {
       title: t('settings.standards.checkMethod'),
       dataIndex: 'check_method',
       key: 'check_method',
@@ -417,10 +436,10 @@ export function DetectionConfigPage() {
           value={record.check_method ?? 'numeric_range'}
           onChange={(value) => patchStandardItem(record.var_id, { check_method: value })}
           options={[
-            { label: 'numeric_range', value: 'numeric_range' },
-            { label: 'bool_equals', value: 'bool_equals' },
-            { label: 'string_equals', value: 'string_equals' },
-            { label: 'regex', value: 'regex' },
+            { label: t('settings.standards.checkMethods.numericRange'), value: 'numeric_range' },
+            { label: t('settings.standards.checkMethods.boolEquals'), value: 'bool_equals' },
+            { label: t('settings.standards.checkMethods.stringEquals'), value: 'string_equals' },
+            { label: t('settings.standards.checkMethods.regex'), value: 'regex' },
           ]}
         />
       ),
@@ -450,9 +469,9 @@ export function DetectionConfigPage() {
           value={record.quality_policy ?? 'ignore_bad'}
           onChange={(value) => patchStandardItem(record.var_id, { quality_policy: value })}
           options={[
-            { label: 'ignore_bad', value: 'ignore_bad' },
-            { label: 'record_invalid', value: 'record_invalid' },
-            { label: 'fail_on_bad', value: 'fail_on_bad' },
+            { label: t('settings.standards.qualityPolicies.ignoreBad'), value: 'ignore_bad' },
+            { label: t('settings.standards.qualityPolicies.recordInvalid'), value: 'record_invalid' },
+            { label: t('settings.standards.qualityPolicies.failOnBad'), value: 'fail_on_bad' },
           ]}
         />
       ),
@@ -462,7 +481,6 @@ export function DetectionConfigPage() {
       title: t('settings.users.actions'),
       key: 'actions',
       width: 70,
-      fixed: 'right',
       render: (_, record) => <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => removeStandardItem(record.var_id)} />,
     },
   ]
@@ -477,62 +495,49 @@ export function DetectionConfigPage() {
         <div className="history-noise" />
       </div>
 
-      <header className="detection-config-hero">
-        <div>
-          <span className="settings-eyebrow">{t('detectionConfig.eyebrow')}</span>
-          <h1>{t('detectionConfig.title')}</h1>
-          <p>{t('detectionConfig.subtitle')}</p>
-        </div>
-        <div className="detection-config-actions">
-          <Button icon={<Plus size={15} />} type="primary" onClick={() => void openStandardModal()}>
-            {t('settings.standards.create')}
-          </Button>
-          {selectedStandardDetail ? (
-            <Button icon={<Edit3 size={15} />} onClick={() => void openStandardModal(selectedStandardDetail)}>
-              {t('settings.standards.edit')}
+      <section className="detection-config-workspace glass-panel">
+        <header className="detection-config-hero">
+          <div className="detection-standard-toolbar">
+            <Select
+              className="detection-standard-select"
+              showSearch
+              value={selectedStandard?.id}
+              loading={standardsQuery.isFetching}
+              optionFilterProp="label"
+              placeholder={t('detectionConfig.selectStandard')}
+              onChange={setSelectedStandardId}
+              options={standardOptions}
+            />
+            <Button icon={<Plus size={15} />} type="primary" onClick={() => void openStandardModal()}>
+              {t('settings.standards.create')}
             </Button>
-          ) : null}
-        </div>
-      </header>
+          </div>
+          <div className="detection-config-actions">
+            {selectedStandardDetail ? (
+              <>
+                <Button icon={<Save size={15} />} type="primary" loading={saveCurrentStandardMutation.isPending} onClick={() => saveCurrentStandardMutation.mutate()}>
+                  {t('settings.standards.save')}
+                </Button>
+                <Button icon={<Edit3 size={15} />} onClick={() => void openStandardModal(selectedStandardDetail)}>
+                  {t('settings.standards.edit')}
+                </Button>
+                <Popconfirm
+                  title={t('settings.standards.deleteConfirm', { code: selectedStandardDetail.standard_code })}
+                  okText={t('settings.users.delete')}
+                  cancelText={t('settings.actions.cancel')}
+                  onConfirm={() => deleteStandardMutation.mutate(selectedStandardDetail)}
+                >
+                  <Button danger icon={<Trash2 size={15} />} loading={deleteStandardMutation.isPending}>
+                    {t('settings.users.delete')}
+                  </Button>
+                </Popconfirm>
+              </>
+            ) : null}
+          </div>
+        </header>
 
-      <div className="detection-config-grid">
-        <aside className="detection-config-sidebar glass-panel">
-          <div className="detection-panel-head">
-            <div>
-              <span className="settings-eyebrow">{t('detectionConfig.standardList')}</span>
-              <h2>{standards.length}</h2>
-            </div>
-            <ShieldCheck size={18} />
-          </div>
-          <div className="detection-standard-list">
-            {standards.map((standard) => (
-              <button
-                key={standard.id}
-                className={selectedStandard?.id === standard.id ? 'detection-standard-card active' : 'detection-standard-card'}
-                onClick={() => setSelectedStandardId(standard.id)}
-              >
-                <strong>{displayStandardName(standard)}</strong>
-                <span>{standard.standard_code}</span>
-                <em>{standard.items?.length ?? 0} {t('settings.standards.items')}</em>
-              </button>
-            ))}
-            {standards.length === 0 ? <div className="detection-empty">{t('detectionConfig.noStandards')}</div> : null}
-          </div>
-          <div className="detection-legacy-panel">
-            <div className="detection-panel-head compact">
-              <div>
-                <span className="settings-eyebrow">{t('detectionConfig.legacySource')}</span>
-                <h2>{LEGACY_DETECTION_ITEMS.length}</h2>
-              </div>
-              <Copy size={16} />
-            </div>
-            <div className="detection-legacy-tags">
-              {LEGACY_DETECTION_ITEMS.map((item) => <Tag key={item}>{item}</Tag>)}
-            </div>
-          </div>
-        </aside>
-
-        <main className="detection-config-main glass-panel">
+        <div className="detection-config-grid">
+        <main className="detection-config-main">
           <div className="detection-panel-head">
             <div>
               <span className="settings-eyebrow">{selectedStandardDetail ? selectedStandardDetail.standard_code : t('detectionConfig.noSelection')}</span>
@@ -547,59 +552,56 @@ export function DetectionConfigPage() {
           </div>
 
           {selectedStandardDetail ? (
-            <div className="detection-summary-strip">
-              <div>
-                <span>{t('settings.variables.device')}</span>
-                <strong>{standardProjectId(selectedStandardDetail) ? standardProjectCode(selectedStandardDetail) : t('settings.standards.global')}</strong>
-              </div>
-              <div>
-                <span>{t('settings.standards.items')}</span>
-                <strong>{selectedStandardDetail.items?.length ?? 0}</strong>
-              </div>
-              <div>
-                <span>{t('settings.standards.version')}</span>
-                <strong>V{selectedStandardDetail.version}</strong>
-              </div>
-              <div>
-                <span>{t('settings.standards.remark')}</span>
-                <strong>{selectedStandardDetail.remark || '-'}</strong>
-              </div>
+            <div className="detection-inline-meta">
+              <Tag>{standardProjectId(selectedStandardDetail) ? standardProjectCode(selectedStandardDetail) : t('settings.standards.global')}</Tag>
+              <Tag>V{selectedStandardDetail.version}</Tag>
+              <Tag>{selectedStandardItems.length} {t('settings.standards.items')}</Tag>
+              <Tag>{reportTemplateTitle(reportTemplates.find((template) => template.id === selectedStandardDetail.report_template_id)) || t('settings.standards.reportTemplate')}</Tag>
+              {selectedStandardDetail.remark ? <Tag>{selectedStandardDetail.remark}</Tag> : null}
             </div>
           ) : null}
 
+          <div className="detection-table-toolbar">
+            <div className="settings-standard-item-picker">
+              <Select
+                showSearch
+                allowClear
+                value={standardVariableId}
+                placeholder={t('settings.standards.addVariable')}
+                optionFilterProp="label"
+                onChange={setStandardVariableId}
+                options={standardVariableOptions}
+              />
+              <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId || !selectedStandardDetail}>
+                {t('settings.standards.add')}
+              </Button>
+            </div>
+            <div className="detection-legacy-tags">
+              {LEGACY_DETECTION_ITEMS.map((item) => <Tag key={item}>{item}</Tag>)}
+            </div>
+          </div>
+
           <Table
-            className="detection-config-table"
+            className="detection-config-table settings-standard-items-table"
             size="small"
-            rowKey={(record) => record.var_id_text ?? String(record.var_id)}
+            virtual
+            rowKey={(record) => varKey(record.var_id)}
             loading={standardsQuery.isFetching || selectedStandardDetailQuery.isFetching}
-            columns={itemColumns}
-            dataSource={selectedStandardDetail?.items ?? []}
-            scroll={{ x: 1550, y: 570 }}
-            pagination={false}
+            columns={editableItemColumns}
+            dataSource={selectedStandardDetail ? selectedStandardItems : []}
+            scroll={{ x: 1650, y: 520 }}
+            pagination={{
+              defaultPageSize: 30,
+              pageSizeOptions: [20, 30, 50, 100],
+              showSizeChanger: true,
+              showQuickJumper: true,
+              showTotal: (total) => `${total} ${t('settings.standards.items')}`,
+              size: 'small',
+            }}
           />
         </main>
-
-        <section className="detection-config-standards glass-panel">
-          <div className="detection-panel-head">
-            <div>
-              <span className="settings-eyebrow">{t('detectionConfig.allStandards')}</span>
-              <h2>{t('settings.standards.title')}</h2>
-            </div>
-            <Button size="small" icon={<Plus size={14} />} onClick={() => void openStandardModal()}>
-              {t('settings.standards.create')}
-            </Button>
-          </div>
-          <Table
-            size="small"
-            rowKey="id"
-            loading={standardsQuery.isFetching}
-            columns={standardColumns}
-            dataSource={standards}
-            scroll={{ x: 980, y: 260 }}
-            pagination={{ pageSize: 10, size: 'small' }}
-          />
-        </section>
-      </div>
+        </div>
+      </section>
 
       <Modal
         title={editingStandard ? t('settings.standards.edit') : t('settings.standards.create')}
@@ -609,6 +611,7 @@ export function DetectionConfigPage() {
           setStandardModalOpen(false)
           setEditingStandard(undefined)
           setStandardItems([])
+          setDraftStandardId(undefined)
           setStandardVariableId(undefined)
           standardForm.resetFields()
         }}
@@ -625,11 +628,18 @@ export function DetectionConfigPage() {
             <Form.Item name="name" label={t('settings.standards.internalName')}>
               <Input />
             </Form.Item>
-            <Form.Item name="project_id" label={t('settings.variables.selectDevice')}>
-              <Select allowClear options={projects.map((project) => ({ label: `${displayProjectName(project)} · ${projectCode(project)}`, value: project.id }))} />
+            <Form.Item name="project_id" label={t('settings.variables.selectProject')}>
+              <Select allowClear options={projectOptions} />
             </Form.Item>
             <Form.Item name="mode" label={t('settings.standards.mode')}>
               <Input />
+            </Form.Item>
+            <Form.Item name="report_template_id" label={t('settings.standards.reportTemplate')}>
+              <Select
+                allowClear
+                loading={reportTemplatesQuery.isFetching}
+                options={reportTemplateOptions}
+              />
             </Form.Item>
             <Form.Item name="enabled" label={t('settings.variables.enabled')} valuePropName="checked">
               <Switch />
@@ -651,7 +661,7 @@ export function DetectionConfigPage() {
                 placeholder={t('settings.standards.addVariable')}
                 optionFilterProp="label"
                 onChange={setStandardVariableId}
-                options={standardVariables.map((variable) => ({ label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`, value: variableWireId(variable) }))}
+                options={standardVariableOptions}
               />
               <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId}>
                 {t('settings.standards.add')}
@@ -661,11 +671,19 @@ export function DetectionConfigPage() {
           <Table
             className="settings-standard-items-table"
             size="small"
+            virtual
             rowKey={(record) => varKey(record.var_id)}
             columns={editableItemColumns}
             dataSource={standardItems}
             scroll={{ x: 1650, y: 320 }}
-            pagination={false}
+            pagination={{
+              defaultPageSize: 20,
+              pageSizeOptions: [20, 30, 50, 100],
+              showSizeChanger: true,
+              showQuickJumper: true,
+              showTotal: (total) => `${total} ${t('settings.standards.items')}`,
+              size: 'small',
+            }}
           />
           <div className="settings-form-actions">
             <Button type="primary" htmlType="submit" icon={<Save size={15} />} loading={saveStandardMutation.isPending}>

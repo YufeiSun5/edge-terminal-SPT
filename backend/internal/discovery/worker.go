@@ -23,7 +23,9 @@ type Worker struct {
 
 func Start(channels *pipeline.Channels, repo *database.Repository, tags *pipeline.TagManager) {
 	worker := &Worker{repo: repo, tags: tags}
-	go worker.run(channels)
+	pipeline.GoRecovering("discovery", func() {
+		worker.run(channels)
+	})
 	log.Println("discovery worker started")
 }
 

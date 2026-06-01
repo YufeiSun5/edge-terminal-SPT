@@ -14,7 +14,10 @@ func StartAlarmWorkers(count int, channels *pipeline.Channels, repo *database.Re
 		count = 1
 	}
 	for i := 0; i < count; i++ {
-		go alarmWorker(i, channels, repo)
+		workerID := i
+		pipeline.GoRecovering("alarm-worker", func() {
+			alarmWorker(workerID, channels, repo)
+		})
 	}
 	log.Printf("alarm workers started: %d", count)
 }
@@ -109,6 +112,7 @@ func publishAlarmNotification(channels *pipeline.Channels, notificationType stri
 	select {
 	case channels.Notify <- notification:
 	default:
+		channels.RecordDrop("notify")
 		log.Printf("alarm notification dropped type=%s task_id=%d var_id=%d: notify queue full", notificationType, alarm.TaskID, alarm.VarID)
 	}
 }

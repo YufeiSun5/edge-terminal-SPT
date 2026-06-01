@@ -13,7 +13,10 @@ import (
 
 func StartLogicWorkers(count int, channels *Channels, tags *TagManager, tasks *TaskManager, flows ...*TaskFlowExecutor) {
 	for i := 0; i < count; i++ {
-		go logicWorker(i, channels, tags, tasks, firstTaskFlowExecutor(flows))
+		workerID := i
+		GoRecovering("logic", func() {
+			logicWorker(workerID, channels, tags, tasks, firstTaskFlowExecutor(flows))
+		})
 	}
 	log.Printf("logic workers started: %d", count)
 }
@@ -105,6 +108,7 @@ func processMessage(workerID int, msg *models.MQTTMessage, channels *Channels, t
 				tag.MarkStorageRoutesStored(task.StorageRoutes, task.Timestamp)
 			}
 		default:
+			channels.RecordDrop("store")
 			log.Printf("[logic-%d] store queue full, drop var_id=%d", workerID, task.VarID)
 		}
 	}
@@ -122,6 +126,7 @@ func enqueueAlarmEvents(channels *Channels, events []*models.DetectionLimitAlarm
 		select {
 		case channels.Alarm <- event:
 		default:
+			channels.RecordDrop("alarm")
 			log.Printf("[logic-%d] alarm queue full, drop action=%s task_id=%d var_id=%d", workerID, event.Action, event.Alarm.TaskID, event.Alarm.VarID)
 		}
 	}

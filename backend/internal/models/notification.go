@@ -40,23 +40,24 @@ func (n RuntimeNotification) MarshalJSON() ([]byte, error) {
 }
 
 type SysNotification struct {
-	ID          uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	EventUID    string    `gorm:"column:event_uid;size:128;uniqueIndex;not null" json:"event_uid"`
-	Type        string    `gorm:"column:type;size:64;index;not null" json:"type"`
-	Level       string    `gorm:"column:level;size:32;index;not null" json:"level"`
-	TargetType  string    `gorm:"column:target_type;size:32;index;not null" json:"target_type"`
-	TargetID    string    `gorm:"column:target_id;size:128;index" json:"target_id"`
-	ProjectID   uint      `gorm:"column:project_id;index;default:0" json:"project_id"`
-	ProjectCode string    `gorm:"column:project_code;size:64;index" json:"project_code"`
-	TaskID      uint      `gorm:"column:task_id;index;default:0" json:"task_id,omitempty"`
-	TestNo      string    `gorm:"column:test_no;size:128;index" json:"test_no,omitempty"`
-	VarID       int64     `gorm:"column:var_id;index;default:0" json:"var_id,omitempty"`
-	VarName     string    `gorm:"column:var_name;size:128;index" json:"var_name,omitempty"`
-	DisplayName string    `gorm:"column:display_name;size:128" json:"display_name,omitempty"`
-	Message     string    `gorm:"column:message;size:512" json:"message"`
-	Payload     string    `gorm:"column:payload;type:json" json:"payload"`
-	OccurredAt  time.Time `gorm:"column:occurred_at;index;not null" json:"occurred_at"`
-	CreatedAt   time.Time `gorm:"column:created_at" json:"created_at"`
+	ID          uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	EventUID    string     `gorm:"column:event_uid;size:128;uniqueIndex;not null" json:"event_uid"`
+	Type        string     `gorm:"column:type;size:64;index;not null" json:"type"`
+	Level       string     `gorm:"column:level;size:32;index;not null" json:"level"`
+	TargetType  string     `gorm:"column:target_type;size:32;index;not null" json:"target_type"`
+	TargetID    string     `gorm:"column:target_id;size:128;index" json:"target_id"`
+	ProjectID   uint       `gorm:"column:project_id;index;default:0" json:"project_id"`
+	ProjectCode string     `gorm:"column:project_code;size:64;index" json:"project_code"`
+	TaskID      uint       `gorm:"column:task_id;index;default:0" json:"task_id,omitempty"`
+	TestNo      string     `gorm:"column:test_no;size:128;index" json:"test_no,omitempty"`
+	VarID       int64      `gorm:"column:var_id;index;default:0" json:"var_id,omitempty"`
+	VarName     string     `gorm:"column:var_name;size:128;index" json:"var_name,omitempty"`
+	DisplayName string     `gorm:"column:display_name;size:128" json:"display_name,omitempty"`
+	Message     string     `gorm:"column:message;size:512" json:"message"`
+	Payload     string     `gorm:"column:payload;type:json" json:"payload"`
+	OccurredAt  time.Time  `gorm:"column:occurred_at;index;not null" json:"occurred_at"`
+	ExpiresAt   *time.Time `gorm:"column:expires_at;index" json:"expires_at,omitempty"`
+	CreatedAt   time.Time  `gorm:"column:created_at" json:"created_at"`
 }
 
 func (SysNotification) TableName() string {
@@ -92,8 +93,28 @@ type UserNotification struct {
 	Message     string     `json:"message" gorm:"column:message"`
 	Payload     string     `json:"payload" gorm:"column:payload"`
 	OccurredAt  time.Time  `json:"occurred_at" gorm:"column:occurred_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty" gorm:"column:expires_at"`
 	CreatedAt   time.Time  `json:"created_at" gorm:"column:created_at"`
 	ReadAt      *time.Time `json:"read_at,omitempty" gorm:"column:read_at"`
+}
+
+const AlarmNotificationRetentionDays = 90
+
+func NotificationExpiresAt(notificationType string, occurredAt time.Time) *time.Time {
+	if !IsAlarmNotificationType(notificationType) {
+		return nil
+	}
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
+	expiresAt := occurredAt.AddDate(0, 0, AlarmNotificationRetentionDays)
+	return &expiresAt
+}
+
+func IsAlarmNotificationType(notificationType string) bool {
+	return notificationType == NotificationAlarmLimitEnter ||
+		notificationType == NotificationAlarmLimitRecover ||
+		notificationType == NotificationAlarmLimitLevelChange
 }
 
 func optionalInt64Text(value int64) string {

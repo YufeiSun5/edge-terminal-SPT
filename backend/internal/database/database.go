@@ -96,6 +96,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.DetectionLimitAlarm{},
 		&models.ReportTemplate{},
 		&models.DetectionRunReport{},
+		&models.DetectionRunReportRequest{},
 		&models.HistoryData{},
 		&models.SysUser{},
 		&models.SysServiceClient{},

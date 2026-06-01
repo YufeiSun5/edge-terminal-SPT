@@ -5,10 +5,13 @@ import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
 import { EdgeStatusPage } from '@/features/edge-status/EdgeStatusPage'
 import { StationOperationPage } from '@/features/station-operation/StationOperationPage'
 import { HistoryQueryPage } from '@/features/history-query/HistoryQueryPage'
+import { ReportsPage } from '@/features/reports/ReportsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { DetectionConfigPage } from '@/features/detection-config/DetectionConfigPage'
 import { TaskFlowsPage } from '@/features/task-flows/TaskFlowsPage'
 import { ModelCockpitPage } from '@/features/model-cockpit/ModelCockpitPage'
+import { NotificationCenterPage } from '@/features/notifications/NotificationCenterPage'
+import { AlarmCenterPage } from '@/features/alarms/AlarmCenterPage'
 
 export const router = createHashRouter([
   {
@@ -47,6 +50,30 @@ export const router = createHashRouter([
               {
                 index: true,
                 element: <HistoryQueryPage />,
+              },
+            ],
+          },
+          {
+            path: 'reports',
+            element: <ProtectedRoute permissions={['view_history']} />,
+            children: [
+              {
+                index: true,
+                element: <ReportsPage />,
+              },
+            ],
+          },
+          {
+            path: 'notifications',
+            element: <NotificationCenterPage />,
+          },
+          {
+            path: 'alarms',
+            element: <ProtectedRoute permissions={['view_realtime']} />,
+            children: [
+              {
+                index: true,
+                element: <AlarmCenterPage />,
               },
             ],
           },

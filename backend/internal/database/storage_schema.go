@@ -27,6 +27,8 @@ func (r *Repository) EnsureProjectWideTable(ProjectID uint, routes []models.Dete
 			if err := r.db.Exec(createProjectWideTableSQL(dialect, tableName)).Error; err != nil {
 				return err
 			}
+		} else if err := r.ensureProjectWideIdentityColumns(ProjectID, tableName); err != nil {
+			return err
 		}
 		for _, route := range tableRoutes {
 			if err := ValidateStorageIdentifier(route.ColumnName); err != nil {
@@ -40,6 +42,35 @@ func (r *Repository) EnsureProjectWideTable(ProjectID uint, routes []models.Dete
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func (r *Repository) ensureProjectWideIdentityColumns(projectID uint, tableName string) error {
+	dialect := r.db.Name()
+	quotedTable := quoteIdentifier(dialect, tableName)
+	if !r.db.Migrator().HasColumn(tableName, "project_id") {
+		columnType := "BIGINT UNSIGNED NOT NULL DEFAULT 0"
+		if dialect == "sqlite" {
+			columnType = "INTEGER NOT NULL DEFAULT 0"
+		}
+		if err := r.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", quotedTable, quoteIdentifier(dialect, "project_id"), columnType)).Error; err != nil {
+			return err
+		}
+	}
+	if !r.db.Migrator().HasColumn(tableName, "project_code") {
+		columnType := "VARCHAR(64) DEFAULT ''"
+		if dialect == "sqlite" {
+			columnType = "TEXT DEFAULT ''"
+		}
+		if err := r.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", quotedTable, quoteIdentifier(dialect, "project_code"), columnType)).Error; err != nil {
+			return err
+		}
+	}
+	if tableName == ProjectWideTableName(projectID) {
+		if err := r.db.Table(tableName).Where("project_id = ?", 0).Update("project_id", projectID).Error; err != nil {
+			return err
 		}
 	}
 	return nil
