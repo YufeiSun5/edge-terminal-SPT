@@ -1,0 +1,99 @@
+{
+  "name": "spindle-main-server-desktop",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Electron and LAN web shell for the Spindle main server.",
+  "author": "Spindle",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k -n renderer,electron -c blue,green \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 0.0.0.0 --port 5273",
+    "dev:electron": "wait-on tcp:5273 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5273 electron .",
+    "build": "tsc -b && vite build",
+    "package": "npm run build && electron-builder",
+    "lint": "eslint .",
+    "preview": "vite preview --host 0.0.0.0 --port 4273",
+    "smoke:settings": "node scripts/smoke-settings.mjs",
+    "test": "vitest run",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@hookform/resolvers": "^5.4.0",
+    "@microsoft/fetch-event-source": "^2.0.1",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-query": "^5.100.14",
+    "@types/three": "^0.184.1",
+    "@xstate/react": "^6.1.0",
+    "antd": "^6.4.3",
+    "axios": "^1.16.1",
+    "dayjs": "^1.11.21",
+    "exceljs": "^4.4.0",
+    "file-saver": "^2.0.5",
+    "i18next": "^26.3.0",
+    "lucide-react": "^1.16.0",
+    "openapi-fetch": "^0.17.0",
+    "papaparse": "^5.5.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-hook-form": "^7.76.1",
+    "react-i18next": "^17.0.8",
+    "react-router": "^7.15.1",
+    "recharts": "^3.8.1",
+    "three": "^0.184.0",
+    "xstate": "^5.31.1",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/file-saver": "^2.0.7",
+    "@types/node": "^24.12.4",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^42.3.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.4.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "jsdom": "^29.1.1",
+    "npm-run-all": "^4.1.5",
+    "playwright": "^1.60.0",
+    "prettier": "^3.8.3",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12",
+    "vitest": "^4.1.7",
+    "wait-on": "^9.0.10"
+  },
+  "build": {
+    "appId": "com.spindle.main-server",
+    "productName": "Spindle Main Server",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  }
+}

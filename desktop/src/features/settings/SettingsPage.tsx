@@ -30,6 +30,7 @@ import {
 import { queryClient } from '@/app/queryClient'
 import { createUser, deleteUser, getUsers, resetUserPassword, updateUser } from '@/features/auth/api'
 import { useAuthStore } from '@/features/auth/authStore'
+import { env } from '@/shared/config/env'
 import type {
   AuditLogEntry,
   BulkRemapKioProjectsResult,
@@ -321,6 +322,7 @@ export function SettingsPage() {
   const hasPermission = useAuthStore((state) => state.hasPermission)
   const canManageUsers = hasPermission('manage_users')
   const canUseSystemSettings = hasPermission('system_settings')
+  const features = env.runtimeFeatures
   const [activeModule, setActiveModule] = useState<SettingsModule>('variables')
   const [variableFilter, setVariableFilter] = useState<VariableFilter>('all')
   const [variableKeyword, setVariableKeyword] = useState('')
@@ -369,12 +371,14 @@ export function SettingsPage() {
   const gatewaysQuery = useQuery({
     queryKey: ['settings', 'gateway-configs'],
     queryFn: getGatewayConfigs,
+    enabled: features.gatewayManage,
     refetchInterval: 30000,
     retry: false,
   })
   const gatewayStatusQuery = useQuery({
     queryKey: ['settings', 'gateway-status'],
     queryFn: getGateways,
+    enabled: features.gatewayManage,
     refetchInterval: 30000,
     retry: false,
   })
@@ -472,8 +476,8 @@ export function SettingsPage() {
   const sidecarStatus = sidecarQuery.data
   const sidecarState = sidecarStatus?.state ?? 'unavailable'
   const backendUnavailable =
-    gatewaysQuery.isError ||
-    gatewayStatusQuery.isError ||
+    (features.gatewayManage && gatewaysQuery.isError) ||
+    (features.gatewayManage && gatewayStatusQuery.isError) ||
     projectsQuery.isError ||
     variablesQuery.isError ||
     standardsQuery.isError ||
@@ -946,7 +950,7 @@ export function SettingsPage() {
   const restartSidecarMutation = useMutation({
     mutationFn: restartSidecar,
     onSuccess: async () => {
-      messageApi.success(t('settings.messages.sidecarRestarted'))
+      messageApi.success(features.sidecar ? t('settings.messages.sidecarRestarted') : t('settings.messages.backendRefreshed'))
       await queryClient.invalidateQueries({ queryKey: ['desktop', 'sidecar'] })
     },
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
@@ -2105,9 +2109,11 @@ export function SettingsPage() {
                     <h2>{t('settings.variables.allInfo')}</h2>
                   </div>
                   <div className="settings-head-actions">
+                    {features.kioManage ? (
                     <Button size="small" icon={<RotateCcw size={14} />} onClick={openKioRemapModal}>
                       {t('settings.variables.kioRemap')}
                     </Button>
+                    ) : null}
                     <Button size="small" icon={<Plus size={14} />} onClick={openVirtualVariableModal}>
                       {t('settings.variables.createVirtual')}
                     </Button>
@@ -2294,10 +2300,13 @@ export function SettingsPage() {
                   <span className="settings-eyebrow">{t('settings.realtime.service')}</span>
                   <h2>{t('settings.gateway.title')}</h2>
                 </div>
+                {features.gatewayManage ? (
                 <Button size="small" icon={<Plus size={14} />} onClick={() => openGatewayModal()}>
                   {t('settings.gateway.new')}
                 </Button>
+                ) : null}
               </div>
+              {features.gatewayManage ? (
               <div className="settings-gateway-inline-list">
                 {gateways.map((gateway) => {
                   const status = gatewayStatusFor(gateway, gatewayStatusQuery.data)
@@ -2312,6 +2321,9 @@ export function SettingsPage() {
                 })}
                 {gateways.length === 0 ? <div className="settings-empty">{t('settings.gateway.empty')}</div> : null}
               </div>
+              ) : (
+                <Alert type="info" showIcon message={t('settings.gateway.mainServerReadonly')} />
+              )}
             </section>
           ) : null}
 
@@ -2455,8 +2467,8 @@ export function SettingsPage() {
                 <div className="settings-system-card">
                   <div>
                     <span className="settings-system-icon"><ServerCog size={18} /></span>
-                    <strong>{t('settings.system.sidecar')}</strong>
-                    <p>{sidecarStatus?.pid ? `PID ${sidecarStatus.pid}` : sidecarStatus?.error || t('settings.system.sidecarDesc')}</p>
+                    <strong>{features.sidecar ? t('settings.system.sidecar') : t('settings.system.backend')}</strong>
+                    <p>{sidecarStatus?.pid ? `PID ${sidecarStatus.pid}` : sidecarStatus?.error || (features.sidecar ? t('settings.system.sidecarDesc') : t('settings.system.backendDesc'))}</p>
                   </div>
                   <Button
                     size="small"
@@ -2464,7 +2476,7 @@ export function SettingsPage() {
                     loading={restartSidecarMutation.isPending}
                     onClick={() => restartSidecarMutation.mutate()}
                   >
-                    {t('settings.system.restartSidecar')}
+                    {features.sidecar ? t('settings.system.restartSidecar') : t('settings.system.refreshBackend')}
                   </Button>
                 </div>
                 <SystemSwitchCard
@@ -2485,6 +2497,7 @@ export function SettingsPage() {
                   loading={setMinimizeToTrayMutation.isPending || desktopStatusQuery.isFetching}
                   onChange={(checked) => setMinimizeToTrayMutation.mutate(checked)}
                 />
+                {features.sidecar ? (
                 <div className="settings-system-card">
                   <div>
                     <span className="settings-system-icon"><ShieldCheck size={18} /></span>
@@ -2495,6 +2508,7 @@ export function SettingsPage() {
                     {desktopStatus?.watchdogEnabled ? t('status.online') : t('status.unavailable')}
                   </Tag>
                 </div>
+                ) : null}
                 <div className="settings-system-card">
                   <div>
                     <span className="settings-system-icon"><FolderOpen size={18} /></span>

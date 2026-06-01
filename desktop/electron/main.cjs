@@ -4,8 +4,14 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 
-const BACKEND_URL = 'http://127.0.0.1:18080';
+const RUNTIME_ROLE = process.env.VITE_APP_ROLE === 'main_server' || process.env.APP_ROLE === 'main_server'
+  ? 'main_server'
+  : 'edge';
+const BACKEND_URL = RUNTIME_ROLE === 'main_server'
+  ? (process.env.MAIN_SERVER_URL || process.env.VITE_MAIN_API_BASE_URL || 'http://127.0.0.1:19080')
+  : (process.env.EDGE_BACKEND_URL || process.env.VITE_EDGE_API_BASE_URL || 'http://127.0.0.1:18080');
 const isDev = !app.isPackaged;
+const hasManagedSidecar = RUNTIME_ROLE === 'edge';
 
 let mainWindow = null;
 let tray = null;
@@ -23,7 +29,7 @@ let sidecarStatus = {
   backendUrl: BACKEND_URL,
   logFile: null,
   restartAttempts: 0,
-  watchdogEnabled: true,
+  watchdogEnabled: hasManagedSidecar,
 };
 
 function createTrayIcon() {
@@ -67,13 +73,14 @@ function setAutostart(enabled) {
 
 function updateTrayMenu() {
   if (!tray) return;
+  const appLabel = RUNTIME_ROLE === 'main_server' ? 'Spindle Main Server' : 'Spindle Edge Terminal';
   const statusLabel = sidecarStatus.state === 'online' ? 'Backend online' : `Backend ${sidecarStatus.state}`;
-  tray.setToolTip(`Spindle Edge Terminal - ${statusLabel}`);
+  tray.setToolTip(`${appLabel} - ${statusLabel}`);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show Edge Terminal', click: showMainWindow },
+    { label: RUNTIME_ROLE === 'main_server' ? 'Show Main Server' : 'Show Edge Terminal', click: showMainWindow },
     { label: statusLabel, enabled: false },
     { type: 'separator' },
-    { label: 'Restart Backend', click: () => void restartSidecar() },
+    { label: hasManagedSidecar ? 'Restart Backend' : 'Refresh Backend Status', click: () => void restartSidecar() },
     {
       label: 'Open Logs',
       click: async () => {
@@ -120,8 +127,8 @@ function desktopStatus() {
     autostart: getAutostartSettings(),
     minimizeToTray,
     trayAvailable: Boolean(tray),
-    watchdogEnabled: true,
-    restartAttempts: sidecarRestartAttempts,
+    watchdogEnabled: hasManagedSidecar,
+    restartAttempts: hasManagedSidecar ? sidecarRestartAttempts : 0,
   };
 }
 
@@ -150,7 +157,7 @@ function resolveBackendPaths() {
 function ensureLogFile() {
   const logDir = path.join(app.getPath('userData'), 'logs');
   fs.mkdirSync(logDir, { recursive: true });
-  const logFile = path.join(logDir, 'edge-backend.log');
+  const logFile = path.join(logDir, hasManagedSidecar ? 'edge-backend.log' : 'main-server-desktop.log');
   sidecarStatus.logFile = logFile;
   return logFile;
 }
@@ -246,6 +253,11 @@ async function refreshSidecarHealth() {
 }
 
 function startSidecar() {
+  if (!hasManagedSidecar) {
+    void refreshSidecarHealth();
+    return sidecarStatus;
+  }
+
   if (sidecarProcess && !sidecarProcess.killed) {
     return sidecarStatus;
   }
@@ -331,6 +343,10 @@ function startSidecar() {
 }
 
 async function restartSidecar() {
+  if (!hasManagedSidecar) {
+    return refreshSidecarHealth();
+  }
+
   if (sidecarProcess && !sidecarProcess.killed) {
     intentionalSidecarStop = true;
     sidecarProcess.kill();

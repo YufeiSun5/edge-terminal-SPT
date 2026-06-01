@@ -85,9 +85,13 @@ export type GatewayStatusMap = Record<string, GatewayStatus>;
 
 export type HealthResponse = {
   status: string;
-  tags: number;
-  channels: ChannelStats;
-  gateways: GatewayStatusMap;
+  role?: "edge" | "main_server" | string;
+  tags?: number;
+  channels?: ChannelStats;
+  gateways?: GatewayStatusMap;
+  database_ok?: boolean;
+  edge_base_url?: string;
+  time?: string;
 };
 
 export type DatabaseConfig = {

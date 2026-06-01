@@ -1,0 +1,306 @@
+.detection-config-page {
+  position: relative;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 12px;
+  color: #0f172a;
+}
+
+.detection-config-page > *:not(.history-ambient-background) {
+  position: relative;
+  z-index: 1;
+}
+
+.detection-config-page .history-orb {
+  animation: none;
+  filter: blur(30px);
+  opacity: 0.3;
+}
+
+.detection-config-page .history-noise {
+  display: none;
+}
+
+.detection-config-workspace {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.54);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow:
+    0 14px 38px rgba(31, 47, 70, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84);
+}
+
+.detection-config-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.detection-standard-toolbar,
+.detection-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detection-standard-select {
+  width: min(440px, 42vw);
+}
+
+.detection-config-actions .ant-btn,
+.detection-config-page .ant-btn {
+  border-radius: 999px;
+}
+
+.detection-config-grid {
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 12px;
+}
+
+.detection-config-sidebar,
+.detection-config-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.detection-config-sidebar {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding-right: 12px;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.detection-config-main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.detection-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.detection-panel-head h2 {
+  margin: 3px 0 0;
+  font-size: 18px;
+  line-height: 22px;
+  letter-spacing: 0;
+}
+
+.detection-standard-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(30, 27, 24, 0.16) transparent;
+}
+
+.detection-standard-list::-webkit-scrollbar,
+.detection-legacy-tags::-webkit-scrollbar,
+.detection-config-page .ant-table-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.detection-standard-list::-webkit-scrollbar-thumb,
+.detection-legacy-tags::-webkit-scrollbar-thumb,
+.detection-config-page .ant-table-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(30, 27, 24, 0.16);
+}
+
+.detection-standard-card {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.46);
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.detection-standard-card.active {
+  border-color: rgba(31, 95, 139, 0.36);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(219, 234, 254, 0.68)),
+    rgba(255, 255, 255, 0.54);
+  box-shadow:
+    inset 3px 0 0 rgba(31, 95, 139, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 10px 24px rgba(31, 95, 139, 0.08);
+}
+
+.detection-standard-card strong,
+.detection-standard-card span,
+.detection-standard-card em {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detection-standard-card strong {
+  font-size: 13px;
+}
+
+.detection-standard-card span,
+.detection-standard-card em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.detection-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  margin-bottom: 8px;
+}
+
+.detection-legacy-tags {
+  display: flex;
+  flex: 1;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.detection-legacy-tags .ant-tag {
+  max-width: 120px;
+  margin-inline-end: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.56);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detection-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.detection-variable-name,
+.detection-link-button {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.detection-link-button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.detection-variable-name strong,
+.detection-variable-name span,
+.detection-link-button strong,
+.detection-link-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detection-variable-name span,
+.detection-link-button span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.detection-empty {
+  display: grid;
+  min-height: 110px;
+  place-items: center;
+  border: 1px dashed rgba(30, 27, 24, 0.16);
+  border-radius: 14px;
+  color: #64748b;
+}
+
+.detection-config-page .ant-table-wrapper .ant-table {
+  background: transparent;
+}
+
+.detection-config-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.detection-config-page .ant-table-container {
+  border-radius: 12px;
+}
+
+.detection-config-page .ant-table-thead > tr > th {
+  border-bottom-color: rgba(30, 27, 24, 0.72);
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.detection-config-page .ant-table-tbody > tr > td {
+  border-bottom-color: rgba(30, 27, 24, 0.07);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.detection-config-page .ant-input,
+.detection-config-page .ant-input-number,
+.detection-config-page .ant-select-selector {
+  border-color: rgba(255, 255, 255, 0.86) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.68) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+
+.detection-config-page .ant-input-number-input {
+  background: transparent !important;
+}
+
+.detection-config-page .settings-standard-items-table .ant-input-number {
+  width: 78px;
+}
+
+.detection-config-page .settings-standard-items-table .ant-select,
+.detection-config-page .settings-standard-items-table .ant-input {
+  width: 100%;
+}
+
+@media (max-width: 1500px) {
+  .detection-standard-select {
+    width: min(360px, 40vw);
+  }
+}

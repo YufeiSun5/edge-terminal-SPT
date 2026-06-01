@@ -15,7 +15,7 @@ export function subscribeSse<TPayload>(
 ) {
   const token = getAccessToken()
 
-  return fetchEventSource(`${env.edgeApiBaseUrl}${path}`, {
+  return fetchEventSource(`${env.apiBaseUrl}${path}`, {
     signal,
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     onmessage(message) {
@@ -40,7 +40,7 @@ type RealtimeWebSocketHandlers = {
 
 export function subscribeRealtimeWebSocket({ onMessage, onClose, onError, subscription }: RealtimeWebSocketHandlers) {
   const token = getAccessToken()
-  const url = new URL('/api/v1/ws', env.edgeApiBaseUrl)
+  const url = new URL('/api/v1/ws', env.apiBaseUrl)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   if (token) url.searchParams.set('access_token', token)
   subscription?.topics.forEach((topic) => url.searchParams.append('topic', topic))
@@ -72,7 +72,7 @@ export function sendRealtimeWebSocketCommand<TPayload = unknown, TResult = unkno
   timeoutMs = 12000,
 ) {
   const token = getAccessToken()
-  const url = new URL('/api/v1/ws', env.edgeApiBaseUrl)
+  const url = new URL('/api/v1/ws', env.apiBaseUrl)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   if (token) url.searchParams.set('access_token', token)
 

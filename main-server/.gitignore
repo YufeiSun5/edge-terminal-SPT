@@ -1,0 +1,8 @@
+backend/main-server.exe
+backend/*.exe
+backend/*.log
+backend/configs/config.json
+desktop/node_modules
+desktop/dist
+desktop/release
+desktop/*.log

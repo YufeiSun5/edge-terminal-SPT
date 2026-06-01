@@ -76,6 +76,18 @@ export function getHealth() {
   return getJson<HealthResponse>("/health");
 }
 
+export type MainServerStatus = {
+  role: "main_server";
+  query_source?: string;
+  edge_control_target?: string;
+  query_proxy_enabled?: boolean;
+  report_service?: string;
+}
+
+export function getMainServerStatus() {
+  return getJson<MainServerStatus>("/api/v1/main-server/status");
+}
+
 export function getChannels() {
   return getJson<ChannelStats>("/api/v1/runtime/channels");
 }

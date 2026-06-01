@@ -13,10 +13,12 @@ import {
   WifiOff,
 } from "lucide-react";
 import type { TagSnapshot } from "@/shared/api/types";
+import { env } from "@/shared/config/env";
 import {
   getActiveDetectionRuns,
   getGateways,
   getHealth,
+  getMainServerStatus,
   getRealtimeVariables,
 } from "./api";
 import {
@@ -37,6 +39,8 @@ const sidecarTagColor: Record<SidecarState, string> = {
 
 export function EdgeStatusPage() {
   const { t } = useTranslation();
+  const isMainServer = env.runtimeRole === "main_server";
+  const features = env.runtimeFeatures;
 
   const sidecarQuery = useQuery({
     queryKey: ["desktop", "sidecar"],
@@ -54,6 +58,15 @@ export function EdgeStatusPage() {
   const gatewaysQuery = useQuery({
     queryKey: ["edge", "gateways"],
     queryFn: getGateways,
+    enabled: features.gatewayManage,
+    refetchInterval: 5000,
+    retry: false,
+  });
+
+  const mainServerStatusQuery = useQuery({
+    queryKey: ["main-server", "status"],
+    queryFn: getMainServerStatus,
+    enabled: isMainServer,
     refetchInterval: 5000,
     retry: false,
   });
@@ -84,6 +97,11 @@ export function EdgeStatusPage() {
   const sidecarState = sidecarQuery.data?.state ?? "offline";
   const variables = variablesQuery.data ?? [];
   const activeRuns = activeRunsQuery.data ?? [];
+  const mainServerStatus = mainServerStatusQuery.data;
+  const backendRuntimeLabel = isMainServer ? t("metrics.backendRuntime") : t("metrics.sidecar");
+  const backendRuntimeNote = sidecarQuery.data?.pid
+    ? `PID ${sidecarQuery.data.pid}`
+    : sidecarQuery.data?.error || (isMainServer ? t("messages.mainServerMode") : "");
 
   const tableColumns = useMemo<TableProps<TagSnapshot>["columns"]>(
     () => [
@@ -153,7 +171,7 @@ export function EdgeStatusPage() {
           message={t("messages.bridgeUnavailable")}
         />
       )}
-      {sidecarState === "missing" && (
+      {features.sidecar && sidecarState === "missing" && (
         <Alert
           className="compact-alert"
           type="error"
@@ -170,46 +188,42 @@ export function EdgeStatusPage() {
         />
       )}
 
-      <section className="status-grid edge-status-grid" aria-label={t("panels.edgeOverview")}>
+      <section className="status-grid edge-status-grid" aria-label={isMainServer ? t("panels.mainOverview") : t("panels.edgeOverview")}>
         <StatusTile
           icon={<Server size={17} />}
-          label={t("metrics.sidecar")}
+          label={backendRuntimeLabel}
           value={t(`status.${sidecarState}`)}
           tag={
             <Tag color={sidecarTagColor[sidecarState]}>
               {t(`status.${sidecarState}`)}
             </Tag>
           }
-          note={
-            sidecarQuery.data?.pid
-              ? `PID ${sidecarQuery.data.pid}`
-              : sidecarQuery.data?.error || ""
-          }
+          note={backendRuntimeNote}
         />
         <StatusTile
           icon={healthQuery.data ? <Wifi size={17} /> : <WifiOff size={17} />}
           label={t("metrics.api")}
           value={healthQuery.data?.status ?? t("status.notReady")}
           tag={<Badge status={healthQuery.data ? "success" : "error"} />}
-          note="127.0.0.1:18080"
+          note={env.apiBaseUrl}
         />
         <StatusTile
           icon={<Activity size={17} />}
-          label={t("metrics.tags")}
-          value={String(healthQuery.data?.tags ?? variables.length)}
-          note={t("panels.variables")}
+          label={isMainServer ? t("metrics.mainServerDatabase") : t("metrics.tags")}
+          value={isMainServer ? (healthQuery.data?.database_ok ? t("status.online") : t("status.offline")) : String(healthQuery.data?.tags ?? variables.length)}
+          note={isMainServer ? t("metrics.querySource") : t("panels.variables")}
         />
         <StatusTile
           icon={<ShieldCheck size={17} />}
-          label={t("metrics.gateways")}
-          value={`${onlineGateways}/${gatewayEntries.length}`}
-          note={t("panels.gateways")}
+          label={isMainServer ? t("metrics.edgeControlTarget") : t("metrics.gateways")}
+          value={isMainServer ? (mainServerStatus?.edge_control_target ?? "-") : `${onlineGateways}/${gatewayEntries.length}`}
+          note={isMainServer ? t("metrics.queryProxy", { enabled: mainServerStatus?.query_proxy_enabled ? t("status.online") : t("status.offline") }) : t("panels.gateways")}
         />
         <StatusTile
           icon={<Database size={17} />}
-          label={t("metrics.activeRuns")}
-          value={String(activeRuns.length)}
-          note={t("panels.activeRuns")}
+          label={isMainServer ? t("metrics.reportService") : t("metrics.activeRuns")}
+          value={isMainServer ? (features.reportGeneration ? t("status.online") : t("status.unavailable")) : String(activeRuns.length)}
+          note={isMainServer ? t("panels.integration") : t("panels.activeRuns")}
         />
       </section>
 
@@ -239,6 +253,7 @@ export function EdgeStatusPage() {
         </div>
 
         <div className="side-stack">
+          {features.gatewayManage ? (
           <div className="panel edge-glass-panel">
             <div className="panel-header">
               <Typography.Title level={2} className="panel-title">
@@ -260,6 +275,7 @@ export function EdgeStatusPage() {
               </div>
             </div>
           </div>
+          ) : null}
 
           <div className="panel edge-glass-panel">
             <div className="panel-header">

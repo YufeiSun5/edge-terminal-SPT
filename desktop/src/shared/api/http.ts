@@ -13,7 +13,7 @@ export class ApiError extends Error {
 }
 
 export const apiClient = axios.create({
-  baseURL: env.edgeApiBaseUrl,
+  baseURL: env.apiBaseUrl,
   timeout: 8000,
 });
 

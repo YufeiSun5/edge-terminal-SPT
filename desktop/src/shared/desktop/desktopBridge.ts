@@ -1,3 +1,5 @@
+import { env } from '@/shared/config/env'
+
 export type SidecarState =
   | 'unavailable'
   | 'missing'
@@ -18,6 +20,8 @@ export type SidecarStatus = {
   restartAttempts?: number
   watchdogEnabled?: boolean
 }
+
+export type BackendRuntimeStatus = SidecarStatus
 
 export type AppInfo = {
   isPackaged: boolean
@@ -56,13 +60,15 @@ export type EdgeDesktopApi = {
   openExternal: (url: string) => Promise<{ opened: boolean }>
 }
 
+export type DesktopBridgeApi = EdgeDesktopApi
+
 export async function getAppInfo(): Promise<AppInfo> {
   if (!window.edgeDesktop) {
     return {
       isPackaged: false,
       version: 'renderer-only',
       userDataPath: '',
-      backendUrl: 'http://127.0.0.1:18080',
+      backendUrl: env.apiBaseUrl,
     }
   }
   return window.edgeDesktop.getAppInfo()
@@ -102,11 +108,15 @@ export async function getSidecarStatus(): Promise<SidecarStatus> {
       pid: null,
       error: 'Electron preload bridge is unavailable',
       health: null,
-      backendUrl: 'http://127.0.0.1:18080',
+      backendUrl: env.apiBaseUrl,
       logFile: null,
     }
   }
   return window.edgeDesktop.getSidecarStatus()
+}
+
+export async function getBackendRuntimeStatus(): Promise<BackendRuntimeStatus> {
+  return getSidecarStatus()
 }
 
 export async function restartSidecar(): Promise<SidecarStatus> {
@@ -114,6 +124,10 @@ export async function restartSidecar(): Promise<SidecarStatus> {
     return getSidecarStatus()
   }
   return window.edgeDesktop.restartSidecar()
+}
+
+export async function restartBackend(): Promise<BackendRuntimeStatus> {
+  return restartSidecar()
 }
 
 export async function openLogs() {
