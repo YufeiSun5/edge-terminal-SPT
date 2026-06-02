@@ -498,6 +498,7 @@ export type Project = {
   project_code: string;
   device_code?: string;
   site_no: string;
+  edge_instance_id?: string;
   name: string;
   display_name: string;
   display_name_en: string;
@@ -519,6 +520,7 @@ export type Device = Project & {
 export type ProjectPayload = {
   project_code: string;
   site_no?: string;
+  edge_instance_id?: string;
   name?: string;
   display_name?: string;
   display_name_en?: string;
@@ -543,6 +545,7 @@ export type DevicePayload = {
 
 export type ProjectPatchPayload = Partial<{
   site_no: string;
+  edge_instance_id: string;
   name: string;
   display_name: string;
   display_name_en: string;
@@ -1051,6 +1054,83 @@ export type RealtimeVariableListParams = {
   project_id?: number;
   device_id?: number;
   var_id?: VarIdentifier | VarIdentifier[];
+};
+
+export type StationViewProjectRef = {
+  id: number;
+  project_code: string;
+  name: string;
+  display_name: string;
+  display_name_en: string;
+  display_name_ja: string;
+  model_name: string;
+};
+
+export type StationViewTemplateRef = {
+  template_uid: string;
+  template_code: string;
+  name: string;
+  display_name: string;
+  display_name_en: string;
+  display_name_ja: string;
+  version: number;
+  status: "draft" | "published" | "disabled" | string;
+  owner_scope: string;
+  layout_json?: string;
+};
+
+export type StationViewRegion = {
+  region_key: string;
+  region_type: string;
+  layout_json?: string;
+  sort_order: number;
+};
+
+export type StationViewResolvedBinding = {
+  source: "project_variable" | "detection_item" | string;
+  var_id?: VarIdentifier;
+  var_id_text?: string;
+  var_name?: string;
+  var_group?: string;
+  display_name?: string;
+  display_name_en?: string;
+  display_name_ja?: string;
+  data_type?: string;
+  unit?: string;
+  decimal_places: number;
+  limit_ll?: number | null;
+  limit_l?: number | null;
+  limit_h?: number | null;
+  limit_hh?: number | null;
+  check_enabled?: boolean;
+  alarm_enabled?: boolean;
+  sort_order: number;
+};
+
+export type StationViewItem = {
+  item_uid: string;
+  region_key: string;
+  item_type: string;
+  binding_type: "var_name" | "var_group" | "detection_items" | "alarm_summary" | "run_state" | "manual" | string;
+  binding_key: string;
+  binding_json?: string;
+  display_json?: string;
+  sort_order: number;
+  resolved_bindings?: StationViewResolvedBinding[];
+};
+
+export type StationViewEffectiveResponse = {
+  edge_instance_id: string;
+  project: StationViewProjectRef;
+  template: StationViewTemplateRef;
+  regions: StationViewRegion[];
+  items: StationViewItem[];
+  ws_subscription: RealtimeWebSocketSubscription;
+  http_companion: {
+    current_run_required: boolean;
+    alarm_summary: boolean;
+  };
+  warnings?: string[];
 };
 
 export type RealtimeVariablesSnapshotPayload = {

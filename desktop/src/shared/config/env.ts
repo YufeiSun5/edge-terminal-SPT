@@ -12,11 +12,7 @@ export type RuntimeFeatures = {
   lanWeb: boolean
 }
 
-function normalizeRuntimeRole(value?: string): RuntimeRole {
-  return value === 'main_server' ? 'main_server' : 'edge'
-}
-
-function runtimeFeaturesFor(role: RuntimeRole): RuntimeFeatures {
+export function runtimeFeaturesFor(role: RuntimeRole): RuntimeFeatures {
   if (role === 'main_server') {
     return {
       sidecar: false,
@@ -36,6 +32,10 @@ function runtimeFeaturesFor(role: RuntimeRole): RuntimeFeatures {
     reportGeneration: false,
     lanWeb: false,
   }
+}
+
+export function normalizeRuntimeRole(value?: string): RuntimeRole {
+  return value === 'main_server' ? 'main_server' : 'edge'
 }
 
 const runtimeRole = normalizeRuntimeRole(import.meta.env.VITE_APP_ROLE)

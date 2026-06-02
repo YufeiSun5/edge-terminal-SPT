@@ -152,6 +152,24 @@ func (r *Repository) CreateDetectionRunReportRequests(requests []models.Detectio
 	return r.db.CreateInBatches(&requests, 200).Error
 }
 
+func (r *Repository) CreateDetectionRunReportRequestsForTask(taskID uint, raw any) ([]models.DetectionRunReportRequest, error) {
+	task, err := r.GetDetectionTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	requests, err := buildDetectionRunReportRequests(r.db, &task, raw, task.StandardItems)
+	if err != nil {
+		return nil, err
+	}
+	if len(requests) == 0 {
+		return nil, fmt.Errorf("report_request reports require at least one variable")
+	}
+	if err := r.CreateDetectionRunReportRequests(requests); err != nil {
+		return nil, err
+	}
+	return requests, nil
+}
+
 func (r *Repository) ListDetectionRunReportRequests(taskID uint) ([]models.DetectionRunReportRequest, error) {
 	var requests []models.DetectionRunReportRequest
 	err := r.db.Where("task_id = ?", taskID).Order("id asc").Find(&requests).Error

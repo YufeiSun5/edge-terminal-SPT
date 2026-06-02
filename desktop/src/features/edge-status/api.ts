@@ -43,6 +43,7 @@ import type {
   ProjectMemberUpdate,
   ProjectMembersResponse,
   RealtimeVariableListParams,
+  StationViewEffectiveResponse,
   TagSnapshot,
   ReportTemplate,
   ReportTemplateListParams,
@@ -368,6 +369,11 @@ export function getRealtimeVariables(params: RealtimeVariableListParams = {}) {
   }
   const suffix = query.toString();
   return getJson<TagSnapshot[]>(`/api/v1/realtime/variables${suffix ? `?${suffix}` : ""}`).then((items) => items.map(withTagSnapshotAliases));
+}
+
+export function getStationViewEffective(projectId: number) {
+  const query = new URLSearchParams({ project_id: String(projectId) });
+  return getJson<StationViewEffectiveResponse>(`/api/v1/station-view/effective?${query.toString()}`);
 }
 
 export function getActiveDetectionRuns() {

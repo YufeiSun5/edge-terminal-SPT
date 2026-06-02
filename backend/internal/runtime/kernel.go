@@ -74,6 +74,9 @@ func (k *Kernel) Start() error {
 	if err := k.repo.EnsureProjectDisplayNameFallbacks(); err != nil {
 		return err
 	}
+	if err := k.repo.EnsureDefaultStationViewTemplate(); err != nil {
+		return err
+	}
 
 	tagConfigs, err := k.repo.LoadTags()
 	if err != nil {
@@ -189,10 +192,11 @@ func (k *Kernel) seedAuth() error {
 			continue
 		}
 		if err := k.repo.UpsertServiceClient(models.SysServiceClient{
-			ClientID:   seed.ClientID,
-			SecretHash: auth.HashOpaqueToken(seed.Token),
-			Scopes:     auth.NormalizeScopes(seed.Scopes),
-			Enabled:    seed.Enabled,
+			ClientID:     seed.ClientID,
+			SecretHash:   auth.HashOpaqueToken(seed.Token),
+			Scopes:       auth.NormalizeScopes(seed.Scopes),
+			AllowedCIDRs: auth.NormalizeScopes(seed.AllowedCIDRs),
+			Enabled:      seed.Enabled,
 		}); err != nil {
 			return err
 		}
@@ -268,8 +272,10 @@ func (k *Kernel) mountRoutes() {
 	})
 
 	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).WithNotificationHub(k.notify).Register(v1, k.auth)
+	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).Register(v1, k.auth)
 	handlers.NewUsersHandler(k.repo).Register(protected, k.auth)
 	handlers.NewProjectsHandler(k.repo).Register(protected, k.auth)
+	handlers.NewStationViewHandler(k.repo, k.cfg.Auth.EdgeInstanceID).Register(protected, k.auth)
 	handlers.NewVariablesHandler(variablesService).Register(protected, k.auth)
 	handlers.NewStorageRoutesHandler(k.repo).Register(protected, k.auth)
 	handlers.NewHistoryHandler(k.repo).Register(protected, k.auth)

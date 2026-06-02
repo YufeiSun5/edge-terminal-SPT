@@ -12,8 +12,13 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import type { TagSnapshot } from "@/shared/api/types";
-import { env } from "@/shared/config/env";
+import type { HealthResponse, TagSnapshot } from "@/shared/api/types";
+import {
+  env,
+  normalizeRuntimeRole,
+  runtimeFeaturesFor,
+  type RuntimeRole,
+} from "@/shared/config/env";
 import {
   getActiveDetectionRuns,
   getGateways,
@@ -39,8 +44,6 @@ const sidecarTagColor: Record<SidecarState, string> = {
 
 export function EdgeStatusPage() {
   const { t } = useTranslation();
-  const isMainServer = env.runtimeRole === "main_server";
-  const features = env.runtimeFeatures;
 
   const sidecarQuery = useQuery({
     queryKey: ["desktop", "sidecar"],
@@ -54,6 +57,11 @@ export function EdgeStatusPage() {
     refetchInterval: 3000,
     retry: false,
   });
+
+  const effectiveRuntimeRole = resolveBackendRuntimeRole(healthQuery.data);
+  const isMainServer = effectiveRuntimeRole === "main_server";
+  const features = runtimeFeaturesFor(effectiveRuntimeRole);
+  const roleSource = healthQuery.data ? t("metrics.detectedBackend") : t("metrics.configuredBackend");
 
   const gatewaysQuery = useQuery({
     queryKey: ["edge", "gateways"],
@@ -203,9 +211,9 @@ export function EdgeStatusPage() {
         <StatusTile
           icon={healthQuery.data ? <Wifi size={17} /> : <WifiOff size={17} />}
           label={t("metrics.api")}
-          value={healthQuery.data?.status ?? t("status.notReady")}
+          value={`${healthQuery.data?.status ?? t("status.notReady")} · ${t(`runtimeRoles.${effectiveRuntimeRole}`)}`}
           tag={<Badge status={healthQuery.data ? "success" : "error"} />}
-          note={env.apiBaseUrl}
+          note={`${roleSource}: ${env.apiBaseUrl}`}
         />
         <StatusTile
           icon={<Activity size={17} />}
@@ -277,29 +285,31 @@ export function EdgeStatusPage() {
           </div>
           ) : null}
 
-          <div className="panel edge-glass-panel">
-            <div className="panel-header">
-              <Typography.Title level={2} className="panel-title">
-                {t("panels.gateways")}
-              </Typography.Title>
+          {features.gatewayManage ? (
+            <div className="panel edge-glass-panel">
+              <div className="panel-header">
+                <Typography.Title level={2} className="panel-title">
+                  {t("panels.gateways")}
+                </Typography.Title>
+              </div>
+              <div className="panel-body">
+                <Space wrap>
+                  {gatewayEntries.length === 0 && (
+                    <Tag>{t("messages.noData")}</Tag>
+                  )}
+                  {gatewayEntries.map(([gatewayId, status]) => (
+                    <Tag
+                      key={gatewayId}
+                      color={status.active ? "success" : "error"}
+                    >
+                      {gatewayId}:{" "}
+                      {status.active ? t("status.online") : t("status.offline")}
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
             </div>
-            <div className="panel-body">
-              <Space wrap>
-                {gatewayEntries.length === 0 && (
-                  <Tag>{t("messages.noData")}</Tag>
-                )}
-                {gatewayEntries.map(([gatewayId, status]) => (
-                  <Tag
-                    key={gatewayId}
-                    color={status.active ? "success" : "error"}
-                  >
-                    {gatewayId}:{" "}
-                    {status.active ? t("status.online") : t("status.offline")}
-                  </Tag>
-                ))}
-              </Space>
-            </div>
-          </div>
+          ) : null}
 
           <div className="panel edge-glass-panel">
             <div className="panel-header">
@@ -321,6 +331,14 @@ export function EdgeStatusPage() {
       </section>
     </div>
   );
+}
+
+function resolveBackendRuntimeRole(health?: HealthResponse): RuntimeRole {
+  if (!health) return env.runtimeRole;
+  if (health.role) return normalizeRuntimeRole(health.role);
+  if (health.database_ok !== undefined && health.tags === undefined && health.gateways === undefined) return "main_server";
+  if (health.tags !== undefined || health.gateways !== undefined || health.channels !== undefined) return "edge";
+  return env.runtimeRole;
 }
 
 function StatusTile({

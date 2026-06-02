@@ -86,11 +86,12 @@ func (r *Repository) UpsertServiceClient(client models.SysServiceClient) error {
 	return r.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "client_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"secret_hash": client.SecretHash,
-			"scopes":      client.Scopes,
-			"enabled":     client.Enabled,
-			"expires_at":  client.ExpiresAt,
-			"updated_at":  now,
+			"secret_hash":   client.SecretHash,
+			"scopes":        client.Scopes,
+			"allowed_cidrs": client.AllowedCIDRs,
+			"enabled":       client.Enabled,
+			"expires_at":    client.ExpiresAt,
+			"updated_at":    now,
 		}),
 	}).Create(&client).Error
 }
@@ -99,6 +100,12 @@ func (r *Repository) FindServiceClientBySecretHash(secretHash string) (models.Sy
 	var client models.SysServiceClient
 	err := r.db.First(&client, "secret_hash = ?", secretHash).Error
 	return client, err
+}
+
+func (r *Repository) UpdateServiceClientLastUsed(id uint, at time.Time) error {
+	return r.db.Model(&models.SysServiceClient{}).
+		Where("id = ?", id).
+		Update("last_used_at", at).Error
 }
 
 func (r *Repository) CreateSSOTicket(ticket *models.SysSSOTicket) error {
@@ -147,6 +154,59 @@ func (r *Repository) CreateAuditLog(entry *models.SysAuditLog) error {
 		entry.Detail = "{}"
 	}
 	return r.db.Create(entry).Error
+}
+
+func (r *Repository) CreateEdgeControlCommand(command *models.EdgeControlCommand) error {
+	now := time.Now()
+	command.CreatedAt = now
+	command.UpdatedAt = now
+	if command.ReceivedAt.IsZero() {
+		command.ReceivedAt = now
+	}
+	if command.Status == "" {
+		command.Status = "received"
+	}
+	if command.RequestJSON == "" {
+		command.RequestJSON = "{}"
+	}
+	if command.ResultJSON == "" {
+		command.ResultJSON = "{}"
+	}
+	return r.db.Create(command).Error
+}
+
+func (r *Repository) FindEdgeControlCommand(clientID string, commandID string) (models.EdgeControlCommand, error) {
+	var command models.EdgeControlCommand
+	err := r.db.First(&command, "client_id = ? AND command_id = ?", clientID, commandID).Error
+	return command, err
+}
+
+func (r *Repository) MarkEdgeControlCommandRunning(id uint64) error {
+	return r.db.Model(&models.EdgeControlCommand{}).
+		Where("id = ? AND status = ?", id, "received").
+		Updates(map[string]interface{}{
+			"status":     "running",
+			"updated_at": time.Now(),
+		}).Error
+}
+
+func (r *Repository) CompleteEdgeControlCommand(id uint64, status string, targetID string, resultJSON string, errorCode string, errorMessage string) error {
+	now := time.Now()
+	if resultJSON == "" {
+		resultJSON = "{}"
+	}
+	updates := map[string]interface{}{
+		"status":        status,
+		"result_json":   resultJSON,
+		"error_code":    errorCode,
+		"error_message": errorMessage,
+		"completed_at":  &now,
+		"updated_at":    now,
+	}
+	if targetID != "" {
+		updates["target_id"] = targetID
+	}
+	return r.db.Model(&models.EdgeControlCommand{}).Where("id = ?", id).Updates(updates).Error
 }
 
 type AuditLogListFilter struct {

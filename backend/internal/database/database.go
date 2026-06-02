@@ -75,6 +75,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.GatewayConfig{},
 		&models.Project{},
 		&models.SysProjectMember{},
+		&models.StationViewTemplate{},
+		&models.StationViewRegion{},
+		&models.StationViewItem{},
+		&models.StationViewAssignment{},
 		&models.TagConfig{},
 		&models.StorageRoute{},
 		&models.TaskRule{},
@@ -102,6 +106,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.SysServiceClient{},
 		&models.SysSSOTicket{},
 		&models.SysAuditLog{},
+		&models.EdgeControlCommand{},
 		&models.SysNotification{},
 		&models.SysNotificationRecipient{},
 	)

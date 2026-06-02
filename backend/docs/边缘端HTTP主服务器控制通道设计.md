@@ -1,6 +1,6 @@
 # 边缘端 HTTP 主服务器控制通道设计
 
-更新时间：2026-06-01
+更新时间：2026-06-02
 
 ## 结论
 
@@ -18,19 +18,22 @@
 
 ## 推荐路由
 
-控制路由建议集中在 `/api/v1/edge-control` 下，便于统一鉴权、审计和限流。
+控制路由集中在 `/api/v1/edge-control` 下，便于统一鉴权、审计和限流。
 
 | Method | Path | Scope | 说明 |
 | --- | --- | --- | --- |
-| `POST` | `/api/v1/edge-control/detection/start` | `edge.detection.start` | 启动检测，复用 `DetectionRunsService` 或任务系统启动模块。 |
-| `POST` | `/api/v1/edge-control/detection/stop` | `edge.detection.stop` | 正常停止检测。 |
-| `POST` | `/api/v1/edge-control/detection/abnormal-stop` | `edge.detection.stop` | 异常停止检测。 |
-| `POST` | `/api/v1/edge-control/variables/write` | `edge.variable.write` | 写变量，必须复用 `VariableWriteService` 和 `KIOWriteService`。 |
-| `POST` | `/api/v1/edge-control/alarms/mute` | `edge.alarm.mute` | 静音当前检测报警，复用任务系统或报警服务。 |
-| `POST` | `/api/v1/edge-control/detection/limits` | `edge.detection.limit_update` | 运行中调整检测限值，更新运行快照。 |
-| `POST` | `/api/v1/edge-control/features/refresh` | `edge.feature.refresh` | 刷新检测特征值。 |
+| `POST` | `/api/v1/edge-control/detection/start` | `edge.detection.start` | 已实现。启动检测，复用 `DetectionRunsService`。 |
+| `POST` | `/api/v1/edge-control/detection/stop` | `edge.detection.stop` | 已实现。正常停止检测，复用 `DetectionRunsService`。 |
+| `POST` | `/api/v1/edge-control/detection/abnormal-stop` | `edge.detection.stop` | 已实现。异常停止检测，复用 `DetectionRunsService`。 |
+| `POST` | `/api/v1/edge-control/variables/write` | `edge.variable.write` | 已实现。写变量，复用 `VariableWriteService` 和 `KIOWriteService`。 |
+| `POST` | `/api/v1/edge-control/detection/mute-alarms` | `edge.alarm.mute` | 已实现。静音当前 running 检测的运行态报警状态，写命令和审计。 |
+| `POST` | `/api/v1/edge-control/detection/update-limits` | `edge.detection.limit_update` | 已实现。运行中调整检测运行快照限值，并刷新 running runtime map。 |
+| `POST` | `/api/v1/edge-control/detection/refresh-features` | `edge.feature.refresh` | 已实现。刷新 `detection_run_features`，写 `features_updated` 事件。 |
+| `POST` | `/api/v1/edge-control/detection/report-requests` | `edge.report.request` | 已实现。为已有检测任务追加 `detection_run_report_requests` 请求快照。 |
 
-首版可以只实现当前主服务器需要的最小子集，但路由、鉴权、幂等和审计模型应一次定好。
+当前首版已覆盖检测启动、正常停止、异常停止、变量写入、运行态报警静音、运行中限值调整、特征值刷新和报表请求独立登记。主服务器最小后端调用链和现场组合 smoke 仍是后续扩展。
+
+注意：当前报警静音只静音边缘端 `TaskManager` 中的 active alarm state，并通过 `edge_control_commands`、`sys_audit_logs` 和 `detection_run_events` 留痕；`detection_limit_alarms` 表尚无 `muted` 字段，因此历史报警行不会持久化静音标记。若前端/主服务器需要查询“已静音”历史状态，后续需要独立 schema 变更。
 
 ## 服务身份鉴权
 
@@ -50,6 +53,8 @@
 | `enabled` | 是否启用。 |
 | `expires_at` | 过期时间，可为空。 |
 | `last_used_at` | 最近使用时间。 |
+
+当前边缘端已在 `sys_service_clients` 保存 `allowed_cidrs` 和 `last_used_at`；`allowed_cidrs` 为空时不限制来源 IP，非空时支持逗号分隔的 IP 或 CIDR。`EDGE_MAIN_SERVICE_TOKEN` 环境变量种子会默认授予既有 `service_*` scope 和首批 `edge.*` 控制 scope，生产部署仍应按最小权限配置。
 
 基础请求头：
 
@@ -124,7 +129,7 @@ HTTP 控制命令必须携带操作者信息：
 
 主服务器 HTTP 重试不可造成重复启动、重复下设或重复静音。每个控制请求必须携带稳定 `command_id`，边缘端按 `command_id + client_id` 做幂等。
 
-建议新增命令记录表 `edge_control_commands`：
+已新增命令记录表 `edge_control_commands`：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -152,6 +157,8 @@ HTTP 控制命令必须携带操作者信息：
 - 已失败且不可重试：返回原失败结果。
 - 正在执行：返回 `command_running` 或当前状态，避免并发重复执行。
 
+当前实现按 `client_id + command_id` 唯一约束幂等；重复成功命令返回历史 `result_json`，重复失败命令返回历史错误，`received/running` 命令返回 `command_running` 且 `retryable=true`。
+
 ## 请求包
 
 所有控制请求建议统一 envelope：
@@ -168,6 +175,8 @@ HTTP 控制命令必须携带操作者信息：
 ```
 
 `command_id` 同时允许从 `X-Command-ID` 读取，但 body 和 header 同时存在时必须一致。
+
+首段所有控制请求必须携带 `operator_username`，边缘端会映射到本地启用的 `sys_users.username`；映射失败的现场控制命令会被拒绝。
 
 ## 响应包
 
@@ -224,6 +233,53 @@ HTTP 控制 handler 只做鉴权、幂等、参数校验、审计和响应映射
 - 审计日志能力
 
 禁止复制一套主服务器专用检测启动、变量写入或报警静音逻辑。
+
+## 当前已实现 payload
+
+`POST /api/v1/edge-control/detection/update-limits`：
+
+```json
+{
+  "command_id": "uuid",
+  "operator_username": "zhangsan",
+  "payload": {
+    "task_id": 123,
+    "items": [
+      {
+        "var_id": "9212397624135540846",
+        "limit_h": 18.5,
+        "limit_hh": 20,
+        "limit_deadband": 0.5,
+        "alarm_enabled": true,
+        "check_enabled": true
+      }
+    ]
+  }
+}
+```
+
+`POST /api/v1/edge-control/detection/report-requests`：
+
+```json
+{
+  "command_id": "uuid",
+  "operator_username": "zhangsan",
+  "payload": {
+    "task_id": 123,
+    "report_request": {
+      "reports": [
+        {
+          "template_code": "PERF-STD",
+          "variables": [{"var_name": "outlet_temp"}],
+          "params": {"inlet_area_m2": 1.25}
+        }
+      ]
+    }
+  }
+}
+```
+
+报表请求解析复用检测启动时的 `report_request` 规则：支持 `reports[]`、`template_id/template_code`、`variables/var_ids/variable_names` 和 `params`，落表后仍由外部数据库同步软件同步到主服务器，主服务器生成自己的报表任务和文件资产。
 
 ## 审计
 

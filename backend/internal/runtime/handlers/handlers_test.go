@@ -869,6 +869,324 @@ func TestHandlerRouteRegistration(t *testing.T) {
 	}
 }
 
+func TestEdgeControlHandlerStartAndIdempotency(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	project := createHandlerProject(t, repo)
+	if err := repo.CreateUser(&models.SysUser{Username: "admin", PasswordHash: "hash", Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	serviceToken := "edge-control-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes:     auth.NormalizeScopes([]string{auth.ScopeEdgeDetectionStart, auth.ScopeEdgeVariableWrite}),
+		Enabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tags := pipeline.NewTagManager()
+	tasks := pipeline.NewTaskManager()
+	detection := services.NewDetectionRunsService(repo, tasks)
+	variables := services.NewVariableWriteService(repo, tags, nil, nil)
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewEdgeControlHandler(repo, detection, variables).Register(group, authService)
+
+	body := map[string]any{
+		"command_id":        "cmd-start-1",
+		"operator_id":       "main-user-1",
+		"operator_username": "admin",
+		"operator_name":     "Admin",
+		"reason":            "smoke start",
+		"payload": map[string]any{
+			"project_id": project.ID,
+			"test_no":    "EC-001",
+			"mode":       "standard",
+		},
+	}
+	resp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/start", body, serviceToken)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var payload map[string]any
+	mustDecodeHandler(t, resp, &payload)
+	if payload["ok"] != true || payload["status"] != "success" {
+		t.Fatalf("unexpected start payload: %+v", payload)
+	}
+
+	duplicate := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/start", body, serviceToken)
+	if duplicate.Code != http.StatusOK {
+		t.Fatalf("duplicate status=%d body=%s", duplicate.Code, duplicate.Body.String())
+	}
+	var commandCount int64
+	if err := db.Model(&models.EdgeControlCommand{}).Where("command_id = ?", "cmd-start-1").Count(&commandCount).Error; err != nil || commandCount != 1 {
+		t.Fatalf("expected one command record count=%d err=%v", commandCount, err)
+	}
+	var runningTasks int64
+	if err := db.Model(&models.DetectionTask{}).Where("project_id = ? AND test_no = ?", project.ID, "EC-001").Count(&runningTasks).Error; err != nil || runningTasks != 1 {
+		t.Fatalf("expected one detection task count=%d err=%v", runningTasks, err)
+	}
+}
+
+func TestEdgeControlHandlerWriteVariableAndScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	project := createHandlerProject(t, repo)
+	if err := repo.CreateUser(&models.SysUser{Username: "admin", PasswordHash: "hash", Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	serviceToken := "edge-write-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes:     auth.NormalizeScopes([]string{auth.ScopeEdgeVariableWrite}),
+		Enabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{{
+		VarID:       9001,
+		GatewayID:   0,
+		SourceType:  models.TagSourceVirtual,
+		SourceTopic: "virtual",
+		SourcePath:  "setpoint",
+		RawName:     "setpoint",
+		VarName:     "setpoint",
+		JSONPath:    "setpoint",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+	}})
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewEdgeControlHandler(repo, services.NewDetectionRunsService(repo, pipeline.NewTaskManager()), services.NewVariableWriteService(repo, tags, nil, nil)).Register(group, authService)
+
+	forbidden := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/start", map[string]any{
+		"command_id":        "cmd-no-scope",
+		"operator_username": "admin",
+		"payload":           map[string]any{},
+	}, serviceToken)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("expected missing scope forbidden, got %d body=%s", forbidden.Code, forbidden.Body.String())
+	}
+
+	resp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/variables/write", map[string]any{
+		"command_id":        "cmd-write-1",
+		"operator_id":       "main-user-1",
+		"operator_username": "admin",
+		"operator_name":     "Admin",
+		"payload": map[string]any{
+			"var_id":  "9001",
+			"value":   12.5,
+			"trigger": false,
+		},
+	}, serviceToken)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("write status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	tag, ok := tags.Get(9001)
+	if !ok {
+		t.Fatal("expected tag")
+	}
+	state := tag.RuntimeState()
+	if !state.Initialized || state.Value != 12.5 {
+		t.Fatalf("unexpected runtime state: %+v", state)
+	}
+	var command models.EdgeControlCommand
+	if err := db.First(&command, "command_id = ?", "cmd-write-1").Error; err != nil || command.Status != "success" || command.Action != "variable.write" {
+		t.Fatalf("unexpected command=%+v err=%v", command, err)
+	}
+}
+
+func TestEdgeControlHandlerDetectionOperations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	project := createHandlerProject(t, repo)
+	if err := repo.CreateUser(&models.SysUser{Username: "admin", PasswordHash: "hash", Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	serviceToken := "edge-detection-ops-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes: auth.NormalizeScopes([]string{
+			auth.ScopeEdgeAlarmMute,
+			auth.ScopeEdgeLimitUpdate,
+			auth.ScopeEdgeFeatureRefresh,
+			auth.ScopeEdgeReportRequest,
+		}),
+		Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	varID := int64(9101)
+	limitH := 20.0
+	if err := db.Create(&models.TagConfig{
+		VarID:         varID,
+		GatewayID:     0,
+		SourceType:    models.TagSourceVirtual,
+		SourceTopic:   "virtual",
+		SourcePath:    "temp",
+		RawName:       "temp",
+		VarName:       "temp",
+		DisplayName:   "Temp",
+		JSONPath:      "temp",
+		DataType:      "FLOAT",
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		Enabled:       true,
+		Discovered:    false,
+		Placeholder:   true,
+		ScaleFactor:   1,
+		DecimalPlaces: 1,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	standard := models.DetectionStandard{StandardCode: "STD-EC", Name: "Edge Control Standard", ProjectID: &project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Enabled: true, Version: 1}
+	if err := db.Create(&standard).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.DetectionStandardItem{
+		StandardID:    standard.ID,
+		VarID:         varID,
+		VarName:       "temp",
+		DisplayName:   "Temp",
+		CheckEnabled:  true,
+		AlarmEnabled:  true,
+		StoreEnabled:  true,
+		CheckMethod:   models.CheckMethodNumericRange,
+		LimitH:        &limitH,
+		QualityPolicy: models.QualityPolicyIgnoreBad,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{{
+		VarID:       varID,
+		GatewayID:   0,
+		SourceType:  models.TagSourceVirtual,
+		SourceTopic: "virtual",
+		SourcePath:  "temp",
+		RawName:     "temp",
+		VarName:     "temp",
+		JSONPath:    "temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+	}})
+	tasks := pipeline.NewTaskManager()
+	channels := pipeline.NewChannels()
+	detection := services.NewDetectionRunsService(repo, tasks, services.DetectionRunsRuntimeDeps{Tags: tags, Channels: channels})
+	task, err := detection.Start(database.StartDetectionOptions{
+		ProjectID:  project.ID,
+		TestNo:     "EC-OPS-001",
+		Mode:       "standard",
+		StandardID: &standard.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewEdgeControlHandler(repo, detection, nil).Register(group, authService)
+
+	newLimitH := 18.5
+	limitResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/update-limits", map[string]any{
+		"command_id":        "cmd-update-limits-1",
+		"operator_username": "admin",
+		"payload": map[string]any{
+			"task_id": task.ID,
+			"items": []map[string]any{{
+				"var_id":  strconv.FormatInt(varID, 10),
+				"limit_h": newLimitH,
+			}},
+		},
+	}, serviceToken)
+	if limitResp.Code != http.StatusOK {
+		t.Fatalf("update limits status=%d body=%s", limitResp.Code, limitResp.Body.String())
+	}
+	var runItem models.DetectionRunStandardItem
+	if err := db.First(&runItem, "task_id = ? AND var_id = ?", task.ID, varID).Error; err != nil || runItem.LimitH == nil || *runItem.LimitH != newLimitH {
+		t.Fatalf("limit not updated item=%+v err=%v", runItem, err)
+	}
+
+	tag, ok := tags.Get(varID)
+	if !ok {
+		t.Fatal("expected runtime tag")
+	}
+	tag.UpdateNumeric(22, time.Now(), 1)
+	if events := tasks.EvaluateLimitAlarm(tag, time.Now(), false); len(events) != 1 {
+		t.Fatalf("expected active limit alarm event, got %d", len(events))
+	}
+	muteResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/mute-alarms", map[string]any{
+		"command_id":        "cmd-mute-1",
+		"operator_username": "admin",
+		"payload":           map[string]any{"task_id": task.ID},
+	}, serviceToken)
+	if muteResp.Code != http.StatusOK || !strings.Contains(muteResp.Body.String(), `"muted":1`) {
+		t.Fatalf("mute status=%d body=%s", muteResp.Code, muteResp.Body.String())
+	}
+
+	valueOne := 10.0
+	valueTwo := 14.0
+	now := time.Now()
+	if err := db.Create(&[]models.HistoryData{
+		{ProjectID: project.ID, ProjectCode: project.ProjectCode, TaskID: task.ID, TestNo: task.TestNo, VarID: varID, VarName: "temp", Value: &valueOne, Quality: 1, SourceTime: now.Add(-time.Minute), CreatedAt: now.Add(-time.Minute)},
+		{ProjectID: project.ID, ProjectCode: project.ProjectCode, TaskID: task.ID, TestNo: task.TestNo, VarID: varID, VarName: "temp", Value: &valueTwo, Quality: 1, SourceTime: now, CreatedAt: now},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	featureResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/refresh-features", map[string]any{
+		"command_id":        "cmd-features-1",
+		"operator_username": "admin",
+		"payload":           map[string]any{"task_id": task.ID},
+	}, serviceToken)
+	if featureResp.Code != http.StatusOK || !strings.Contains(featureResp.Body.String(), `"feature_count":1`) {
+		t.Fatalf("features status=%d body=%s", featureResp.Code, featureResp.Body.String())
+	}
+	var featureEventCount int64
+	if err := db.Model(&models.DetectionRunEvent{}).Where("task_id = ? AND event_type = ?", task.ID, models.DetectionEventFeaturesUpdated).Count(&featureEventCount).Error; err != nil || featureEventCount != 1 {
+		t.Fatalf("expected feature event count=1 got=%d err=%v", featureEventCount, err)
+	}
+
+	reportResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/report-requests", map[string]any{
+		"command_id":        "cmd-report-request-1",
+		"operator_username": "admin",
+		"payload": map[string]any{
+			"task_id": task.ID,
+			"report_request": map[string]any{
+				"reports": []map[string]any{{
+					"report_name": "main report",
+					"variables":   []map[string]any{{"var_name": "temp"}},
+					"params":      map[string]any{"inlet_area_m2": 1.25},
+				}},
+			},
+		},
+	}, serviceToken)
+	if reportResp.Code != http.StatusOK || !strings.Contains(reportResp.Body.String(), `"request_count":1`) {
+		t.Fatalf("report request status=%d body=%s", reportResp.Code, reportResp.Body.String())
+	}
+	var requestCount int64
+	if err := db.Model(&models.DetectionRunReportRequest{}).Where("task_id = ?", task.ID).Count(&requestCount).Error; err != nil || requestCount != 1 {
+		t.Fatalf("expected one report request count=%d err=%v", requestCount, err)
+	}
+}
+
 func TestNotificationResponseKeepsPayloadAsObject(t *testing.T) {
 	at := time.Date(2026, 5, 30, 19, 0, 0, 0, time.UTC)
 	readAt := at.Add(time.Minute)

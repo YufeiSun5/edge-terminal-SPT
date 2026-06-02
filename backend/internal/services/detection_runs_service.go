@@ -30,6 +30,34 @@ type AddNoteInput struct {
 	ActorID   string
 }
 
+type UpdateDetectionLimitItemInput struct {
+	VarID           int64
+	AlarmEnabled    *bool
+	CheckEnabled    *bool
+	StoreEnabled    *bool
+	CheckOnStart    *bool
+	CheckCycleMS    *int
+	ViolationHoldMS *int
+	RecoverHoldMS   *int
+	LimitLL         *float64
+	LimitL          *float64
+	LimitH          *float64
+	LimitHH         *float64
+	LimitDeadband   *float64
+}
+
+type UpdateDetectionLimitsInput struct {
+	TaskID uint
+	Items  []UpdateDetectionLimitItemInput
+}
+
+type UpdateDetectionLimitsResult struct {
+	TaskID    uint                              `json:"task_id"`
+	ProjectID uint                              `json:"project_id"`
+	Updated   []models.DetectionRunStandardItem `json:"updated"`
+	Count     int                               `json:"count"`
+}
+
 type DetectionRunsRuntimeDeps struct {
 	Tags     *pipeline.TagManager
 	Channels *pipeline.Channels
@@ -214,6 +242,93 @@ func (s *DetectionRunsService) Features(taskID uint) ([]models.DetectionRunFeatu
 	return s.repo.RefreshDetectionRunFeatures(taskID)
 }
 
+func (s *DetectionRunsService) RefreshFeaturesWithEvent(taskID uint) ([]models.DetectionRunFeature, error) {
+	task, err := s.repo.GetDetectionTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	features, err := s.repo.RefreshDetectionRunFeatures(taskID)
+	if err != nil {
+		return nil, err
+	}
+	s.recordRunEvent(task, models.DetectionEventFeaturesUpdated, "info", "detection run features refreshed by edge control")
+	return features, nil
+}
+
+func (s *DetectionRunsService) MuteDetectionAlarms(taskID uint) (int, error) {
+	task, err := s.repo.GetDetectionTask(taskID)
+	if err != nil {
+		return 0, err
+	}
+	if task.Status != models.DetectionStatusRunning {
+		return 0, fmt.Errorf("task must be running")
+	}
+	muted := s.tasks.MuteActiveLimitAlarms(taskID)
+	s.recordRunEvent(task, models.DetectionEventLimitsUpdated, "info", "active detection alarms muted by edge control")
+	return muted, nil
+}
+
+func (s *DetectionRunsService) UpdateDetectionLimits(input UpdateDetectionLimitsInput) (UpdateDetectionLimitsResult, error) {
+	if input.TaskID == 0 {
+		return UpdateDetectionLimitsResult{}, fmt.Errorf("task_id is required")
+	}
+	if len(input.Items) == 0 {
+		return UpdateDetectionLimitsResult{}, fmt.Errorf("items are required")
+	}
+	task, err := s.repo.GetDetectionTask(input.TaskID)
+	if err != nil {
+		return UpdateDetectionLimitsResult{}, err
+	}
+	if task.Status != models.DetectionStatusRunning {
+		return UpdateDetectionLimitsResult{}, fmt.Errorf("task must be running")
+	}
+	updated := make([]models.DetectionRunStandardItem, 0, len(input.Items))
+	for _, item := range input.Items {
+		if item.VarID == 0 {
+			return UpdateDetectionLimitsResult{}, fmt.Errorf("var_id is required")
+		}
+		updates := detectionLimitUpdates(item)
+		if len(updates) == 0 {
+			return UpdateDetectionLimitsResult{}, fmt.Errorf("at least one limit field is required")
+		}
+		saved, err := s.repo.UpdateDetectionRunStandardItem(input.TaskID, item.VarID, updates)
+		if err != nil {
+			return UpdateDetectionLimitsResult{}, err
+		}
+		updated = append(updated, saved)
+	}
+	refreshed, err := s.repo.GetDetectionTask(input.TaskID)
+	if err != nil {
+		return UpdateDetectionLimitsResult{}, err
+	}
+	if refreshed.Status == models.DetectionStatusRunning {
+		s.tasks.UpdateActive(refreshed)
+	}
+	s.recordRunEvent(refreshed, models.DetectionEventLimitsUpdated, "info", "running detection limits updated by edge control")
+	return UpdateDetectionLimitsResult{
+		TaskID:    refreshed.ID,
+		ProjectID: refreshed.ProjectID,
+		Updated:   updated,
+		Count:     len(updated),
+	}, nil
+}
+
+func (s *DetectionRunsService) CreateReportRequests(taskID uint, raw any) ([]models.DetectionRunReportRequest, error) {
+	if taskID == 0 {
+		return nil, fmt.Errorf("task_id is required")
+	}
+	requests, err := s.repo.CreateDetectionRunReportRequestsForTask(taskID, raw)
+	if err != nil {
+		return nil, err
+	}
+	task, err := s.repo.GetDetectionTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	s.recordRunEvent(task, "report_requests_registered", "info", "report requests registered by edge control")
+	return requests, nil
+}
+
 func (s *DetectionRunsService) ListEvents(taskID uint, limit int) ([]models.DetectionRunEvent, error) {
 	return s.repo.ListDetectionRunEvents(taskID, limit)
 }
@@ -242,6 +357,47 @@ func (s *DetectionRunsService) AddNote(input AddNoteInput) (models.DetectionRunN
 
 func (s *DetectionRunsService) ListNotes(taskID uint, limit int) ([]models.DetectionRunNote, error) {
 	return s.repo.ListDetectionRunNotes(taskID, limit)
+}
+
+func detectionLimitUpdates(item UpdateDetectionLimitItemInput) map[string]interface{} {
+	updates := make(map[string]interface{})
+	if item.AlarmEnabled != nil {
+		updates["alarm_enabled"] = *item.AlarmEnabled
+	}
+	if item.CheckEnabled != nil {
+		updates["check_enabled"] = *item.CheckEnabled
+	}
+	if item.StoreEnabled != nil {
+		updates["store_enabled"] = *item.StoreEnabled
+	}
+	if item.CheckOnStart != nil {
+		updates["check_on_start"] = *item.CheckOnStart
+	}
+	if item.CheckCycleMS != nil {
+		updates["check_cycle_ms"] = *item.CheckCycleMS
+	}
+	if item.ViolationHoldMS != nil {
+		updates["violation_hold_ms"] = *item.ViolationHoldMS
+	}
+	if item.RecoverHoldMS != nil {
+		updates["recover_hold_ms"] = *item.RecoverHoldMS
+	}
+	if item.LimitLL != nil {
+		updates["limit_ll"] = item.LimitLL
+	}
+	if item.LimitL != nil {
+		updates["limit_l"] = item.LimitL
+	}
+	if item.LimitH != nil {
+		updates["limit_h"] = item.LimitH
+	}
+	if item.LimitHH != nil {
+		updates["limit_hh"] = item.LimitHH
+	}
+	if item.LimitDeadband != nil {
+		updates["limit_deadband"] = *item.LimitDeadband
+	}
+	return updates
 }
 
 func (s *DetectionRunsService) recordRunEvent(task models.DetectionTask, eventType string, level string, message string) {

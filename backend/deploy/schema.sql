@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS sys_projects (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   project_code VARCHAR(64) NOT NULL,
   site_no VARCHAR(64) DEFAULT '',
+  edge_instance_id VARCHAR(128) DEFAULT '',
   name VARCHAR(128) NOT NULL,
   display_name VARCHAR(128) DEFAULT '',
   display_name_en VARCHAR(128) DEFAULT '',
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS sys_projects (
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_projects_code (project_code),
   INDEX idx_projects_site_no (site_no),
+  INDEX idx_projects_edge_instance_id (edge_instance_id),
   INDEX idx_projects_enabled (enabled),
   INDEX idx_projects_blocked (blocked)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -57,6 +59,82 @@ CREATE TABLE IF NOT EXISTS sys_project_members (
   INDEX idx_project_members_project_id (project_id),
   INDEX idx_project_members_user_id (user_id),
   INDEX idx_project_members_notify_enabled (notify_enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sys_station_view_templates (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  template_uid VARCHAR(128) NOT NULL,
+  template_code VARCHAR(64) NOT NULL,
+  name VARCHAR(128) NOT NULL,
+  display_name VARCHAR(128) DEFAULT '',
+  display_name_en VARCHAR(128) DEFAULT '',
+  display_name_ja VARCHAR(128) DEFAULT '',
+  version INT NOT NULL DEFAULT 1,
+  status VARCHAR(32) NOT NULL DEFAULT 'published',
+  owner_scope VARCHAR(32) NOT NULL DEFAULT 'edge',
+  layout_json TEXT NULL,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_station_view_templates_uid (template_uid),
+  UNIQUE KEY uk_station_view_templates_code (template_code),
+  INDEX idx_station_view_templates_status (status),
+  INDEX idx_station_view_templates_owner_scope (owner_scope)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sys_station_view_regions (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  template_uid VARCHAR(128) NOT NULL,
+  region_key VARCHAR(64) NOT NULL,
+  region_type VARCHAR(64) NOT NULL,
+  layout_json TEXT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_station_view_region (template_uid, region_key),
+  INDEX idx_station_view_regions_template_uid (template_uid),
+  INDEX idx_station_view_regions_sort_order (sort_order),
+  INDEX idx_station_view_regions_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sys_station_view_items (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  template_uid VARCHAR(128) NOT NULL,
+  region_key VARCHAR(64) NOT NULL,
+  item_uid VARCHAR(128) NOT NULL,
+  item_type VARCHAR(64) NOT NULL,
+  binding_type VARCHAR(64) NOT NULL,
+  binding_key VARCHAR(128) DEFAULT '',
+  binding_json TEXT NULL,
+  display_json TEXT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  visible BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_station_view_items_uid (item_uid),
+  INDEX idx_station_view_items_template_uid (template_uid),
+  INDEX idx_station_view_items_region_key (region_key),
+  INDEX idx_station_view_items_binding_type (binding_type),
+  INDEX idx_station_view_items_binding_key (binding_key),
+  INDEX idx_station_view_items_sort_order (sort_order),
+  INDEX idx_station_view_items_visible (visible)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sys_station_view_assignments (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  template_uid VARCHAR(128) NOT NULL,
+  target_type VARCHAR(32) NOT NULL,
+  target_key VARCHAR(128) NOT NULL,
+  priority INT NOT NULL DEFAULT 0,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_station_view_assignment (target_type, target_key),
+  INDEX idx_station_view_assignments_template_uid (template_uid),
+  INDEX idx_station_view_assignments_target_type (target_type),
+  INDEX idx_station_view_assignments_target_key (target_key),
+  INDEX idx_station_view_assignments_priority (priority),
+  INDEX idx_station_view_assignments_enabled (enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_tags (
@@ -703,8 +781,10 @@ CREATE TABLE IF NOT EXISTS sys_service_clients (
   client_id VARCHAR(128) NOT NULL UNIQUE,
   secret_hash VARCHAR(255) NOT NULL UNIQUE,
   scopes TEXT NOT NULL,
+  allowed_cidrs TEXT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   expires_at DATETIME(3) NULL,
+  last_used_at DATETIME(3) NULL,
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   INDEX idx_service_clients_enabled (enabled)
@@ -739,6 +819,35 @@ CREATE TABLE IF NOT EXISTS sys_audit_logs (
   INDEX idx_audit_actor_type (actor_type),
   INDEX idx_audit_actor_id (actor_id),
   INDEX idx_audit_action (action)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS edge_control_commands (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  command_id VARCHAR(128) NOT NULL,
+  client_id VARCHAR(128) NOT NULL,
+  operator_id VARCHAR(128) DEFAULT '',
+  operator_name VARCHAR(128) DEFAULT '',
+  operator_username VARCHAR(128) DEFAULT '',
+  edge_user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  action VARCHAR(128) NOT NULL,
+  target_type VARCHAR(64) DEFAULT '',
+  target_id VARCHAR(128) DEFAULT '',
+  request_json JSON NULL,
+  status VARCHAR(32) NOT NULL,
+  result_json JSON NULL,
+  error_code VARCHAR(128) DEFAULT '',
+  error_message VARCHAR(512) DEFAULT '',
+  received_at DATETIME(3) NOT NULL,
+  completed_at DATETIME(3) NULL,
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_edge_control_command (client_id, command_id),
+  INDEX idx_edge_control_client_id (client_id),
+  INDEX idx_edge_control_operator_username (operator_username),
+  INDEX idx_edge_control_edge_user_id (edge_user_id),
+  INDEX idx_edge_control_action (action),
+  INDEX idx_edge_control_status (status),
+  INDEX idx_edge_control_received_at (received_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_notifications (

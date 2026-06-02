@@ -68,6 +68,17 @@ func (s *fakeStore) FindServiceClientBySecretHash(secretHash string) (models.Sys
 	return client, nil
 }
 
+func (s *fakeStore) UpdateServiceClientLastUsed(id uint, at time.Time) error {
+	for key, client := range s.clients {
+		if client.ID == id {
+			client.LastUsedAt = &at
+			s.clients[key] = client
+			return nil
+		}
+	}
+	return nil
+}
+
 func (s *fakeStore) CreateSSOTicket(ticket *models.SysSSOTicket) error {
 	ticket.ID = uint64(len(s.tickets) + 1)
 	s.tickets[ticket.TicketHash] = *ticket

@@ -25,6 +25,13 @@ const (
 	ScopeServiceRealtimeRead = "service_realtime_read"
 	ScopeServiceControlCall  = "service_control_call"
 	ScopeServiceSSOVerify    = "service_sso_verify"
+	ScopeEdgeDetectionStart  = "edge.detection.start"
+	ScopeEdgeDetectionStop   = "edge.detection.stop"
+	ScopeEdgeVariableWrite   = "edge.variable.write"
+	ScopeEdgeAlarmMute       = "edge.alarm.mute"
+	ScopeEdgeLimitUpdate     = "edge.detection.limit_update"
+	ScopeEdgeFeatureRefresh  = "edge.feature.refresh"
+	ScopeEdgeReportRequest   = "edge.report.request"
 )
 
 var rolePermissions = map[string][]string{

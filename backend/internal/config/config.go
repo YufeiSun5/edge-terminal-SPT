@@ -44,10 +44,11 @@ type AuthConfig struct {
 }
 
 type ServiceClientSeed struct {
-	ClientID string   `json:"client_id"`
-	Token    string   `json:"token"`
-	Scopes   []string `json:"scopes"`
-	Enabled  bool     `json:"enabled"`
+	ClientID     string   `json:"client_id"`
+	Token        string   `json:"token"`
+	Scopes       []string `json:"scopes"`
+	AllowedCIDRs []string `json:"allowed_cidrs"`
+	Enabled      bool     `json:"enabled"`
 }
 
 type GatewaySeed struct {
@@ -240,6 +241,13 @@ func applyEnv(cfg *Config) {
 				"service_realtime_read",
 				"service_control_call",
 				"service_sso_verify",
+				"edge.detection.start",
+				"edge.detection.stop",
+				"edge.variable.write",
+				"edge.alarm.mute",
+				"edge.detection.limit_update",
+				"edge.feature.refresh",
+				"edge.report.request",
 			},
 			Enabled: true,
 		})

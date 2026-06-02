@@ -437,6 +437,8 @@ export const resources = {
         sidecar: 'Go 后端',
         backendRuntime: '后端服务',
         api: '本地 API',
+        detectedBackend: '实际后端',
+        configuredBackend: '配置后端',
         tags: '变量数',
         gateways: '网关在线',
         activeRuns: '运行任务',
@@ -446,6 +448,10 @@ export const resources = {
         edgeControlTarget: '边缘控制目标',
         queryProxy: '查询代理：{{enabled}}',
         reportService: '报表服务',
+      },
+      runtimeRoles: {
+        edge: 'Edge 后端',
+        main_server: '主服务器后端',
       },
       table: {
         variable: '变量',
@@ -1537,6 +1543,8 @@ export const resources = {
         sidecar: 'Go backend',
         backendRuntime: 'Backend service',
         api: 'Local API',
+        detectedBackend: 'Detected backend',
+        configuredBackend: 'Configured backend',
         tags: 'Variables',
         gateways: 'Gateways online',
         activeRuns: 'Active runs',
@@ -1546,6 +1554,10 @@ export const resources = {
         edgeControlTarget: 'Edge control target',
         queryProxy: 'Query proxy: {{enabled}}',
         reportService: 'Report service',
+      },
+      runtimeRoles: {
+        edge: 'Edge backend',
+        main_server: 'Main server backend',
       },
       table: {
         variable: 'Variable',
@@ -2637,6 +2649,8 @@ export const resources = {
         sidecar: 'Go バックエンド',
         backendRuntime: 'バックエンドサービス',
         api: 'ローカル API',
+        detectedBackend: '検出バックエンド',
+        configuredBackend: '設定バックエンド',
         tags: '変数数',
         gateways: 'ゲートウェイ接続',
         activeRuns: '実行中タスク',
@@ -2646,6 +2660,10 @@ export const resources = {
         edgeControlTarget: 'エッジ制御先',
         queryProxy: '照会プロキシ：{{enabled}}',
         reportService: 'レポートサービス',
+      },
+      runtimeRoles: {
+        edge: 'エッジバックエンド',
+        main_server: '主サーバーバックエンド',
       },
       table: {
         variable: '変数',

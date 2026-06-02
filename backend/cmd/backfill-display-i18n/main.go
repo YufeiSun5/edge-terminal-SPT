@@ -115,7 +115,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer sqlDB.Close()
+	defer func() {
+		if err := sqlDB.Close(); err != nil {
+			log.Printf("close database: %v", err)
+		}
+	}()
 
 	var projectRows []projectRow
 	if err := db.Table("sys_projects").

@@ -52,12 +52,15 @@ import type {
   DetectionRunStorageRoute,
   LimitAlarm,
   LimitAlarmScope,
+  RealtimeVariablesSnapshotPayload,
+  StationViewResolvedBinding,
   TagSnapshot,
 } from '@/shared/api/types'
 import { useAuthStore } from '@/features/auth/authStore'
 import {
   abnormalStopDetectionRun,
   getActiveDetectionRuns,
+  getCurrentDetectionRun,
   getDetectionRun,
   getDetectionRunReportRequests,
   getDetectionRunStorageRoutes,
@@ -66,9 +69,11 @@ import {
   getLimitAlarms,
   getRealtimeVariables,
   getReportTemplates,
+  getStationViewEffective,
   startDetectionRun,
   stopDetectionRun,
 } from '@/features/edge-status/api'
+import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
 import { languageCode } from '@/shared/i18n/language'
 import { StationCardGridStyles } from './components/StationCardGridStyles'
 import { StationLightBackground } from './components/StationLightBackground'
@@ -80,13 +85,15 @@ type TrendPoint = {
 
 type MetricCard = {
   id: string
-  labelKey: string
+  label: string
   unit: string
   color: string
-  min: number
-  max: number
+  min?: number
+  max?: number
   icon: ReactNode
-  value: number
+  value?: number
+  precision: number
+  trend: TrendPoint[]
 }
 
 type StartDetectionFormValues = {
@@ -105,31 +112,14 @@ type StartDetectionFormValues = {
 
 type AlarmScopeFilter = 'all' | LimitAlarmScope
 
-const chartData: TrendPoint[] = [
-  { time: '08:00', value: 44 },
-  { time: '09:00', value: 47.5 },
-  { time: '10:00', value: 52.1 },
-  { time: '11:00', value: 55.4 },
-  { time: '12:00', value: 59.7 },
-  { time: '13:00', value: 54.3 },
-  { time: '14:00', value: 51.2 },
-]
+const cardColors = ['#c2410c', '#0f766e', '#2563eb', '#b45309', '#7c3aed', '#15803d', '#be185d', '#dc2626']
 
-const metricSeed = [
-  { id: 'temp_out', labelKey: 'station.metrics.tempOut', unit: '℃', color: '#c2410c', min: 48, max: 55, icon: Thermometer },
-  { id: 'humid_out', labelKey: 'station.metrics.humidOut', unit: '%RH', color: '#0f766e', min: 20, max: 40, icon: Droplets },
-  { id: 'wind_in', labelKey: 'station.metrics.windIn', unit: 'm³/h', color: '#2563eb', min: 120, max: 160, icon: Wind },
-  { id: 'noise', labelKey: 'station.metrics.noise', unit: 'dB', color: '#b45309', min: 40, max: 75, icon: Volume2 },
-  { id: 'vibration', labelKey: 'station.metrics.vibration', unit: 'mm', color: '#7c3aed', min: 0.5, max: 2, icon: Waves },
-  { id: 'temp_in', labelKey: 'station.metrics.tempIn', unit: '℃', color: '#15803d', min: 22, max: 28, icon: Thermometer },
-  { id: 'pressure', labelKey: 'station.metrics.pressure', unit: 'kPa', color: '#be185d', min: 100, max: 150, icon: Gauge },
-  { id: 'power', labelKey: 'station.metrics.power', unit: 'kW', color: '#dc2626', min: 2, max: 4.5, icon: Power },
-]
-
-function valueFromSnapshot(tags: TagSnapshot[], index: number, fallback: number) {
-  const tag = tags[index]
-  if (!tag || tag.is_string || !Number.isFinite(tag.value)) return fallback
-  return tag.value
+type StationTableRow = {
+  key: string
+  name: string
+  standard: string
+  value: string
+  ok: boolean
 }
 
 function formatAlarmValue(value?: number | null) {
@@ -151,6 +141,115 @@ function alarmDisplayName(
   if (currentLanguage === 'en') return alarm.display_name_en || alarm.var_name
   if (currentLanguage === 'ja') return alarm.display_name_ja || alarm.var_name
   return alarm.display_name || alarm.var_name
+}
+
+function bindingDisplayName(binding: StationViewResolvedBinding, language?: string) {
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return binding.display_name_en || binding.var_name || binding.var_id_text || String(binding.var_id ?? '')
+  if (currentLanguage === 'ja') return binding.display_name_ja || binding.var_name || binding.var_id_text || String(binding.var_id ?? '')
+  return binding.display_name || binding.var_name || binding.var_id_text || String(binding.var_id ?? '')
+}
+
+function bindingWireId(binding: Pick<StationViewResolvedBinding, 'var_id' | 'var_id_text'>) {
+  return binding.var_id_text ?? binding.var_id
+}
+
+function bindingKey(binding: StationViewResolvedBinding, index: number) {
+  return String(bindingWireId(binding) ?? `${binding.source}-${binding.var_name ?? index}`)
+}
+
+function snapshotKey(snapshot: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
+  return String(snapshot.var_id_text ?? snapshot.var_id)
+}
+
+function projectBindingFromSnapshot(snapshot: TagSnapshot, index: number): StationViewResolvedBinding {
+  return {
+    source: 'project_variable',
+    var_id: snapshot.var_id,
+    var_id_text: snapshot.var_id_text,
+    var_name: snapshot.var_name,
+    var_group: snapshot.var_group,
+    display_name: snapshot.display_name,
+    display_name_en: snapshot.display_name_en,
+    display_name_ja: snapshot.display_name_ja,
+    unit: '',
+    decimal_places: 2,
+    sort_order: index,
+  }
+}
+
+function runBindingFromStandardItem(item: DetectionRunStandardItem): StationViewResolvedBinding {
+  return {
+    source: 'detection_item',
+    var_id: item.var_id,
+    var_id_text: item.var_id_text,
+    var_name: item.var_name,
+    display_name: item.display_name,
+    display_name_en: item.display_name_en,
+    display_name_ja: item.display_name_ja,
+    unit: item.unit,
+    decimal_places: item.decimal_places,
+    limit_ll: item.limit_ll,
+    limit_l: item.limit_l,
+    limit_h: item.limit_h,
+    limit_hh: item.limit_hh,
+    check_enabled: item.check_enabled,
+    alarm_enabled: item.alarm_enabled,
+    sort_order: item.sort_order,
+  }
+}
+
+function bindingLimits(binding: StationViewResolvedBinding) {
+  return {
+    min: binding.limit_l ?? binding.limit_ll ?? undefined,
+    max: binding.limit_h ?? binding.limit_hh ?? undefined,
+  }
+}
+
+function numericSnapshotValue(snapshot?: TagSnapshot) {
+  if (!snapshot || snapshot.is_string || !Number.isFinite(snapshot.value)) return undefined
+  return snapshot.value
+}
+
+function formatMetricValue(value: number | undefined, unit: string | undefined, precision: number) {
+  if (value === undefined) return '--'
+  return `${value.toFixed(Math.max(0, Math.min(precision, 4)))}${unit ? ` ${unit}` : ''}`
+}
+
+function formatStandardRange(binding: StationViewResolvedBinding) {
+  const limits = bindingLimits(binding)
+  const unit = binding.unit ? ` ${binding.unit}` : ''
+  if (limits.min === undefined && limits.max === undefined) return '--'
+  if (limits.min === undefined) return `<= ${formatAlarmValue(limits.max)}${unit}`
+  if (limits.max === undefined) return `>= ${formatAlarmValue(limits.min)}${unit}`
+  return `${formatAlarmValue(limits.min)} - ${formatAlarmValue(limits.max)}${unit}`
+}
+
+function isWithinLimits(value: number | undefined, binding: StationViewResolvedBinding) {
+  if (value === undefined) return true
+  const limits = bindingLimits(binding)
+  if (limits.min !== undefined && value < limits.min) return false
+  if (limits.max !== undefined && value > limits.max) return false
+  return true
+}
+
+function trendFromValue(value: number | undefined, min?: number, max?: number): TrendPoint[] {
+  const base = value ?? min ?? max ?? 0
+  return Array.from({ length: 7 }, (_, index) => ({
+    time: String(index + 1),
+    value: base,
+  }))
+}
+
+function iconForBinding(binding: StationViewResolvedBinding) {
+  const text = `${binding.var_group ?? ''} ${binding.var_name ?? ''} ${binding.display_name ?? ''}`.toLowerCase()
+  if (text.includes('temp') || text.includes('温')) return Thermometer
+  if (text.includes('humid') || text.includes('湿')) return Droplets
+  if (text.includes('wind') || text.includes('风')) return Wind
+  if (text.includes('noise') || text.includes('噪')) return Volume2
+  if (text.includes('vibration') || text.includes('振')) return Waves
+  if (text.includes('power') || text.includes('功率')) return Power
+  return Gauge
 }
 
 function buildReportRequest(values: StartDetectionFormValues): DetectionRunReportRequestPayload | undefined {
@@ -204,10 +303,25 @@ export function StationOperationPage() {
   const canStopDetection = hasPermission('stop_detection')
   const selectedProjectId = Number(searchParams.get('project_id') ?? searchParams.get('device_id'))
   const validSelectedProjectId = Number.isFinite(selectedProjectId) && selectedProjectId > 0 ? selectedProjectId : undefined
+  const stationViewQuery = useQuery({
+    queryKey: ['station', 'view-effective', validSelectedProjectId],
+    queryFn: () => getStationViewEffective(validSelectedProjectId!),
+    enabled: validSelectedProjectId !== undefined,
+    refetchInterval: 10000,
+    retry: false,
+  })
   const variablesQuery = useQuery({
     queryKey: ['edge', 'realtime-variables', validSelectedProjectId],
     queryFn: () => getRealtimeVariables(validSelectedProjectId ? { project_id: validSelectedProjectId } : {}),
-    refetchInterval: 2000,
+    enabled: validSelectedProjectId !== undefined,
+    staleTime: 30000,
+    retry: false,
+  })
+  const currentRunQuery = useQuery({
+    queryKey: ['station', 'current-run', validSelectedProjectId],
+    queryFn: () => getCurrentDetectionRun(validSelectedProjectId!),
+    enabled: validSelectedProjectId !== undefined && stationViewQuery.data?.http_companion.current_run_required === true,
+    refetchInterval: stationViewQuery.data?.http_companion.current_run_required ? 5000 : false,
     retry: false,
   })
   const activeRunsQuery = useQuery({
@@ -246,7 +360,35 @@ export function StationOperationPage() {
     refetchInterval: alarmModalOpen ? 5000 : false,
     retry: false,
   })
-  const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
+  const [wsSnapshotState, setWsSnapshotState] = useState<{ key: string; items: TagSnapshot[] }>({ key: '', items: [] })
+  const wsVarIdsKey = (stationViewQuery.data?.ws_subscription.var_ids ?? []).join(',')
+  const wsSubscriptionKey = `${validSelectedProjectId ?? ''}:${wsVarIdsKey}`
+  useEffect(() => {
+    if (!validSelectedProjectId || !stationViewQuery.data) return undefined
+    return subscribeRealtimeWebSocket({
+      subscription: {
+        topics: ['realtime.variables'],
+        project_id: validSelectedProjectId,
+        var_ids: stationViewQuery.data.ws_subscription.var_ids,
+      },
+      onMessage: (envelope) => {
+        if (envelope.type !== 'realtime.variables.snapshot') return
+        const payload = envelope.payload as RealtimeVariablesSnapshotPayload | undefined
+        setWsSnapshotState({ key: wsSubscriptionKey, items: payload?.items ?? [] })
+      },
+    })
+  }, [validSelectedProjectId, stationViewQuery.data, wsSubscriptionKey])
+  const variables = useMemo(() => {
+    const merged = new Map<string, TagSnapshot>()
+    for (const variable of variablesQuery.data ?? []) {
+      merged.set(snapshotKey(variable), variable)
+    }
+    const currentWSSnapshots = wsSnapshotState.key === wsSubscriptionKey ? wsSnapshotState.items : []
+    for (const variable of currentWSSnapshots) {
+      merged.set(snapshotKey(variable), variable)
+    }
+    return Array.from(merged.values())
+  }, [variablesQuery.data, wsSnapshotState, wsSubscriptionKey])
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === validSelectedProjectId),
@@ -259,8 +401,9 @@ export function StationOperationPage() {
         : variables,
     [validSelectedProjectId, variables],
   )
-  const activeRun =
-    activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId || run.device_id === validSelectedProjectId) ?? activeRunsQuery.data?.[0]
+  const activeRun = validSelectedProjectId
+    ? activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId || run.device_id === validSelectedProjectId)
+    : activeRunsQuery.data?.[0]
   const storageSnapshotQuery = useQuery({
     queryKey: ['station', 'run-storage-routes', activeRun?.id],
     queryFn: () => getDetectionRunStorageRoutes(activeRun!.id),
@@ -299,57 +442,99 @@ export function StationOperationPage() {
     if (currentLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.project_code
     return selectedProject.display_name || selectedProject.name || selectedProject.project_code
   }, [i18n.resolvedLanguage, selectedProject])
-  const [cardOrder, setCardOrder] = useState(metricSeed.map((item) => item.id))
+  const [manualCardOrder, setManualCardOrder] = useState<string[]>([])
   const [isStatusCollapsed, setStatusCollapsed] = useState(false)
   const [pinnedRows, setPinnedRows] = useState<string[]>([])
+  const snapshotsByVarID = useMemo(() => {
+    const result = new Map<string, TagSnapshot>()
+    for (const variable of stationVariables) {
+      result.set(snapshotKey(variable), variable)
+    }
+    return result
+  }, [stationVariables])
+  const templateMetricBindings = useMemo(
+    () =>
+      (stationViewQuery.data?.items ?? [])
+        .filter((item) => item.region_key === 'left')
+        .flatMap((item) => item.resolved_bindings ?? []),
+    [stationViewQuery.data],
+  )
+  const metricBindings = useMemo(
+    () => (templateMetricBindings.length > 0 ? templateMetricBindings : stationVariables.map(projectBindingFromSnapshot)),
+    [stationVariables, templateMetricBindings],
+  )
+  const defaultCardIds = useMemo(() => metricBindings.map((binding, index) => bindingKey(binding, index)), [metricBindings])
+  const cardOrder = useMemo(() => {
+    const next = manualCardOrder.filter((id) => defaultCardIds.includes(id))
+    for (const id of defaultCardIds) {
+      if (!next.includes(id)) next.push(id)
+    }
+    return next
+  }, [defaultCardIds, manualCardOrder])
+  const bindingByCardId = useMemo(() => {
+    const result = new Map<string, StationViewResolvedBinding>()
+    metricBindings.forEach((binding, index) => result.set(bindingKey(binding, index), binding))
+    return result
+  }, [metricBindings])
   const cards = useMemo<MetricCard[]>(
     () =>
-      cardOrder.map((id, index) => {
-        const seed = metricSeed.find((item) => item.id === id) ?? metricSeed[0]
-        const Icon = seed.icon
-        return {
-          ...seed,
-          icon: <Icon size={15} />,
-          value: valueFromSnapshot(stationVariables, index, (seed.min + seed.max) / 2),
-        }
-      }),
-    [cardOrder, stationVariables],
+      cardOrder
+        .map((id, index) => {
+          const binding = bindingByCardId.get(id)
+          if (!binding) return undefined
+          const snapshot = bindingWireId(binding) !== undefined ? snapshotsByVarID.get(String(bindingWireId(binding))) : undefined
+          const value = numericSnapshotValue(snapshot)
+          const limits = bindingLimits(binding)
+          const Icon = iconForBinding(binding)
+          return {
+            id,
+            label: bindingDisplayName(binding, i18n.resolvedLanguage),
+            unit: binding.unit ?? '',
+            color: cardColors[index % cardColors.length],
+            icon: <Icon size={15} />,
+            value,
+            precision: binding.decimal_places ?? 2,
+            trend: trendFromValue(value, limits.min, limits.max),
+            ...(limits.min !== undefined ? { min: limits.min } : {}),
+            ...(limits.max !== undefined ? { max: limits.max } : {}),
+          }
+        })
+        .filter((card) => card !== undefined),
+    [bindingByCardId, cardOrder, i18n.resolvedLanguage, snapshotsByVarID],
   )
 
-  const stationRows = useMemo(
-    () => {
-      const baseRows = cards.map((card) => ({
-        name: t(card.labelKey),
-        standard: `${card.min} - ${card.max} ${card.unit}`,
-        value: `${card.value.toFixed(card.unit === 'mm' ? 3 : 1)} ${card.unit}`,
-        ok: card.value >= card.min && card.value <= card.max,
-      }))
-      const extraRows = [
-        ['station.metrics.humidIn', '40 - 60 %RH', '45.3 %RH'],
-        ['station.metrics.compressorSuctionTemp', '10 - 15 ℃', '12.4 ℃'],
-        ['station.metrics.compressorDischargeTemp', '70 - 90 ℃', '85.6 ℃'],
-        ['station.metrics.evaporatorOutletTemp', '5 - 12 ℃', '8.2 ℃'],
-        ['station.metrics.condenserOutletTemp', '30 - 45 ℃', '35.4 ℃'],
-        ['station.metrics.expansionValveOutletTemp', '2 - 8 ℃', '5.1 ℃'],
-        ['station.metrics.coolingWaterInletTemp', '25 - 32 ℃', '28.5 ℃'],
-        ['station.metrics.coolingWaterOutletTemp', '30 - 38 ℃', '33.2 ℃'],
-        ['station.metrics.humidifierWaterTemp', '10 - 20 ℃', '15.6 ℃'],
-        ['station.metrics.reheaterOutletTemp', '35 - 50 ℃', '42.1 ℃'],
-      ].map(([nameKey, standard, value]) => ({
-        name: t(nameKey),
-        standard,
-        value,
-        ok: true,
-      }))
-      return [...baseRows, ...extraRows]
-    },
-    [cards, t],
+  const runBindings = useMemo(
+    () => (currentRunQuery.data?.standard_items ?? []).map(runBindingFromStandardItem),
+    [currentRunQuery.data],
+  )
+  const templateTableBindings = useMemo(
+    () =>
+      (stationViewQuery.data?.items ?? [])
+        .filter((item) => item.region_key === 'right' && item.binding_type === 'detection_items')
+        .flatMap((item) => item.resolved_bindings ?? []),
+    [stationViewQuery.data],
+  )
+  const stationRows = useMemo<StationTableRow[]>(
+    () =>
+      (runBindings.length > 0 ? runBindings : templateTableBindings.length > 0 ? templateTableBindings : metricBindings).map((binding, index) => {
+        const key = bindingKey(binding, index)
+        const snapshot = bindingWireId(binding) !== undefined ? snapshotsByVarID.get(String(bindingWireId(binding))) : undefined
+        const value = numericSnapshotValue(snapshot)
+        return {
+          key,
+          name: bindingDisplayName(binding, i18n.resolvedLanguage),
+          standard: formatStandardRange(binding),
+          value: formatMetricValue(value, binding.unit ?? '', binding.decimal_places ?? 2),
+          ok: isWithinLimits(value, binding),
+        }
+      }),
+    [i18n.resolvedLanguage, metricBindings, runBindings, snapshotsByVarID, templateTableBindings],
   )
   const sortedStationRows = useMemo(
     () =>
       [...stationRows].sort((a, b) => {
-        const aIndex = pinnedRows.indexOf(a.name)
-        const bIndex = pinnedRows.indexOf(b.name)
+        const aIndex = pinnedRows.indexOf(a.key)
+        const bIndex = pinnedRows.indexOf(b.key)
         if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex
         if (aIndex !== -1) return -1
         if (bIndex !== -1) return 1
@@ -362,6 +547,8 @@ export function StationOperationPage() {
   const refreshRuns = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['edge', 'active-runs'] }),
+      queryClient.invalidateQueries({ queryKey: ['station', 'current-run'] }),
+      queryClient.invalidateQueries({ queryKey: ['station', 'view-effective'] }),
       queryClient.invalidateQueries({ queryKey: ['station', 'detection-runs'] }),
       queryClient.invalidateQueries({ queryKey: ['history', 'data'] }),
     ])
@@ -403,8 +590,8 @@ export function StationOperationPage() {
     },
   })
 
-  function togglePinnedRow(name: string) {
-    setPinnedRows((rows) => (rows.includes(name) ? rows.filter((row) => row !== name) : [...rows, name]))
+  function togglePinnedRow(key: string) {
+    setPinnedRows((rows) => (rows.includes(key) ? rows.filter((row) => row !== key) : [...rows, key]))
   }
 
   function openStartModal() {
@@ -714,7 +901,7 @@ export function StationOperationPage() {
       {messageContext}
       <StationLightBackground />
       <div className="station-grid">
-        <SortableMetricGrid cards={cards} onOrderChange={setCardOrder} t={t} />
+        <SortableMetricGrid cards={cards} onOrderChange={setManualCardOrder} t={t} />
 
         <aside className="station-side">
           <section
@@ -844,12 +1031,12 @@ export function StationOperationPage() {
               <table>
                 <tbody>
                   {sortedStationRows.map((row) => {
-                    const pinned = pinnedRows.includes(row.name)
+                    const pinned = pinnedRows.includes(row.key)
                     return (
                       <tr
                         className={pinned ? 'station-row pinned' : 'station-row'}
-                        key={row.name}
-                        onClick={() => togglePinnedRow(row.name)}
+                        key={row.key}
+                        onClick={() => togglePinnedRow(row.key)}
                       >
                         <td>
                           <span className="pin-indicator" />
@@ -1176,7 +1363,7 @@ function SortableMetricGrid({
                 <SortableMetricCard
                   key={card.id}
                   card={card}
-                  label={t(card.labelKey)}
+                  label={card.label}
                   isDropping={droppingId === card.id}
                 />
               ))}
@@ -1199,7 +1386,7 @@ function SortableMetricGrid({
         </button>
       </div>
       <DragOverlay dropAnimation={dropAnimation}>
-        {activeCard ? <MetricCardView card={activeCard} label={t(activeCard.labelKey)} dragging /> : null}
+        {activeCard ? <MetricCardView card={activeCard} label={activeCard.label} dragging /> : null}
       </DragOverlay>
     </DndContext>
   )
@@ -1250,7 +1437,7 @@ function MetricCardView({ card, label, dragging = false }: { card: MetricCard; l
         </div>
       </div>
       <div className="metric-chart">
-        <CardChart chartData={chartData} legendName={label} min={card.min} max={card.max} />
+        <CardChart chartData={card.trend} legendName={label} min={card.min} max={card.max} />
       </div>
     </article>
   )
@@ -1264,14 +1451,14 @@ function CardChart({
 }: {
   chartData: TrendPoint[]
   legendName: string
-  min: number
-  max: number
+  min?: number
+  max?: number
 }) {
   const dataValues = chartData.map((item) => item.value)
   const dataMin = Math.min(...dataValues)
   const dataMax = Math.max(...dataValues)
-  const yMin = Math.min(dataMin, min)
-  const yMax = Math.max(dataMax, max)
+  const yMin = Math.min(dataMin, min ?? dataMin)
+  const yMax = Math.max(dataMax, max ?? dataMax)
   const range = yMax - yMin
   const buffer = range === 0 ? yMax * 0.1 || 1 : range * 0.1
   const domain = [Math.floor(yMin - buffer), Math.ceil(yMax + buffer)]
@@ -1311,36 +1498,40 @@ function CardChart({
             itemStyle={{ color: '#333', fontWeight: 600, fontFamily: 'Georgia, serif', fontSize: 13 }}
             labelStyle={{ display: 'none' }}
           />
-          <ReferenceLine
-            y={min}
-            stroke="#ff4d4f"
-            strokeDasharray="2 3"
-            strokeWidth={1}
-            label={{
-              position: 'insideTopLeft',
-              value: `Min ${min}`,
-              fill: '#ff4d4f',
-              fontSize: 10,
-              fontWeight: 500,
-              fontFamily: '-apple-system, sans-serif',
-              dy: -5,
-            }}
-          />
-          <ReferenceLine
-            y={max}
-            stroke="#8c8c8c"
-            strokeDasharray="2 3"
-            strokeWidth={1}
-            label={{
-              position: 'insideTopLeft',
-              value: `Max ${max}`,
-              fill: '#8c8c8c',
-              fontSize: 10,
-              fontWeight: 500,
-              fontFamily: '-apple-system, sans-serif',
-              dy: -5,
-            }}
-          />
+          {min !== undefined ? (
+            <ReferenceLine
+              y={min}
+              stroke="#ff4d4f"
+              strokeDasharray="2 3"
+              strokeWidth={1}
+              label={{
+                position: 'insideTopLeft',
+                value: `Min ${min}`,
+                fill: '#ff4d4f',
+                fontSize: 10,
+                fontWeight: 500,
+                fontFamily: '-apple-system, sans-serif',
+                dy: -5,
+              }}
+            />
+          ) : null}
+          {max !== undefined ? (
+            <ReferenceLine
+              y={max}
+              stroke="#8c8c8c"
+              strokeDasharray="2 3"
+              strokeWidth={1}
+              label={{
+                position: 'insideTopLeft',
+                value: `Max ${max}`,
+                fill: '#8c8c8c',
+                fontSize: 10,
+                fontWeight: 500,
+                fontFamily: '-apple-system, sans-serif',
+                dy: -5,
+              }}
+            />
+          ) : null}
           <Area
             type="monotone"
             dataKey="value"

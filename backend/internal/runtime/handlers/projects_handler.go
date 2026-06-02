@@ -19,28 +19,30 @@ type ProjectsHandler struct {
 }
 
 type createProjectRequest struct {
-	ProjectCode   string `json:"project_code" binding:"required"`
-	SiteNo        string `json:"site_no"`
-	Name          string `json:"name"`
-	DisplayName   string `json:"display_name"`
-	DisplayNameEN string `json:"display_name_en"`
-	DisplayNameJA string `json:"display_name_ja"`
-	ModelName     string `json:"model_name"`
-	ImageRef      string `json:"image_ref"`
-	Placeholder   bool   `json:"placeholder"`
+	ProjectCode    string `json:"project_code" binding:"required"`
+	SiteNo         string `json:"site_no"`
+	EdgeInstanceID string `json:"edge_instance_id"`
+	Name           string `json:"name"`
+	DisplayName    string `json:"display_name"`
+	DisplayNameEN  string `json:"display_name_en"`
+	DisplayNameJA  string `json:"display_name_ja"`
+	ModelName      string `json:"model_name"`
+	ImageRef       string `json:"image_ref"`
+	Placeholder    bool   `json:"placeholder"`
 }
 
 type ProjectPatchRequest struct {
-	SiteNo        *string `json:"site_no"`
-	Name          *string `json:"name"`
-	DisplayName   *string `json:"display_name"`
-	DisplayNameEN *string `json:"display_name_en"`
-	DisplayNameJA *string `json:"display_name_ja"`
-	ModelName     *string `json:"model_name"`
-	ImageRef      *string `json:"image_ref"`
-	Enabled       *bool   `json:"enabled"`
-	Blocked       *bool   `json:"blocked"`
-	Placeholder   *bool   `json:"placeholder"`
+	SiteNo         *string `json:"site_no"`
+	EdgeInstanceID *string `json:"edge_instance_id"`
+	Name           *string `json:"name"`
+	DisplayName    *string `json:"display_name"`
+	DisplayNameEN  *string `json:"display_name_en"`
+	DisplayNameJA  *string `json:"display_name_ja"`
+	ModelName      *string `json:"model_name"`
+	ImageRef       *string `json:"image_ref"`
+	Enabled        *bool   `json:"enabled"`
+	Blocked        *bool   `json:"blocked"`
+	Placeholder    *bool   `json:"placeholder"`
 }
 
 type projectMembersReplaceRequest struct {
@@ -81,17 +83,18 @@ func (h *ProjectsHandler) create(c *gin.Context) {
 		return
 	}
 	Project := &models.Project{
-		ProjectCode:   strings.TrimSpace(req.ProjectCode),
-		SiteNo:        req.SiteNo,
-		Name:          firstNonEmpty(strings.TrimSpace(req.Name), strings.TrimSpace(req.DisplayName)),
-		DisplayName:   firstNonEmpty(strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Name)),
-		DisplayNameEN: req.DisplayNameEN,
-		DisplayNameJA: req.DisplayNameJA,
-		ModelName:     req.ModelName,
-		ImageRef:      req.ImageRef,
-		Enabled:       true,
-		Blocked:       false,
-		Placeholder:   req.Placeholder,
+		ProjectCode:    strings.TrimSpace(req.ProjectCode),
+		SiteNo:         req.SiteNo,
+		EdgeInstanceID: strings.TrimSpace(req.EdgeInstanceID),
+		Name:           firstNonEmpty(strings.TrimSpace(req.Name), strings.TrimSpace(req.DisplayName)),
+		DisplayName:    firstNonEmpty(strings.TrimSpace(req.DisplayName), strings.TrimSpace(req.Name)),
+		DisplayNameEN:  req.DisplayNameEN,
+		DisplayNameJA:  req.DisplayNameJA,
+		ModelName:      req.ModelName,
+		ImageRef:       req.ImageRef,
+		Enabled:        true,
+		Blocked:        false,
+		Placeholder:    req.Placeholder,
 	}
 	if Project.Name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name or display_name is required"})
@@ -183,6 +186,7 @@ func (h *ProjectsHandler) replaceMembers(c *gin.Context) {
 func ProjectUpdates(req ProjectPatchRequest) (map[string]interface{}, error) {
 	updates := make(map[string]interface{})
 	setStringUpdate(updates, "site_no", req.SiteNo)
+	setStringUpdate(updates, "edge_instance_id", req.EdgeInstanceID)
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if name == "" {

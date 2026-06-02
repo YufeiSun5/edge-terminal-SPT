@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +22,7 @@ type Store interface {
 	FindUserByID(id uint) (models.SysUser, error)
 	UpdateUserLastLogin(id uint, at time.Time) error
 	FindServiceClientBySecretHash(secretHash string) (models.SysServiceClient, error)
+	UpdateServiceClientLastUsed(id uint, at time.Time) error
 	CreateSSOTicket(ticket *models.SysSSOTicket) error
 	ConsumeSSOTicket(ticketHash string, edgeInstanceID string, now time.Time) (models.SysUser, error)
 	CreateAuditLog(entry *models.SysAuditLog) error
@@ -257,10 +259,15 @@ func (s *Service) RequireServiceScope(scope string) gin.HandlerFunc {
 			writeUnauthorized(c, "service token expired")
 			return
 		}
+		if !serviceClientAllowsIP(client.AllowedCIDRs, c.ClientIP()) {
+			writeForbidden(c, "service client source ip is not allowed")
+			return
+		}
 		if !HasScope(client.Scopes, scope) {
 			writeForbidden(c, fmt.Sprintf("scope %s required", scope))
 			return
 		}
+		_ = s.store.UpdateServiceClientLastUsed(client.ID, s.now())
 		c.Set(principalContextKey, Principal{
 			AuthType: "service",
 			ClientID: client.ClientID,
@@ -268,6 +275,35 @@ func (s *Service) RequireServiceScope(scope string) gin.HandlerFunc {
 		})
 		c.Next()
 	}
+}
+
+func serviceClientAllowsIP(allowedCIDRs string, clientIP string) bool {
+	allowedCIDRs = strings.TrimSpace(allowedCIDRs)
+	if allowedCIDRs == "" {
+		return true
+	}
+	ip := net.ParseIP(strings.TrimSpace(clientIP))
+	if ip == nil {
+		return false
+	}
+	for _, raw := range strings.Split(allowedCIDRs, ",") {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			continue
+		}
+		if !strings.Contains(item, "/") {
+			allowed := net.ParseIP(item)
+			if allowed != nil && allowed.Equal(ip) {
+				return true
+			}
+			continue
+		}
+		_, network, err := net.ParseCIDR(item)
+		if err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func PrincipalFromContext(c *gin.Context) (Principal, bool) {
