@@ -11,6 +11,7 @@ import { getDevices, getNotificationUnreadCount, getNotifications, markAllNotifi
 import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
 import type { Device, NotificationListParams, UserNotification } from '@/shared/api/types'
 import { queryClient } from '@/app/queryClient'
+import { languageCode } from '@/shared/i18n/language'
 import './notification-center.css'
 
 const notificationTypeOptions = [
@@ -150,8 +151,9 @@ export function NotificationCenterPage() {
 
   function displayProject(project?: Pick<Device, 'device_code' | 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) {
     if (!project) return ''
-    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || project.project_code || project.device_code
-    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || project.project_code || project.device_code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return project.display_name_en || project.project_code || project.device_code
+    if (currentLanguage === 'ja') return project.display_name_ja || project.project_code || project.device_code
     return project.display_name || project.name || project.project_code || project.device_code
   }
 

@@ -1,8 +1,30 @@
 # MEMORY
 
-Last updated: 2026-06-01 14:35 Asia/Shanghai
+Last updated: 2026-06-01 17:37 Asia/Shanghai
 
 ## 当前阶段
+
+2026-06-01 17:37 `frontend-ai` 按用户截图修复 `/#/variables` 表格下方空白过多：变量页表格不再使用固定 `scroll.y=470/540`，改为监听窗口高度并动态计算表格滚动高度，未分配池显示时约按 `viewportHeight - 270`，否则按 `viewportHeight - 210`，最小 420，保证表格主体填满可用工作区。验证通过 `desktop/npx tsc -b --pretty false`、`desktop/npm run lint`、`desktop/npm run build`、`desktop/npm run test -- --run`；已重启 `http://127.0.0.1:4275` preview（PID 46376）。
+
+2026-06-01 17:36 `frontend-ai` 按用户反馈直接复查数据库，确认 `sys_tags.display_name_en/display_name_ja` 中 AC-01 等 KIO 变量曾被历史数据填成中文，如 `吹出口湿度/加湿器给水口温度/设备噪音` 的英文列仍是中文。已增强 `backend/cmd/backfill-display-i18n`：空值、英文列含 CJK、日文列仍等于中文源名或英文名时会覆盖；补齐 KIO 变量常用中英日词典，包含吹出口、吸入口、冷凝器、冷却水、压缩机、干燥过滤器、风速、噪音、震动位移、检测标准名、S_表面积等。已在本地库执行，更新 `projects=5 tags=601`，复查 `go run ./cmd/backfill-display-i18n -config configs/config.json -dry-run` 为 `projects=0 tags=0`，API 抽查 AC-01 显示 `display_name_en=Outlet Humidity/Humidifier Water Inlet Temperature/...`，英文列含中文计数 `bad_en_count=0/1059`。验证通过 `backend/go test ./cmd/backfill-display-i18n`。
+
+2026-06-01 17:28 `frontend-ai` 修复用户反馈“切语言后 displayName 仍没变”：新增 `desktop/src/shared/i18n/language.ts`，统一把 `en-US/en` 归一为 `en`、`ja-JP/ja` 归一为 `ja`，变量页、侧边项目菜单、检测配置、任务、设置、告警、通知、工位页和 Ant Design locale 均改用归一语言码选择 `display_name_en/display_name_ja/display_name`。已重建并重启 `http://127.0.0.1:4275` preview（PID 47260）。验证通过 `desktop/npx tsc -b --pretty false`、`desktop/npm run lint`、`desktop/npm run test -- --run`、`desktop/npm run build`；API 抽查 `/api/v1/variables` 返回中英日 display name 均有值。
+
+2026-06-01 17:22 `frontend-ai` 继续收口变量显示语言：前端变量页、侧边项目菜单、检测配置、任务、告警、通知和工位页的显示 helper 改为按当前语言取 `display_name/display_name_en/display_name_ja`，英文/日文缺失时回退稳定映射名/项目编码，不再回退中文名；虚拟变量创建不再把中文名复制到英文/日文字段。侧边栏菜单文字增加省略和折叠态居中样式，解决文字遮挡。新增 `backend/cmd/backfill-display-i18n` 数据修复脚本，读取 `backend/configs/config.json` 后只补空的 `sys_projects/sys_tags.display_name_en/display_name_ja`，本地执行补齐 21 个缺失变量名，复查 `-dry-run` 为 `projects=0 tags=0`。验证通过 `desktop/npx tsc -b --pretty false`、`desktop/npm run lint`、`desktop/npm run test -- --run`、`desktop/npm run build`、`backend/go test ./...`；Vite build 仅保留大 chunk 提示。
+
+2026-06-01 17:07 `frontend-ai` 按用户反馈继续调整 `/#/variables`：变量表改为按项目分组的扁平分组表，每个项目先显示项目分组行，如 `1号精密空调 / AC-01 · 42`，组内变量按当前语言显示名排序；变量行前三列固定为 `ID`、当前语言翻译名（中文为 `中文显示名`）、`变量名`，后续再显示原始名、源路径、JSON Path、Gateway、类型、单位、项目、分组、读写模式等字段。默认分页从 30 提升到 100，减少一屏/一页数据过少的问题。验证通过 `desktop/npx tsc -b --pretty false`、`desktop/npm run lint`、`desktop/npm run build`、`desktop/npm run test -- --run`；Playwright smoke 登录 `/#/variables` 确认表头 `ID/中文显示名/变量名/原始名称/源路径/JSON Path`，存在项目分组行，首组 `AC-01 · 42` 下方变量按新列顺序展示。
+
+2026-06-01 16:35 `frontend-ai` 按用户要求把设置里的变量设置抽成独立侧边栏页面：新增 `/#/variables` 和侧边栏“变量设置”，页面复用检测配置页的大工作区、顶部筛选/动作工具条、虚拟表格和内部滚动布局；变量列表保留关键字搜索、按全部/已分配/未分配/项目筛选、未分配池批量分配、创建虚变量、KIO 项目初始化、变量编辑/分配弹窗和默认报警字段。`/#/settings` 默认切到系统模块，并移除顶部汇总里的变量设置入口，避免变量管理继续藏在设置首页。验证通过 `desktop/npx tsc -b --pretty false`、`desktop/npm run lint`、`desktop/npm run test -- --run`、`desktop/npm run build`；Vite build 仅有既有大 chunk 提示。已启动预览 `http://127.0.0.1:4275`，浏览器登录 `admin/Admin@12345` 后验证 `/#/variables` 渲染、侧边栏变量设置存在、检测配置布局类存在、表格可见 8 行。
+
+2026-06-01 16:18 用户启动 KIO 后，`backend-ai/test-ai` 复测真实 KIO 变量下设延迟：`/health` 显示 gateway active、tags=513；4 个已配置可写物理变量为 `AC-01` 下 `SP1_WD/台1_39`、`SP2_SD/台1_40`、`SP2_WD/台1_41`、`kio_01_42/台1_42`。通过 WS `command.write_variable` 使用 `project_code + var_name`、`wait_ack=true` 连续下设 20 次，20/20 `confirmed`，min=1453.6ms、p50=1652.1ms、p90=1674.9ms、p95=1676.0ms、max=1680.5ms、avg=1638.4ms。通过 HTTP KIO batch 一次写 4 个值、连续 10 批共 40 个变量值，10/10 `confirmed`，批次 p50=1684.1ms、p95=1693.0ms、max=1693.0ms、avg=1592.4ms，约 398.1ms/value。结论：当前瓶颈主要是 KIO ack 往返，批量 payload 能明显摊薄单值成本。
+
+2026-06-01 16:11 前端按用户反馈精简驾驶舱标题：`/#/model-cockpit` 标题区只保留主标题“3D 模型实时驾驶舱”，删除副标题 `modelCockpit.eyebrow` 渲染和 `.cockpit-title-bar small` 样式；PNG 标题背景、上移位置、fit-content 宽度和右侧趋势列比例保持不变。Vite dev smoke 确认标题文本只剩主标题、`smallCount=0`、`spanCount=1`、`usesPng=true`、趋势卡 `2`、页面无整体滚动，截图 `desktop/output/playwright/model-cockpit-title-only.png`。
+
+2026-06-01 16:16 后端按 `backend-ai` 完成 EB-057 WS 下行写变量首段：`command.write_variable` 继续兼容 `var_id` 优先，同时支持 `project_id + var_name` 或 `project_code + var_name` 解析运行态变量；`var_name` 只认业务映射名，不使用 `raw_name/source_path`；解析后仍复用 `VariableWriteService`、KIO 写入约束、虚拟变量 task-flow trigger 和审计，找不到返回 `variable_not_found`，项目内重名返回 `ambiguous_variable`。已更新 `AI_BOARD.md`、`backend/docs/backend-architecture.md` 和 `backend/docs/边缘端全链路数据流转与分发图.md`；验证通过定向 WS/service 测试、`go test ./...`、覆盖率 72.2%、`go vet ./...`、`golangci-lint run ./...` 0 issues、`go build ./cmd/edge-backend`、`/health`、`smokehealth` 和完整 `smokebackend -latency-n 30 -latency-c 10 -timeout 120s`，完整 smoke p95=1034.5ms、max=1044.2ms，核心队列/task-flow/notification dropped=0；后端已重启 PID 31152。
+
+2026-06-01 15:53 `review-ai` 按用户确认的 PID 实时调参诉求，在 `AI_BOARD.md` 新增 EB-057：后端需让 WS/HTTP 变量写入支持 `project_id` 或 `project_code` + 业务映射名 `var_name` 解析变量，`var_id` 继续优先兼容，解析后复用现有 `VariableWriteService`、KIO 写入约束、task-flow trigger 和审计；明确不使用 `raw_name/source_path` 作为写入身份。本轮只更新协作看板和记忆，未改运行代码、未跑测试。
+
+2026-06-01 15:42 前端按 `frontend-ai` 修复 `/#/detection-config` 固定参考项和分页堆叠问题：删除前端硬编码的 `LEGACY_DETECTION_ITEMS` 及“吸入口表面积/吹出口温度/吹出口湿度/吸入风量/设备噪音/震动位移/...”参考标签区，检测配置页变量项只来自后端动态变量/标准项数据；分页条改为独立底部布局，总数左侧自适应占位，页码、每页条数和跳页控件右侧同一行排列，避免右下角堆叠。验证通过 `desktop/npx tsc -b`、`desktop/npm run lint`、`desktop/npm run build`；Playwright smoke 确认 `legacyTags=0`、固定项文本不存在、整页 `scrollHeight=innerHeight=900`，分页控件位于同一行。
 
 2026-06-01 14:35 `frontend-ai` 已推进 EB-055 前端一套代码适配 Edge/Main Server 首段：`desktop/` 新增 `VITE_APP_ROLE=edge|main_server`、`VITE_MAIN_API_BASE_URL`、统一 `env.apiBaseUrl` 和 runtime feature gating，HTTP/SSE/WS 不再固定 edge baseURL；Electron main 在 `main_server` 角色只检查主服务器后端健康、不启动 `edge-backend.exe`，日志使用 `main-server-desktop.log`，watchdog 关闭；状态页在主服务器角色显示同步数据库、边缘控制目标、查询代理和报表服务，设置页隐藏网关新增/编辑与 KIO 初始化，系统页将重启降级为刷新后端状态并隐藏 sidecar watchdog。已同步三语文案和 `AI_BOARD.md`。验证通过 `desktop/npx tsc -b --pretty false`、`desktop/npm run lint`、`desktop/npm run test -- --run`、默认 edge `desktop/npm run build`、`VITE_APP_ROLE=main_server VITE_MAIN_API_BASE_URL=http://127.0.0.1:19080 desktop/npm run build`；build 仅有既有 Vite 大 chunk 提示。后续继续把剩余 `SidecarStatus/edgeDesktop` 命名升级为中性兼容层，并补主服务器报表生成/文件资产入口。
 
@@ -73,7 +95,7 @@ Electron + React 桌面端已初始化在 `desktop/`。主服务器端是独立�
 - 已确认边缘端/主服务器端边界：
   - 实时数据由边缘端向主服务器提供 SSE 或 WebSocket。
   - 历史数据和数据库层面的同步交给外部数据库同步软件，本项目不做应用层历史同步。
-  - 方法类/控制类调用面向 RabbitMQ 或 HTTP 暴露给主服务器使用。
+  - 方法类/控制类调用首版通过受控 HTTP 命令通道面向主服务器使用。
   - Excel 文件不作为边缘端到主服务器的数据传输能力。
   - 边缘端需要登录、单点登录到主服务器 Web、开机自启动等外围能力。
   - 主服务器只能查询同步镜像库；开始检测、停止检测、修改边缘端检测配置和写变量等控制动作必须通过命令通道回到边缘端执行。主服务器报表任务基于同步到位的数据生成 Excel，并由主服务器维护报表任务和用户通知。
@@ -192,7 +214,7 @@ Electron + React 桌面端已初始化在 `desktop/`。主服务器端是独立�
 ## 待确认
 
 - WebSocket 消息 envelope、订阅粒度、命令幂等、错误格式和前端接入顺序。<!-- 待确认 -->
-- RabbitMQ/HTTP 是否仍作为主站控制通道的后续补充通道。<!-- 待确认 -->
+- 主服务器到边缘端控制通道已确认首版使用 HTTP；service token 下发/轮换、allowed CIDR 配置和具体控制接口落地仍待 EB-056 实施。<!-- 待确认 -->
 - 登录权限设计已确定首版方向：本地用户 JWT + 主站 service token + 一次性 SSO ticket + `guest/admin/developer` 三角色 capability；主站域名、service token 下发/轮换和 developer 是否可临时 KIO 写仍待确认。<!-- 待确认 -->
 - Electron + React 前端技术细节、UI 组件库、状态管理和 i18n 方案已初步确定；详见 `AGENTS.md` 的 Frontend Technical Selection。
 - Windows 开机自启动、托盘、日志路径、服务守护和安装器方案。<!-- 待确认 -->
@@ -200,6 +222,8 @@ Electron + React 桌面端已初始化在 `desktop/`。主服务器端是独立�
 
 ## 改动记录
 
+- 2026-06-01 15:50 | GPT-5 Codex (`review-ai`) | 按用户补充“主服务器和边缘端用户列表其实是同一批”的 SSO/控制通道约束：更新 `backend/docs/边缘端HTTP主服务器控制通道设计.md`、`.ai/docs/登录权限与SSO安全设计.md` 和 `AI_BOARD.md` EB-056，明确 service token 只证明主服务器后端身份，SSO ticket 只用于用户免登录；主服务器调用边缘端控制接口时必须同时携带 `operator_id/operator_username/operator_name`，边缘端映射到本地 `sys_users` 并审计 service client 与实际操作者，禁止 service token 和 SSO ticket 互相替代。本次为设计/看板更新，未运行代码测试。
+- 2026-06-01 15:39 | GPT-5 Codex (`review-ai`) | 按用户确认“主服务器到边缘端使用 HTTP 且必须有权限管理”补充后端任务和文档：新增 `backend/docs/边缘端HTTP主服务器控制通道设计.md`，在 `AI_BOARD.md` 新增 EB-056，并把 EB-003/EB-049/EB-055 从“HTTP/RabbitMQ 待确认”收敛为 HTTP 首版。设计要求边缘端新增受控 `/api/v1/edge-control/*` 命令通道，复用 `sys_service_clients` service token，补 scope、allowed CIDR、命令幂等表、审计、结构化错误和测试门禁；明确不写前端画面、不做万能代理、不允许主服务器直接改同步库。本次为设计和看板更新，未运行代码测试。
 - 2026-06-01 09:43 | GPT-5 Codex (`review-ai`) | 按用户要求在 `AI_BOARD.md` 新增 EB-054 给后端：要求核查检测配置页枚举语义和变量显示名装配契约，明确页面查询 `/detection-standards`、`/detection-standards/{id}`、`/projects`、`/variables`、`/report-templates`，涉及 `sys_detection_standards/sys_detection_standard_items/sys_projects/sys_tags/sys_report_templates`，运行后冻结到 `detection_run_standard_items`；变量以 `var_id` 关联，`var_name` 只作稳定编码，显示使用 `display_name/display_name_en/display_name_ja`；后端需列清 `check_method`、`quality_policy`、标准 `mode` 等枚举含义供前端三语映射。本次为看板/审阅任务补充，未运行代码测试。
 - 2026-05-31 12:24 | GPT-5 Codex (`backend-ai/test-ai`) | EB-006/020/029 后端总 smoke 队列压力门禁：`backend/tools/smokebackend` 的 runtime snapshot 现在校验 `/runtime/channels/detail`、`/task-flows/runtime` 和 `/runtime/notifications` 的 `pressure` 诊断，基线或最终快照出现核心队列、任务流队列或通知 hub 过压即失败，避免“没有 dropped 但已经积压接近阈值”的延迟风险被漏掉。验证通过定向 smoke 工具测试与 build-tags linter、`go test ./...`、覆盖率 72.6%、`go vet ./...`、`golangci-lint run ./...` 0 issues、`go build ./cmd/edge-backend`、真实 `go run -tags smoke_tools ./tools/smokebackend -latency-n 30 -latency-c 10 -timeout 120s`；完整 smoke steps=4 elapsed=33.08s，延迟 p95=737.0ms、max=784.6ms，核心队列/task-flow/notification hub `dropped=0/pressure=false`，workers=12。
 - 2026-05-31 12:14 | GPT-5 Codex (`backend-ai/test-ai`) | EB-006/020 后端总 smoke runtime 诊断重复名称门禁：`backend/tools/smokebackend` 现在拒绝 `/runtime/channels/detail` 和 `/runtime/workers` 返回重复 `name`，避免同名项进入 map 时覆盖 dropped/panic/health/active 等诊断结果。验证通过定向 smoke 工具测试与 build-tags linter、`go test ./...`、覆盖率 72.6%、`go vet ./...`、`golangci-lint run ./...` 0 issues、`go build ./cmd/edge-backend`、真实 quick `go run -tags smoke_tools ./tools/smokebackend -skip-business -latency-n 5 -latency-c 2 -timeout 60s`；quick 延迟 p95=158.2ms、max=180.0ms，核心队列/task-flow/notification hub `dropped=0`，workers=12。

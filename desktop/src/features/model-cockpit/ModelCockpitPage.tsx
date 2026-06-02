@@ -230,7 +230,6 @@ export function ModelCockpitPage() {
       <header className="cockpit-title-row">
         <div className="cockpit-title-bar">
           <span>{t('modelCockpit.title')}</span>
-          <small>{t('modelCockpit.eyebrow')}</small>
         </div>
       </header>
 

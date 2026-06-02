@@ -17,42 +17,23 @@ import {
   updateDetectionStandard,
 } from '@/features/edge-status/api'
 import type { DetectionStandard, DetectionStandardItemPayload, DetectionStandardPayload, Project, ReportTemplate, VarIdentifier, VariableConfig } from '@/shared/api/types'
+import { languageCode } from '@/shared/i18n/language'
 import '@/features/settings/settings.css'
 import './detection-config.css'
 
 type DetectionStandardFormValues = DetectionStandardPayload
 
-const LEGACY_DETECTION_ITEMS = [
-  '吸入口表面积',
-  '吹出口温度',
-  '吹出口湿度',
-  '吸入风量',
-  '设备噪音',
-  '震动位移',
-  '吸入口温度',
-  '吸入口湿度',
-  '压缩机吸入管温度',
-  '压缩机吐出口温度',
-  '蒸发器出口温度',
-  '冷凝器出口温度',
-  '膨胀阀出口温度',
-  '冷却水入口温度',
-  '冷却水出口温度',
-  '加湿器给水口温度',
-  '再热器出口温度',
-  '干燥过滤器入口温度',
-  '干燥过滤器出口温度',
-]
-
 function variableTitle(variable: Pick<VariableConfig, 'display_name' | 'display_name_en' | 'display_name_ja' | 'raw_name' | 'var_name'>, language?: string) {
-  if (language === 'en') return variable.display_name_en || variable.display_name || variable.raw_name || variable.var_name
-  if (language === 'ja') return variable.display_name_ja || variable.display_name || variable.raw_name || variable.var_name
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return variable.display_name_en || variable.var_name || variable.raw_name
+  if (currentLanguage === 'ja') return variable.display_name_ja || variable.var_name || variable.raw_name
   return variable.display_name || variable.raw_name || variable.var_name
 }
 
 function standardItemTitle(item: DetectionStandardItemPayload, language?: string) {
-  if (language === 'en') return item.display_name_en || item.display_name || item.var_name
-  if (language === 'ja') return item.display_name_ja || item.display_name || item.var_name
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return item.display_name_en || item.var_name
+  if (currentLanguage === 'ja') return item.display_name_ja || item.var_name
   return item.display_name || item.var_name
 }
 
@@ -180,14 +161,16 @@ export function DetectionConfigPage() {
 
   const displayProjectName = useCallback((project: Project) => {
     const code = projectCode(project)
-    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || code
-    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return project.display_name_en || code
+    if (currentLanguage === 'ja') return project.display_name_ja || code
     return project.display_name || project.name || code
   }, [i18n.resolvedLanguage])
 
   const displayStandardName = useCallback((standard: DetectionStandard) => {
-    if (i18n.resolvedLanguage === 'en') return standard.display_name_en || standard.display_name || standard.name || standard.standard_code
-    if (i18n.resolvedLanguage === 'ja') return standard.display_name_ja || standard.display_name || standard.name || standard.standard_code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return standard.display_name_en || standard.standard_code
+    if (currentLanguage === 'ja') return standard.display_name_ja || standard.standard_code
     return standard.display_name || standard.name || standard.standard_code
   }, [i18n.resolvedLanguage])
 
@@ -572,12 +555,9 @@ export function DetectionConfigPage() {
                 onChange={setStandardVariableId}
                 options={standardVariableOptions}
               />
-              <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId || !selectedStandardDetail}>
+            <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId || !selectedStandardDetail}>
                 {t('settings.standards.add')}
               </Button>
-            </div>
-            <div className="detection-legacy-tags">
-              {LEGACY_DETECTION_ITEMS.map((item) => <Tag key={item}>{item}</Tag>)}
             </div>
           </div>
 

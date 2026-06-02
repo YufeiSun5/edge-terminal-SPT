@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +25,9 @@ type VariableWriteService struct {
 
 type VariableWriteInput struct {
 	VarID          int64
+	ProjectID      uint
+	ProjectCode    string
+	VarName        string
 	Value          any
 	Quality        int
 	Trigger        bool
@@ -34,6 +39,16 @@ type VariableWriteInput struct {
 	MaxDepth       int
 	AllowReentrant bool
 	RequestID      string
+}
+
+type VariableWriteError struct {
+	Code    string
+	Message string
+	Status  int
+}
+
+func (e *VariableWriteError) Error() string {
+	return e.Message
 }
 
 type VariableWriteResult struct {
@@ -63,15 +78,16 @@ func NewVariableWriteService(repo *database.Repository, tags *pipeline.TagManage
 }
 
 func (s *VariableWriteService) Write(ctx context.Context, input VariableWriteInput) (VariableWriteResult, error) {
-	if input.VarID == 0 {
-		return VariableWriteResult{}, fmt.Errorf("var_id is required")
+	varID, err := s.resolveVarID(input)
+	if err != nil {
+		return VariableWriteResult{}, err
 	}
-	tag, ok := s.tags.Get(input.VarID)
+	tag, ok := s.tags.Get(varID)
 	if !ok {
-		return VariableWriteResult{}, fmt.Errorf("variable %d not found", input.VarID)
+		return VariableWriteResult{}, variableWriteError("variable_not_found", fmt.Sprintf("variable %d not found", varID), http.StatusNotFound)
 	}
 	if _, ok := anyValuePresent(input.Value); !ok {
-		return VariableWriteResult{}, fmt.Errorf("value is required")
+		return VariableWriteResult{}, variableWriteError("invalid_payload", "value is required", http.StatusBadRequest)
 	}
 	quality := input.Quality
 	if quality == 0 {
@@ -84,7 +100,7 @@ func (s *VariableWriteService) Write(ctx context.Context, input VariableWriteInp
 		return s.writeVirtual(tag, input, quality), nil
 	}
 	if !canWritePhysicalVariable(tag.Config) {
-		return VariableWriteResult{}, fmt.Errorf("variable %d is not writable", input.VarID)
+		return VariableWriteResult{}, variableWriteError("variable_not_writable", fmt.Sprintf("variable %d is not writable", varID), http.StatusBadRequest)
 	}
 	if err := validateWriteValue(tag.Config, input.Value); err != nil {
 		return VariableWriteResult{}, err
@@ -94,13 +110,13 @@ func (s *VariableWriteService) Write(ctx context.Context, input VariableWriteInp
 		gatewayID = tag.Config.GatewayID
 	}
 	if gatewayID == 0 {
-		return VariableWriteResult{}, fmt.Errorf("write_source_id or gateway_id is required")
+		return VariableWriteResult{}, variableWriteError("write_config_missing", "write_source_id or gateway_id is required", http.StatusBadRequest)
 	}
 	if strings.TrimSpace(tag.Config.WritePath) == "" {
-		return VariableWriteResult{}, fmt.Errorf("write_path is required")
+		return VariableWriteResult{}, variableWriteError("write_config_missing", "write_path is required", http.StatusBadRequest)
 	}
 	if s.kio == nil {
-		return VariableWriteResult{}, fmt.Errorf("kio write service is not available")
+		return VariableWriteResult{}, variableWriteError("write_service_unavailable", "kio write service is not available", http.StatusBadRequest)
 	}
 	writeValue := normalizeWriteValue(tag.Config, input.Value)
 	kioResult, err := s.kio.Write(ctx, KIOWriteInput{
@@ -126,6 +142,64 @@ func (s *VariableWriteService) Write(ctx context.Context, input VariableWriteInp
 		return result, err
 	}
 	return result, nil
+}
+
+func (s *VariableWriteService) resolveVarID(input VariableWriteInput) (int64, error) {
+	if input.VarID != 0 {
+		return input.VarID, nil
+	}
+	varName := strings.TrimSpace(input.VarName)
+	if varName == "" {
+		return 0, variableWriteError("invalid_payload", "var_id or project_id/project_code + var_name is required", http.StatusBadRequest)
+	}
+	projectID := input.ProjectID
+	projectCode := strings.TrimSpace(input.ProjectCode)
+	if projectID == 0 && projectCode != "" {
+		if s.repo == nil {
+			return 0, variableWriteError("write_service_unavailable", "project resolver is not available", http.StatusBadRequest)
+		}
+		project, err := s.repo.GetProjectByCode(projectCode)
+		if err != nil {
+			return 0, variableWriteError("variable_not_found", fmt.Sprintf("project_code %q not found", projectCode), http.StatusNotFound)
+		}
+		projectID = project.ID
+	}
+	if projectID == 0 {
+		return 0, variableWriteError("invalid_payload", "project_id or project_code is required when var_id is omitted", http.StatusBadRequest)
+	}
+	matches := make([]int64, 0, 1)
+	for _, tag := range s.tags.ForProject(projectID) {
+		if strings.TrimSpace(tag.Config.VarName) == varName {
+			matches = append(matches, tag.Config.VarID)
+		}
+	}
+	if len(matches) == 0 {
+		return 0, variableWriteError("variable_not_found", fmt.Sprintf("variable %q not found in project %d", varName, projectID), http.StatusNotFound)
+	}
+	if len(matches) > 1 {
+		return 0, variableWriteError("ambiguous_variable", fmt.Sprintf("variable name %q is duplicated in project %d", varName, projectID), http.StatusConflict)
+	}
+	return matches[0], nil
+}
+
+func variableWriteError(code string, message string, status int) error {
+	return &VariableWriteError{Code: code, Message: message, Status: status}
+}
+
+func VariableWriteErrorStatus(err error) (int, bool) {
+	var typed *VariableWriteError
+	if errors.As(err, &typed) {
+		return typed.Status, true
+	}
+	return 0, false
+}
+
+func VariableWriteErrorCode(err error) (string, bool) {
+	var typed *VariableWriteError
+	if errors.As(err, &typed) {
+		return typed.Code, true
+	}
+	return "", false
 }
 
 func (s *VariableWriteService) writeVirtual(tag *models.Tag, input VariableWriteInput, quality int) VariableWriteResult {

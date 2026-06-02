@@ -135,7 +135,11 @@ func TestRealtimeWSHandlerDetectionCommands(t *testing.T) {
 func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 	db := newHandlerTestDB(t)
 	repo := database.NewRepository(db)
-	projectID := uint(9)
+	project := models.Project{ProjectCode: "AC-WS", Name: "WS Project", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	projectID := project.ID
 	varID := int64(9212397624135540849)
 	tags := pipeline.NewTagManager()
 	tags.Load([]models.TagConfig{{
@@ -149,7 +153,7 @@ func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 		JSONPath:    "task_request",
 		DataType:    "STRING",
 		ProjectID:   &projectID,
-		ProjectCode: "AC-WS",
+		ProjectCode: project.ProjectCode,
 		Enabled:     true,
 	}})
 	tasks := pipeline.NewTaskManager()
@@ -197,8 +201,26 @@ func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 	if !ok || result.VarIDText != "9212397624135540849" {
 		t.Fatalf("expected exact write result var_id_text, got %#v", payload["result"])
 	}
+	_, responses = handler.handleClientMessage(services.DefaultRealtimeSubscription(), wsClientMessage{
+		Type:      "command.write_variable",
+		RequestID: "req-write-project",
+		CommandID: "cmd-write-project",
+		Payload:   []byte(`{"project_id":` + itoaHandler(uint64(projectID)) + `,"var_name":"task_request","value":"{\"command\":\"start\",\"source\":\"project_id\"}"}`),
+	}, auth.Principal{AuthType: "user", UserID: 1, Username: "admin", Role: auth.RoleAdmin})
+	if len(responses) != 1 || responses[0].Type != services.WSTypeCommandAck {
+		t.Fatalf("unexpected project+var_name write response: %+v", responses)
+	}
+	_, responses = handler.handleClientMessage(services.DefaultRealtimeSubscription(), wsClientMessage{
+		Type:      "command.write_variable",
+		RequestID: "req-write-project-code",
+		CommandID: "cmd-write-project-code",
+		Payload:   []byte(`{"project_code":"AC-WS","var_name":"task_request","value":"{\"command\":\"start\",\"source\":\"project_code\"}"}`),
+	}, auth.Principal{AuthType: "user", UserID: 1, Username: "admin", Role: auth.RoleAdmin})
+	if len(responses) != 1 || responses[0].Type != services.WSTypeCommandAck {
+		t.Fatalf("unexpected project_code+var_name write response: %+v", responses)
+	}
 	tag, ok := tags.Get(varID)
-	if !ok || tag.RuntimeState().StrValue != `{"command":"start"}` {
+	if !ok || tag.RuntimeState().StrValue != `{"command":"start","source":"project_code"}` {
 		t.Fatalf("expected virtual variable write, ok=%v tag=%+v", ok, tag)
 	}
 	var run models.TaskFlowRun
@@ -216,8 +238,41 @@ func TestRealtimeWSHandlerWriteVirtualVariableCommand(t *testing.T) {
 	if err := db.Model(&models.SysAuditLog{}).Where("action = ? AND result = ?", "ws.command.write_variable", "success").Count(&auditCount).Error; err != nil {
 		t.Fatal(err)
 	}
+	if auditCount != 3 {
+		t.Fatalf("expected three ws variable write audit rows, got %d", auditCount)
+	}
+}
+
+func TestRealtimeWSHandlerWriteVariableByNameErrorsOnDuplicate(t *testing.T) {
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	projectID := uint(7)
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{
+		{VarID: 101, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", SourcePath: "dup_a", RawName: "dup_a", VarName: "dup", JSONPath: "dup_a", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: "AC-DUP", Enabled: true},
+		{VarID: 102, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", SourcePath: "dup_b", RawName: "dup_b", VarName: "dup", JSONPath: "dup_b", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: "AC-DUP", Enabled: true},
+	})
+	handler := NewRealtimeWSHandler(
+		services.NewRealtimeWSService(tags, pipeline.NewTaskManager()),
+		nil,
+		repo,
+		services.NewVariableWriteService(repo, tags, nil, nil),
+	)
+	_, responses := handler.handleClientMessage(services.DefaultRealtimeSubscription(), wsClientMessage{
+		Type:      "command.write_variable",
+		RequestID: "req-dup",
+		CommandID: "cmd-dup",
+		Payload:   []byte(`{"project_id":7,"var_name":"dup","value":1}`),
+	}, auth.Principal{AuthType: "user", UserID: 1, Username: "admin", Role: auth.RoleAdmin})
+	if len(responses) != 1 || responses[0].Type != services.WSTypeError || responses[0].Error.Code != "ambiguous_variable" {
+		t.Fatalf("unexpected duplicate response: %+v", responses)
+	}
+	var auditCount int64
+	if err := db.Model(&models.SysAuditLog{}).Where("action = ? AND result = ?", "ws.command.write_variable", "failed").Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
 	if auditCount != 1 {
-		t.Fatalf("expected one ws variable write audit row, got %d", auditCount)
+		t.Fatalf("expected failed ws audit row, got %d", auditCount)
 	}
 }
 

@@ -5,6 +5,7 @@ import zhCN from 'antd/locale/zh_CN'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from 'react-router'
 import { useTranslation } from 'react-i18next'
+import { languageCode } from '@/shared/i18n/language'
 import { queryClient } from './queryClient'
 import { router } from './router'
 
@@ -16,7 +17,7 @@ const antdLocales = {
 
 export function AppProviders() {
   const { i18n } = useTranslation()
-  const language = i18n.resolvedLanguage === 'en' || i18n.resolvedLanguage === 'ja' ? i18n.resolvedLanguage : 'zh'
+  const language = languageCode(i18n.resolvedLanguage)
 
   return (
     <ConfigProvider

@@ -28,6 +28,7 @@ import type {
   TaskFlowTemplate,
   VariableConfig,
 } from '@/shared/api/types'
+import { languageCode } from '@/shared/i18n/language'
 import '@/features/settings/settings.css'
 import './task-flows.css'
 
@@ -151,8 +152,9 @@ const scalarValueTypeOptions = [
 ]
 
 function variableTitle(variable: Pick<VariableConfig, 'display_name' | 'display_name_en' | 'display_name_ja' | 'raw_name' | 'var_name'>, language?: string) {
-  if (language === 'en') return variable.display_name_en || variable.display_name || variable.raw_name || variable.var_name
-  if (language === 'ja') return variable.display_name_ja || variable.display_name || variable.raw_name || variable.var_name
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return variable.display_name_en || variable.var_name || variable.raw_name
+  if (currentLanguage === 'ja') return variable.display_name_ja || variable.var_name || variable.raw_name
   return variable.display_name || variable.raw_name || variable.var_name
 }
 
@@ -286,8 +288,9 @@ export function TaskFlowsPage() {
   const displayProjectName = (project?: Project) => {
     if (!project) return '-'
     const code = projectCode(project)
-    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || code
-    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return project.display_name_en || code
+    if (currentLanguage === 'ja') return project.display_name_ja || code
     return project.display_name || project.name || code
   }
 

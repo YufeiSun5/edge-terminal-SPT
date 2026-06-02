@@ -121,14 +121,12 @@
 }
 
 .detection-standard-list::-webkit-scrollbar,
-.detection-legacy-tags::-webkit-scrollbar,
 .detection-config-page .ant-table-body::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 .detection-standard-list::-webkit-scrollbar-thumb,
-.detection-legacy-tags::-webkit-scrollbar-thumb,
 .detection-config-page .ant-table-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: rgba(30, 27, 24, 0.16);
@@ -182,28 +180,10 @@
 .detection-table-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   min-height: 34px;
   margin-bottom: 8px;
-}
-
-.detection-legacy-tags {
-  display: flex;
-  flex: 1;
-  flex-wrap: nowrap;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.detection-legacy-tags .ant-tag {
-  max-width: 120px;
-  margin-inline-end: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.56);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .detection-inline-meta {
@@ -261,6 +241,39 @@
 .detection-config-table {
   flex: 1;
   min-height: 0;
+}
+
+.detection-config-table .ant-table-pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 6px 2px 0;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.detection-config-table .ant-pagination-total-text {
+  flex: 1 1 auto;
+  min-width: 110px;
+  margin-inline-end: auto;
+  color: #64748b;
+}
+
+.detection-config-table .ant-pagination-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: 6px;
+}
+
+.detection-config-table .ant-pagination-options-quick-jumper {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.detection-config-table .ant-pagination-options-quick-jumper input {
+  width: 48px;
 }
 
 .detection-config-page .ant-table-container {

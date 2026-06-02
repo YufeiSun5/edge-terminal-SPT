@@ -8,6 +8,7 @@ import { HistoryQueryPage } from '@/features/history-query/HistoryQueryPage'
 import { ReportsPage } from '@/features/reports/ReportsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { DetectionConfigPage } from '@/features/detection-config/DetectionConfigPage'
+import { VariableConfigPage } from '@/features/variable-config/VariableConfigPage'
 import { TaskFlowsPage } from '@/features/task-flows/TaskFlowsPage'
 import { ModelCockpitPage } from '@/features/model-cockpit/ModelCockpitPage'
 import { NotificationCenterPage } from '@/features/notifications/NotificationCenterPage'
@@ -74,6 +75,16 @@ export const router = createHashRouter([
               {
                 index: true,
                 element: <AlarmCenterPage />,
+              },
+            ],
+          },
+          {
+            path: 'variables',
+            element: <ProtectedRoute permissions={['manage_variables']} />,
+            children: [
+              {
+                index: true,
+                element: <VariableConfigPage />,
               },
             ],
           },

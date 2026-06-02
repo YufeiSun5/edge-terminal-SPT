@@ -9,6 +9,7 @@ import { ExternalLink, RefreshCw, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getDetectionRun, getDevices, getLimitAlarms } from '@/features/edge-status/api'
 import type { Device, LimitAlarm, LimitAlarmListParams, LimitAlarmScope } from '@/shared/api/types'
+import { languageCode } from '@/shared/i18n/language'
 import '../notifications/notification-center.css'
 
 type AlarmFilters = {
@@ -95,14 +96,16 @@ export function AlarmCenterPage() {
 
   function displayProject(project?: Pick<Device, 'device_code' | 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) {
     if (!project) return ''
-    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || project.project_code || project.device_code
-    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || project.project_code || project.device_code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return project.display_name_en || project.project_code || project.device_code
+    if (currentLanguage === 'ja') return project.display_name_ja || project.project_code || project.device_code
     return project.display_name || project.name || project.project_code || project.device_code
   }
 
   function alarmName(alarm: LimitAlarm) {
-    if (i18n.resolvedLanguage === 'en') return alarm.display_name_en || alarm.display_name || alarm.var_name
-    if (i18n.resolvedLanguage === 'ja') return alarm.display_name_ja || alarm.display_name || alarm.var_name
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return alarm.display_name_en || alarm.var_name
+    if (currentLanguage === 'ja') return alarm.display_name_ja || alarm.var_name
     return alarm.display_name || alarm.var_name
   }
 

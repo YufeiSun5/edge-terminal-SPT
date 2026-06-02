@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -333,6 +334,9 @@ func (h *RealtimeWSHandler) writeVariableFromWS(msg wsClientMessage) (services.V
 	}
 	var req struct {
 		VarID          flexibleInt64 `json:"var_id"`
+		ProjectID      uint          `json:"project_id"`
+		ProjectCode    string        `json:"project_code"`
+		VarName        string        `json:"var_name"`
 		Value          any           `json:"value"`
 		Quality        int           `json:"quality"`
 		Trigger        *bool         `json:"trigger"`
@@ -347,10 +351,6 @@ func (h *RealtimeWSHandler) writeVariableFromWS(msg wsClientMessage) (services.V
 	if err := decodeWSPayload(msg.Payload, &req); err != nil {
 		return services.VariableWriteResult{}, err
 	}
-	varID := req.VarID.Int64()
-	if varID == 0 {
-		return services.VariableWriteResult{}, wsCommandError{code: "invalid_payload", message: "var_id is required"}
-	}
 	trigger := true
 	if req.Trigger != nil {
 		trigger = *req.Trigger
@@ -358,7 +358,10 @@ func (h *RealtimeWSHandler) writeVariableFromWS(msg wsClientMessage) (services.V
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, err := h.variables.Write(ctx, services.VariableWriteInput{
-		VarID:          varID,
+		VarID:          req.VarID.Int64(),
+		ProjectID:      req.ProjectID,
+		ProjectCode:    req.ProjectCode,
+		VarName:        req.VarName,
 		Value:          req.Value,
 		Quality:        req.Quality,
 		Trigger:        trigger,
@@ -437,6 +440,10 @@ func authPermissionError(permission string) error {
 func wsErrorCode(err error) string {
 	if typed, ok := err.(wsCommandError); ok {
 		return typed.code
+	}
+	var writeErr *services.VariableWriteError
+	if errors.As(err, &writeErr) {
+		return writeErr.Code
 	}
 	if strings.Contains(err.Error(), "permission ") {
 		return "forbidden"

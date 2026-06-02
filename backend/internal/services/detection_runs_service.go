@@ -373,6 +373,9 @@ func detectionEventNotificationType(eventType string) string {
 }
 
 func HTTPStatusForError(err error) int {
+	if status, ok := VariableWriteErrorStatus(err); ok {
+		return status
+	}
 	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) {
 		return 409
 	}

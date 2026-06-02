@@ -93,6 +93,17 @@ body {
   border-bottom: 1px solid rgba(255, 255, 255, 0.46);
 }
 
+.workbench-brand > div {
+  min-width: 0;
+}
+
+.brand-title,
+.brand-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workbench-nav {
   position: relative;
   flex: 1;
@@ -116,11 +127,14 @@ body {
 }
 
 .nav-link {
+  width: 100%;
   min-height: 42px;
   padding: 0 12px;
   display: flex;
   align-items: center;
   gap: 10px;
+  box-sizing: border-box;
+  overflow: hidden;
   color: rgba(23, 49, 74, 0.76);
   text-decoration: none;
   border: 1px solid transparent;
@@ -130,6 +144,27 @@ body {
     border-color 0.2s ease,
     color 0.2s ease,
     transform 0.2s ease;
+}
+
+.nav-link svg {
+  flex: 0 0 auto;
+}
+
+.nav-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-sidebar.collapsed .workbench-nav {
+  padding-inline: 9px;
+}
+
+.workbench-sidebar.collapsed .nav-link {
+  justify-content: center;
+  gap: 0;
+  padding: 0;
 }
 
 .nav-link:hover {
@@ -218,6 +253,13 @@ body {
   color: rgba(23, 49, 74, 0.66);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.workbench-sidebar-footer span:not(.status-dot) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {

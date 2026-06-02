@@ -22,6 +22,7 @@ import {
   Server,
   Settings2,
   ShieldCheck,
+  SlidersHorizontal,
   TriangleAlert,
   UserRound,
   Workflow,
@@ -32,6 +33,7 @@ import { useAuthStore } from '@/features/auth/authStore'
 import { getDevices, getNotificationUnreadCount, getNotifications, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
 import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
 import type { UserNotification } from '@/shared/api/types'
+import { languageCode } from '@/shared/i18n/language'
 import { queryClient } from './queryClient'
 
 const navItems = [
@@ -41,6 +43,7 @@ const navItems = [
   { path: '/reports', key: 'reports', icon: FileSpreadsheet, permissions: ['view_history'] },
   { path: '/notifications', key: 'notifications', icon: Bell, permissions: ['view_realtime', 'view_history', 'system_settings'] },
   { path: '/alarms', key: 'alarms', icon: TriangleAlert, permissions: ['view_realtime'] },
+  { path: '/variables', key: 'variables', icon: SlidersHorizontal, permissions: ['manage_variables'] },
   { path: '/detection-config', key: 'detectionConfig', icon: ShieldCheck, permissions: ['manage_variables'] },
   { path: '/tasks', key: 'tasks', icon: Workflow, permissions: ['system_settings'] },
   { path: '/settings', key: 'settings', icon: Settings2, permissions: ['manage_variables', 'manage_gateways', 'system_settings', 'manage_users'] },
@@ -99,8 +102,9 @@ export function ShellLayout() {
   const stationDevices = devicesQuery.data ?? []
   const visibleNavItems = navItems.filter((item) => hasAnyPermission(item.permissions))
   const displayDeviceName = (device: { device_code: string; name?: string; display_name?: string; display_name_en?: string; display_name_ja?: string }) => {
-    if (i18n.resolvedLanguage === 'en') return device.display_name_en || device.display_name || device.name || device.device_code
-    if (i18n.resolvedLanguage === 'ja') return device.display_name_ja || device.display_name || device.name || device.device_code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return device.display_name_en || device.device_code
+    if (currentLanguage === 'ja') return device.display_name_ja || device.device_code
     return device.display_name || device.name || device.device_code
   }
 

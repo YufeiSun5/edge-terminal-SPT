@@ -96,6 +96,7 @@ JWT 负责认证，不直接承担完整权限存储。推荐 claim：
 - 主站后端请求带 `Authorization: Bearer <service_token>`。
 - 边缘端只保存 token hash，不保存明文 token。
 - token 对应 `client_id`、`scopes`、`enabled` 和过期时间。
+- service token 只代表主服务器后端服务身份，不代表某个用户，也不能创建用户 Web 登录态。
 
 后续如果主站和边缘端网络边界变复杂，可升级为 mTLS 或签名请求；不影响本地用户 JWT 设计。
 
@@ -118,6 +119,26 @@ SSO ticket 是一次性换票凭据，不是长期登录 token。
 - 校验成功后立刻写入 `used_at`。
 - 返回用户基础身份、角色、权限版本和边缘端实例 ID，由主站创建自己的 Web session。
 - 不把 `edge_user_jwt` 直接交给主站 Web。
+- SSO ticket 只用于用户免登录，不用于主服务器后端调用边缘端控制接口。
+
+### 同一批用户与控制审计
+
+主服务器和边缘端的用户列表按同一批用户维护。首版可以用稳定 `username` 或双方约定的用户 ID 对齐；如果主服务器已经有统一用户 ID，建议边缘端 `sys_users` 后续补充 `external_user_id` 或 `main_user_id` 字段，避免只靠显示名或人工备注映射。
+
+需要区分两条链路：
+
+| 链路 | 凭据 | 作用 |
+| --- | --- | --- |
+| 用户登录/免登录 | 本地用户 JWT、一次性 SSO ticket、主服务器 Web session | 证明当前操作者是谁。 |
+| 主服务器控制边缘端 | service token 或后续签名请求 | 证明调用方是主服务器后端。 |
+
+主服务器后端调用边缘端控制接口时，必须同时带 service token 和操作者信息，例如 `operator_id`、`operator_username`、`operator_name`。边缘端应把操作者映射到本地 `sys_users`，审计同时记录 service `client_id` 和实际用户。这样既能保持同一批用户的操作归属，也不会把 service token 误当成超级用户登录态。
+
+禁止：
+
+- 用 SSO ticket 调用控制接口。
+- 用 service token 登录用户界面。
+- 只记录 `main_server` 服务身份而丢失实际操作者。
 
 ## 三角色模型
 
@@ -383,6 +404,7 @@ Content-Type: application/json
 - 登录成功和失败。
 - 创建 SSO ticket。
 - 校验 SSO ticket 成功和失败。
+- 主服务器控制命令中的 service `client_id`、`operator_id/operator_username`、映射到的边缘端用户、`command_id` 和执行结果。
 - 启动/停止检测任务。
 - 修改变量、变量归属、网关配置。
 - KIO write、MQTT publish 等写设备动作。

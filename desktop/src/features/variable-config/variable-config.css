@@ -1,0 +1,96 @@
+.variable-config-page .variable-config-search {
+  width: min(320px, 30vw);
+}
+
+.variable-config-unassigned {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.variable-config-unassigned > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.variable-config-unassigned strong,
+.variable-config-unassigned span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variable-config-unassigned span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.variable-config-table .ant-table-selection-column {
+  width: 42px;
+}
+
+.variable-config-table .variable-config-group-row > td {
+  border-top: 1px solid rgba(15, 23, 42, 0.1);
+  background: rgba(226, 232, 240, 0.46) !important;
+}
+
+.variable-config-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.variable-config-group-label strong,
+.variable-config-group-label span,
+.variable-config-id,
+.variable-config-mapped-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variable-config-group-label strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.variable-config-group-label span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.variable-config-id,
+.variable-config-mapped-name {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.variable-config-id {
+  color: #334155;
+}
+
+.variable-config-mapped-name {
+  color: #0f172a;
+}
+
+@media (max-width: 1180px) {
+  .variable-config-page .detection-config-hero,
+  .variable-config-unassigned {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .variable-config-page .variable-config-search,
+  .variable-config-page .detection-standard-select {
+    width: 100%;
+  }
+}

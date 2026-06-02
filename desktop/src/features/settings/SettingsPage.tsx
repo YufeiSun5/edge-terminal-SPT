@@ -20,7 +20,6 @@ import {
   Save,
   Search,
   ServerCog,
-  Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
@@ -71,6 +70,7 @@ import {
   setMinimizeToTray,
   type SidecarState,
 } from '@/shared/desktop/desktopBridge'
+import { languageCode } from '@/shared/i18n/language'
 import {
   createProject,
   createGatewayConfig,
@@ -191,8 +191,9 @@ function gatewayStatusFor(config: GatewayConfig, statuses: Record<string, Gatewa
 }
 
 function variableTitle(variable: Pick<VariableConfig, 'display_name' | 'display_name_en' | 'display_name_ja' | 'raw_name' | 'var_name'>, language?: string) {
-  if (language === 'en') return variable.display_name_en || variable.display_name || variable.raw_name || variable.var_name
-  if (language === 'ja') return variable.display_name_ja || variable.display_name || variable.raw_name || variable.var_name
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return variable.display_name_en || variable.var_name || variable.raw_name
+  if (currentLanguage === 'ja') return variable.display_name_ja || variable.var_name || variable.raw_name
   return variable.display_name || variable.raw_name || variable.var_name
 }
 
@@ -283,8 +284,9 @@ function taskFlowStatsToQueue(stats: TaskFlowRuntimeStats): RuntimeQueueDiagnost
 }
 
 function standardItemTitle(item: DetectionStandardItemPayload, language?: string) {
-  if (language === 'en') return item.display_name_en || item.display_name || item.var_name
-  if (language === 'ja') return item.display_name_ja || item.display_name || item.var_name
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return item.display_name_en || item.var_name
+  if (currentLanguage === 'ja') return item.display_name_ja || item.var_name
   return item.display_name || item.var_name
 }
 
@@ -323,7 +325,7 @@ export function SettingsPage() {
   const canManageUsers = hasPermission('manage_users')
   const canUseSystemSettings = hasPermission('system_settings')
   const features = env.runtimeFeatures
-  const [activeModule, setActiveModule] = useState<SettingsModule>('variables')
+  const [activeModule, setActiveModule] = useState<SettingsModule>('system')
   const [variableFilter, setVariableFilter] = useState<VariableFilter>('all')
   const [variableKeyword, setVariableKeyword] = useState('')
   const [gatewayModalOpen, setGatewayModalOpen] = useState(false)
@@ -485,8 +487,9 @@ export function SettingsPage() {
     (canManageUsers && usersQuery.isError)
 
   const displayProjectName = (project: Project) => {
-    if (i18n.resolvedLanguage === 'en') return project.display_name_en || project.display_name || project.name || project.project_code
-    if (i18n.resolvedLanguage === 'ja') return project.display_name_ja || project.display_name || project.name || project.project_code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return project.display_name_en || project.project_code
+    if (currentLanguage === 'ja') return project.display_name_ja || project.project_code
     return project.display_name || project.name || project.project_code
   }
 
@@ -658,8 +661,8 @@ export function SettingsPage() {
       }
       return createVariable({
         ...payload,
-        display_name_en: payload.display_name_en || payload.display_name,
-        display_name_ja: payload.display_name_ja || payload.display_name,
+        display_name_en: payload.display_name_en,
+        display_name_ja: payload.display_name_ja,
         source_type: 'virtual',
         gateway_id: 0,
         source_topic: 'virtual',
@@ -2033,11 +2036,6 @@ export function SettingsPage() {
           <h1>{t('settings.title')}</h1>
         </div>
         <div className="settings-summary">
-          <button className={activeModule === 'variables' ? 'active' : ''} onClick={() => setActiveModule('variables')}>
-            <Settings2 size={17} />
-            <strong>{variables.length}</strong>
-            <span>{t('settings.variables.title')}</span>
-          </button>
           <button className={activeModule === 'standards' ? 'active' : ''} onClick={() => setActiveModule('standards')}>
             <ShieldCheck size={17} />
             <strong>{standards.length}</strong>

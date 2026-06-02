@@ -72,7 +72,7 @@ type RuntimeFeatures = {
 ## 后端路由配合要求
 
 - GET 查询类：主服务器后端优先查本地同步 MySQL。
-- POST/PATCH/PUT/DELETE 控制类：主服务器后端不得直接改边缘业务表，应转发到边缘端 HTTP/RabbitMQ 控制通道，并保留审计。
+- POST/PATCH/PUT/DELETE 控制类：主服务器后端不得直接改边缘业务表，应转发到边缘端受控 HTTP 命令通道，并保留审计。
 - 报表类：主服务器本地处理模板、公式参数、图片资产、Excel/PDF 文件、预览和重新生成。
 - 迁移期可用 `edge.query_proxy_enabled=true` 代理读请求，但关闭条件是主服务器 GET 查询路由完成本地 MySQL 移植。
 

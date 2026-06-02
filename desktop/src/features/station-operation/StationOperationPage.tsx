@@ -69,6 +69,7 @@ import {
   startDetectionRun,
   stopDetectionRun,
 } from '@/features/edge-status/api'
+import { languageCode } from '@/shared/i18n/language'
 import { StationCardGridStyles } from './components/StationCardGridStyles'
 import { StationLightBackground } from './components/StationLightBackground'
 
@@ -146,8 +147,9 @@ function alarmDisplayName(
   alarm: Pick<LimitAlarm, 'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name'>,
   language?: string,
 ) {
-  if (language === 'en') return alarm.display_name_en || alarm.display_name || alarm.var_name
-  if (language === 'ja') return alarm.display_name_ja || alarm.display_name || alarm.var_name
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return alarm.display_name_en || alarm.var_name
+  if (currentLanguage === 'ja') return alarm.display_name_ja || alarm.var_name
   return alarm.display_name || alarm.var_name
 }
 
@@ -163,6 +165,26 @@ function buildReportRequest(values: StartDetectionFormValues): DetectionRunRepor
 
 function tagWireId(variable: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
   return variable.var_id_text ?? variable.var_id
+}
+
+function displayProjectName(
+  project: { project_code?: string; display_name?: string; display_name_en?: string; display_name_ja?: string; name?: string },
+  language?: string,
+) {
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return project.display_name_en || project.project_code || ''
+  if (currentLanguage === 'ja') return project.display_name_ja || project.project_code || ''
+  return project.display_name || project.name || project.project_code || ''
+}
+
+function standardDisplayName(
+  standard: { standard_code: string; display_name?: string; display_name_en?: string; display_name_ja?: string; name?: string },
+  language?: string,
+) {
+  const currentLanguage = languageCode(language)
+  if (currentLanguage === 'en') return standard.display_name_en || standard.standard_code
+  if (currentLanguage === 'ja') return standard.display_name_ja || standard.standard_code
+  return standard.display_name || standard.name || standard.standard_code
 }
 
 export function StationOperationPage() {
@@ -272,8 +294,9 @@ export function StationOperationPage() {
   )
   const selectedProjectName = useMemo(() => {
     if (!selectedProject) return undefined
-    if (i18n.resolvedLanguage === 'en') return selectedProject.display_name_en || selectedProject.display_name || selectedProject.name || selectedProject.project_code
-    if (i18n.resolvedLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.display_name || selectedProject.name || selectedProject.project_code
+    const currentLanguage = languageCode(i18n.resolvedLanguage)
+    if (currentLanguage === 'en') return selectedProject.display_name_en || selectedProject.project_code
+    if (currentLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.project_code
     return selectedProject.display_name || selectedProject.name || selectedProject.project_code
   }, [i18n.resolvedLanguage, selectedProject])
   const [cardOrder, setCardOrder] = useState(metricSeed.map((item) => item.id))
@@ -862,7 +885,7 @@ export function StationOperationPage() {
             <Form.Item name="project_id" label={t('station.run.device')} rules={[{ required: true }]}>
               <Select
                 options={projects.map((project) => ({
-                  label: `${project.display_name || project.name || project.project_code} / ${project.project_code}`,
+                  label: `${displayProjectName(project, i18n.resolvedLanguage)} / ${project.project_code}`,
                   value: project.id,
                 }))}
               />
@@ -886,7 +909,7 @@ export function StationOperationPage() {
                 allowClear
                 loading={standardsQuery.isFetching}
                 options={availableStandards.map((standard) => ({
-                  label: `${standard.display_name || standard.standard_code} / ${standard.standard_code}`,
+                  label: `${standardDisplayName(standard, i18n.resolvedLanguage)} / ${standard.standard_code}`,
                   value: standard.id,
                 }))}
               />
