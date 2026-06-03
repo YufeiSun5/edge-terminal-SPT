@@ -822,6 +822,37 @@ body {
   gap: 20px;
 }
 
+.station-empty-state {
+  min-height: 280px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px;
+  color: rgba(30, 27, 24, 0.68);
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px dashed rgba(30, 27, 24, 0.16);
+  border-radius: 16px;
+}
+
+.station-empty-state strong {
+  color: #1e1b18;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.station-empty-state span,
+.station-empty-state li {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.station-empty-state ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
 .station-scroll-cue {
   position: absolute;
   left: 50%;
@@ -1362,6 +1393,37 @@ body {
 
 .station-row:hover {
   background: rgba(255, 255, 255, 0.44);
+}
+
+.station-row-empty {
+  cursor: default;
+}
+
+.station-row-empty:hover {
+  background: transparent;
+}
+
+.station-row-empty td {
+  padding: 22px 20px;
+}
+
+.station-table-empty {
+  display: flex;
+  min-height: 92px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  color: rgba(30, 27, 24, 0.62);
+}
+
+.station-table-empty strong {
+  color: #1e1b18;
+  font-size: 13px;
+}
+
+.station-table-empty span {
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .station-row.pinned {

@@ -4,7 +4,7 @@
 
 ## 结论
 
-主服务器到边缘端的首版控制通道确定使用 HTTP。该通道不是通用代理，也不是普通前端登录接口的复用；它是服务端到服务端的受控命令入口，必须具备独立鉴权、细粒度 scope、幂等、审计、错误码和命令生命周期记录。
+主服务器到边缘端的首版控制通道确定使用 HTTP。该通道不是通用代理，也不是普通前端登录接口的复用；它是服务端到服务端的受控入口。写命令必须具备独立鉴权、细粒度 scope、幂等、审计、错误码和命令生命周期记录；只读实时镜像复用 service token 和 scope，但不进入命令生命周期表。
 
 边缘端继续负责现场执行：检测启动/停止、变量写入、报警静音、运行中限值调整、特征值刷新和本地审计。主服务器只能通过 HTTP 控制通道提交命令，不允许直接修改同步库里的边缘端业务表来控制现场。
 
@@ -18,20 +18,29 @@
 
 ## 推荐路由
 
-控制路由集中在 `/api/v1/edge-control` 下，便于统一鉴权、审计和限流。
+控制和服务端只读路由集中在 `/api/v1/edge-control` 下，便于统一 service-token 鉴权和限流。写命令记录 `edge_control_commands`；只读实时镜像不写命令生命周期。
 
 | Method | Path | Scope | 说明 |
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/edge-control/detection/start` | `edge.detection.start` | 已实现。启动检测，复用 `DetectionRunsService`。 |
 | `POST` | `/api/v1/edge-control/detection/stop` | `edge.detection.stop` | 已实现。正常停止检测，复用 `DetectionRunsService`。 |
 | `POST` | `/api/v1/edge-control/detection/abnormal-stop` | `edge.detection.stop` | 已实现。异常停止检测，复用 `DetectionRunsService`。 |
+| `POST` | `/api/v1/edge-control/detection/pause` | `edge.detection.stop` | 已实现。暂停检测，复用 `DetectionRunsService.Pause`，暂停期间不计入累计检测时长。 |
+| `POST` | `/api/v1/edge-control/detection/resume` | `edge.detection.start` | 已实现。恢复检测，复用 `DetectionRunsService.Resume`，重新加载运行快照到 `TaskManager`。 |
 | `POST` | `/api/v1/edge-control/variables/write` | `edge.variable.write` | 已实现。写变量，复用 `VariableWriteService` 和 `KIOWriteService`。 |
 | `POST` | `/api/v1/edge-control/detection/mute-alarms` | `edge.alarm.mute` | 已实现。静音当前 running 检测的运行态报警状态，写命令和审计。 |
 | `POST` | `/api/v1/edge-control/detection/update-limits` | `edge.detection.limit_update` | 已实现。运行中调整检测运行快照限值，并刷新 running runtime map。 |
 | `POST` | `/api/v1/edge-control/detection/refresh-features` | `edge.feature.refresh` | 已实现。刷新 `detection_run_features`，写 `features_updated` 事件。 |
 | `POST` | `/api/v1/edge-control/detection/report-requests` | `edge.report.request` | 已实现。为已有检测任务追加 `detection_run_report_requests` 请求快照。 |
+| `GET` | `/api/v1/edge-control/realtime/variables` | `service_realtime_read` | 已实现。只读 `TagManager` 实时快照，支持与用户侧 `/api/v1/realtime/variables` 相同的查询过滤；不写 `edge_control_commands`。 |
+| `GET` | `/api/v1/edge-control/task-modules`、`/task-flow-templates` | `service_metadata_read` | 已实现。只读边缘端任务模块和任务模板元数据，供主服务器任务页复用后端真实 schema；不写 `edge_control_commands`。 |
+| `GET` | `/api/v1/edge-control/runtime/channels`、`/runtime/channels/detail`、`/runtime/notifications`、`/runtime/workers`、`/task-flows/runtime` | `service_runtime_read` | 已实现。只读边缘端核心队列、通知 hub、worker 生命周期和任务流队列诊断，供主服务器设置页显示真实边缘运行态；不写 `edge_control_commands`。 |
 
-当前首版已覆盖检测启动、正常停止、异常停止、变量写入、运行态报警静音、运行中限值调整、特征值刷新和报表请求独立登记。主服务器最小后端调用链和现场组合 smoke 仍是后续扩展。
+当前首版已覆盖检测启动、正常停止、异常停止、暂停、恢复、变量写入、运行态报警静音、运行中限值调整、特征值刷新、报表请求独立登记、只读实时镜像、只读任务元数据镜像和只读运行诊断镜像。主服务器最小后端调用链也已实现：`main-server/backend` 提供同名白名单 `POST /api/v1/edge-control/*` 路由，读取 `edge.service_token_ref` 指向的环境变量作为 Bearer service token，透传 `X-Command-ID`、请求体、边缘端状态码和 JSON 响应；同时提供受用户 JWT 保护的 `GET /api/v1/realtime/variables`、`GET /api/v1/task-modules`、`GET /api/v1/task-flow-templates`、`GET /api/v1/runtime/*` 和 `GET /api/v1/task-flows/runtime`，用同一个 service-token client 转发到边缘端对应只读 `/api/v1/edge-control/*` endpoint。为支持一套前端，主服务器还提供 `POST /api/v1/detection-runs`、`POST /api/v1/detection-runs/:id/stop`、`POST /api/v1/detection-runs/:id/abnormal-stop`、`POST /api/v1/detection-runs/:id/pause`、`POST /api/v1/detection-runs/:id/resume` 用户侧同名检测控制别名：这些路由先校验主服务器用户 JWT 和 `start_detection/stop_detection` 权限，再把普通前端 payload 包装成 `{command_id, operator_id, operator_name, operator_username, payload}` 调用边缘端 edge-control；缺 `X-Command-ID` 时生成 `main-*` 命令 ID，任务类路径会把 URL `:id` 写入 `payload.task_id`。现场组合 smoke 仍是后续扩展。
+
+主服务器 raw write proxy 已禁用。普通未迁移写路径和 `/api/v1/edge-proxy/*path` 写方法返回 `501 edge_control_required`，不再允许绕过边缘端 service token、scope、幂等、操作者映射和审计模型。
+
+检测备注仍不属于当前控制命令。主服务器 `POST /api/v1/detection-runs/:id/notes` 返回 `501 main_server_detection_note_write_unsupported`，因为 `detection_run_notes` 是边缘端同步表，主服务器不能直接写；后续如果需要远程追加备注，应新增独立 edge-control scope 和命令处理。
 
 注意：当前报警静音只静音边缘端 `TaskManager` 中的 active alarm state，并通过 `edge_control_commands`、`sys_audit_logs` 和 `detection_run_events` 留痕；`detection_limit_alarms` 表尚无 `muted` 字段，因此历史报警行不会持久化静音标记。若前端/主服务器需要查询“已静音”历史状态，后续需要独立 schema 变更。
 
@@ -40,6 +49,8 @@
 主服务器使用 service token，不使用本地用户 JWT。边缘端已有 `sys_service_clients` 和 service token 能力，应在此基础上增强。
 
 这里要和用户单点登录区分清楚：主服务器和边缘端的用户列表应视为同一批用户，用户名、用户 ID 或外部用户 ID 要能对应；但服务端控制命令的网络认证仍然使用 service token。用户免登录和页面会话互认继续走一次性 SSO ticket，service token 只证明“这是主服务器后端”，不证明“这是某个用户”。
+
+当前主服务器最小登录/SSO 已实现：主服务器 `POST /api/v1/auth/login` 读取同步库真实 `sys_users`，验证边缘端同款 bcrypt 密码哈希后签发主服务器 JWT；`POST /api/v1/auth/sso-ticket/verify` 不直接消费同步库 `sys_sso_tickets`，而是用 `edge.service_token_ref` 指向的 service token 调用边缘端 `/api/v1/auth/sso-ticket/verify` 完成 ticket 验证和消费，然后根据同步库中的同一用户签发主服务器 JWT。主服务器 JWT 只用于主服务器页面会话，不允许调用边缘端 `/api/v1/edge-control/*`。
 
 建议 service client 具备：
 
@@ -56,13 +67,15 @@
 
 当前边缘端已在 `sys_service_clients` 保存 `allowed_cidrs` 和 `last_used_at`；`allowed_cidrs` 为空时不限制来源 IP，非空时支持逗号分隔的 IP 或 CIDR。`EDGE_MAIN_SERVICE_TOKEN` 环境变量种子会默认授予既有 `service_*` scope 和首批 `edge.*` 控制 scope，生产部署仍应按最小权限配置。
 
-基础请求头：
+写命令基础请求头：
 
 ```text
 Authorization: Bearer <service_token>
 X-Command-ID: <uuid>
 X-Request-Time: <iso8601>
 ```
+
+只读实时镜像只要求 `Authorization: Bearer <service_token>`；它不需要 `X-Command-ID`，因为没有幂等写入或现场状态改变。
 
 如果现场网络不可完全信任，再增加 HMAC 防重放：
 
@@ -114,7 +127,9 @@ HTTP 控制命令必须携带操作者信息：
 
 | Scope | 用途 |
 | --- | --- |
-| `edge.readonly` | 只读服务查询，控制接口不接受该 scope。 |
+| `service_realtime_read` | 只读实时变量快照，供主服务器实时镜像调用；不允许执行写命令。 |
+| `service_metadata_read` | 只读任务模块和任务模板元数据，供主服务器任务编辑页读取真实边缘端 schema；不允许执行写命令。 |
+| `service_runtime_read` | 只读运行诊断，供主服务器设置页读取边缘端队列、通知、worker 和任务流队列状态；不允许执行写命令。 |
 | `edge.detection.start` | 启动检测。 |
 | `edge.detection.stop` | 停止或异常停止检测。 |
 | `edge.variable.write` | 变量写入。 |
@@ -233,6 +248,54 @@ HTTP 控制 handler 只做鉴权、幂等、参数校验、审计和响应映射
 - 审计日志能力
 
 禁止复制一套主服务器专用检测启动、变量写入或报警静音逻辑。
+
+## 主服务器侧最小 client
+
+主服务器侧当前只做受控转发，不做业务执行：
+
+```text
+主服务器页面
+  -> POST /api/v1/edge-control/*
+  -> main-server edgecontrol client
+       - 从 edge.service_token_ref 读取环境变量中的 service token
+       - 设置 Authorization: Bearer <service_token>
+       - 设置 X-Command-ID
+       - 只允许白名单 edge-control path
+  -> 边缘端 /api/v1/edge-control/*
+  -> 边缘端鉴权、scope、幂等、操作者映射、审计和业务执行
+```
+
+只读实时镜像链路：
+
+```text
+主服务器页面
+  -> GET /api/v1/realtime/variables
+  -> main-server edgecontrol client
+       - 从 edge.service_token_ref 读取环境变量中的 service token
+       - 设置 Authorization: Bearer <service_token>
+       - 原样保留 project_id/source_type/gateway_id/var_id 查询参数
+  -> 边缘端 /api/v1/edge-control/realtime/variables
+  -> 边缘端 service_realtime_read scope 校验
+  -> TagManager 实时快照
+```
+
+主服务器侧诊断错误：
+
+| Code | HTTP 状态 | 说明 |
+| --- | --- | --- |
+| `edge_control_token_missing` | `503` | 未配置 `edge.service_token_ref` 指向的环境变量。 |
+| `edge_control_disabled` | `503` | 主服务器配置禁用了 edge control。 |
+| `edge_backend_unavailable` | `502` | 边缘端后端不可达或网络失败。 |
+| `edge_control_required` | `501` | 调用了普通写代理路径，必须改用 `/api/v1/edge-control/*`。 |
+| `edge_realtime_token_missing` | `503` | 主服务器实时镜像缺少 `edge.service_token_ref` 指向的 service token。 |
+| `edge_realtime_disabled` | `503` | 主服务器配置禁用了实时镜像访问。 |
+| `edge_realtime_unavailable` | `502` | 边缘端实时只读接口不可达或网络失败。 |
+| `edge_metadata_token_missing` | `503` | 主服务器任务元数据镜像缺少 `edge.service_token_ref` 指向的 service token。 |
+| `edge_metadata_disabled` | `503` | 主服务器配置禁用了边缘任务元数据读取。 |
+| `edge_metadata_unavailable` | `502` | 边缘端任务元数据只读接口不可达或网络失败。 |
+| `edge_runtime_token_missing` | `503` | 主服务器运行诊断镜像缺少 `edge.service_token_ref` 指向的 service token。 |
+| `edge_runtime_disabled` | `503` | 主服务器配置禁用了边缘运行诊断读取。 |
+| `edge_runtime_unavailable` | `502` | 边缘端运行诊断只读接口不可达或网络失败。 |
 
 ## 当前已实现 payload
 

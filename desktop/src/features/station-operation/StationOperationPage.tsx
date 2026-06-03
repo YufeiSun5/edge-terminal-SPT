@@ -162,22 +162,6 @@ function snapshotKey(snapshot: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
   return String(snapshot.var_id_text ?? snapshot.var_id)
 }
 
-function projectBindingFromSnapshot(snapshot: TagSnapshot, index: number): StationViewResolvedBinding {
-  return {
-    source: 'project_variable',
-    var_id: snapshot.var_id,
-    var_id_text: snapshot.var_id_text,
-    var_name: snapshot.var_name,
-    var_group: snapshot.var_group,
-    display_name: snapshot.display_name,
-    display_name_en: snapshot.display_name_en,
-    display_name_ja: snapshot.display_name_ja,
-    unit: '',
-    decimal_places: 2,
-    sort_order: index,
-  }
-}
-
 function runBindingFromStandardItem(item: DetectionRunStandardItem): StationViewResolvedBinding {
   return {
     source: 'detection_item',
@@ -460,8 +444,8 @@ export function StationOperationPage() {
     [stationViewQuery.data],
   )
   const metricBindings = useMemo(
-    () => (templateMetricBindings.length > 0 ? templateMetricBindings : stationVariables.map(projectBindingFromSnapshot)),
-    [stationVariables, templateMetricBindings],
+    () => templateMetricBindings,
+    [templateMetricBindings],
   )
   const defaultCardIds = useMemo(() => metricBindings.map((binding, index) => bindingKey(binding, index)), [metricBindings])
   const cardOrder = useMemo(() => {
@@ -514,9 +498,13 @@ export function StationOperationPage() {
         .flatMap((item) => item.resolved_bindings ?? []),
     [stationViewQuery.data],
   )
+  const tableBindings = useMemo(
+    () => (runBindings.length > 0 ? runBindings : templateTableBindings),
+    [runBindings, templateTableBindings],
+  )
   const stationRows = useMemo<StationTableRow[]>(
     () =>
-      (runBindings.length > 0 ? runBindings : templateTableBindings.length > 0 ? templateTableBindings : metricBindings).map((binding, index) => {
+      tableBindings.map((binding, index) => {
         const key = bindingKey(binding, index)
         const snapshot = bindingWireId(binding) !== undefined ? snapshotsByVarID.get(String(bindingWireId(binding))) : undefined
         const value = numericSnapshotValue(snapshot)
@@ -528,7 +516,7 @@ export function StationOperationPage() {
           ok: isWithinLimits(value, binding),
         }
       }),
-    [i18n.resolvedLanguage, metricBindings, runBindings, snapshotsByVarID, templateTableBindings],
+    [i18n.resolvedLanguage, snapshotsByVarID, tableBindings],
   )
   const sortedStationRows = useMemo(
     () =>
@@ -901,7 +889,12 @@ export function StationOperationPage() {
       {messageContext}
       <StationLightBackground />
       <div className="station-grid">
-        <SortableMetricGrid cards={cards} onOrderChange={setManualCardOrder} t={t} />
+        <SortableMetricGrid
+          cards={cards}
+          onOrderChange={setManualCardOrder}
+          t={t}
+          warnings={stationViewQuery.data?.warnings ?? []}
+        />
 
         <aside className="station-side">
           <section
@@ -1030,29 +1023,40 @@ export function StationOperationPage() {
             <div className="station-table-body table-scroll-container">
               <table>
                 <tbody>
-                  {sortedStationRows.map((row) => {
-                    const pinned = pinnedRows.includes(row.key)
-                    return (
-                      <tr
-                        className={pinned ? 'station-row pinned' : 'station-row'}
-                        key={row.key}
-                        onClick={() => togglePinnedRow(row.key)}
-                      >
-                        <td>
-                          <span className="pin-indicator" />
-                          {row.name}
-                        </td>
-                        <td>{row.standard}</td>
-                        <td className="mono">{row.value}</td>
-                        <td>
-                          <span className={row.ok ? 'status-ok' : 'status-ng'}>
-                            <span />
-                            {row.ok ? 'OK' : 'NG'}
-                          </span>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {sortedStationRows.length === 0 ? (
+                    <tr className="station-row station-row-empty">
+                      <td colSpan={4}>
+                        <div className="station-table-empty">
+                          <strong>{t('station.view.emptyTableTitle')}</strong>
+                          <span>{t('station.view.emptyTableHint')}</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedStationRows.map((row) => {
+                      const pinned = pinnedRows.includes(row.key)
+                      return (
+                        <tr
+                          className={pinned ? 'station-row pinned' : 'station-row'}
+                          key={row.key}
+                          onClick={() => togglePinnedRow(row.key)}
+                        >
+                          <td>
+                            <span className="pin-indicator" />
+                            {row.name}
+                          </td>
+                          <td>{row.standard}</td>
+                          <td className="mono">{row.value}</td>
+                          <td>
+                            <span className={row.ok ? 'status-ok' : 'status-ng'}>
+                              <span />
+                              {row.ok ? 'OK' : 'NG'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1271,10 +1275,12 @@ function SortableMetricGrid({
   cards,
   onOrderChange,
   t,
+  warnings,
 }: {
   cards: MetricCard[]
   onOrderChange: (ids: string[]) => void
   t: (key: string) => string
+  warnings: string[]
 }) {
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null)
   const [droppingId, setDroppingId] = useState<UniqueIdentifier | null>(null)
@@ -1357,18 +1363,32 @@ function SortableMetricGrid({
       <StationCardGridStyles />
       <div className="station-card-grid-shell">
         <div className="grid-scroll-container" ref={scrollRef}>
-          <div className="station-card-grid">
-            <SortableContext items={cards.map((card) => card.id)} strategy={rectSortingStrategy}>
-              {cards.map((card) => (
-                <SortableMetricCard
-                  key={card.id}
-                  card={card}
-                  label={card.label}
-                  isDropping={droppingId === card.id}
-                />
-              ))}
-            </SortableContext>
-          </div>
+          {cards.length === 0 ? (
+            <div className="station-empty-state">
+              <strong>{t('station.view.emptyCardsTitle')}</strong>
+              <span>{t('station.view.emptyCardsHint')}</span>
+              {warnings.length > 0 ? (
+                <ul>
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : (
+            <div className="station-card-grid">
+              <SortableContext items={cards.map((card) => card.id)} strategy={rectSortingStrategy}>
+                {cards.map((card) => (
+                  <SortableMetricCard
+                    key={card.id}
+                    card={card}
+                    label={card.label}
+                    isDropping={droppingId === card.id}
+                  />
+                ))}
+              </SortableContext>
+            </div>
+          )}
         </div>
         <button
           className={canScrollUp ? 'station-scroll-cue top visible' : 'station-scroll-cue top'}

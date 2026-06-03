@@ -49,6 +49,8 @@ func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.
 	control.POST("/detection/start", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("detection.start", "project", h.startDetection))
 	control.POST("/detection/stop", authService.RequireServiceScope(auth.ScopeEdgeDetectionStop), h.handle("detection.stop", "task", h.stopDetection(false)))
 	control.POST("/detection/abnormal-stop", authService.RequireServiceScope(auth.ScopeEdgeDetectionStop), h.handle("detection.abnormal_stop", "task", h.stopDetection(true)))
+	control.POST("/detection/pause", authService.RequireServiceScope(auth.ScopeEdgeDetectionStop), h.handle("detection.pause", "task", h.pauseDetection))
+	control.POST("/detection/resume", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("detection.resume", "task", h.resumeDetection))
 	control.POST("/detection/mute-alarms", authService.RequireServiceScope(auth.ScopeEdgeAlarmMute), h.handle("detection.mute_alarms", "task", h.muteDetectionAlarms))
 	control.POST("/detection/update-limits", authService.RequireServiceScope(auth.ScopeEdgeLimitUpdate), h.handle("detection.update_limits", "task", h.updateDetectionLimits))
 	control.POST("/detection/refresh-features", authService.RequireServiceScope(auth.ScopeEdgeFeatureRefresh), h.handle("detection.refresh_features", "task", h.refreshDetectionFeatures))
@@ -231,6 +233,47 @@ func (h *EdgeControlHandler) stopDetection(abnormal bool) func(*gin.Context, edg
 		}
 		return task, strconv.FormatUint(uint64(req.TaskID), 10), nil
 	}
+}
+
+func (h *EdgeControlHandler) pauseDetection(_ *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
+	var req struct {
+		TaskID uint   `json:"task_id"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
+		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
+	}
+	if req.TaskID == 0 {
+		return nil, "", edgeControlRequestError("invalid_payload", "task_id is required", false, http.StatusBadRequest)
+	}
+	reason := req.Reason
+	if reason == "" {
+		reason = envelope.Reason
+	}
+	task, err := h.detection.Pause(req.TaskID, reason)
+	targetID := strconv.FormatUint(uint64(req.TaskID), 10)
+	if err != nil {
+		return nil, targetID, err
+	}
+	return task, targetID, nil
+}
+
+func (h *EdgeControlHandler) resumeDetection(_ *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
+	var req struct {
+		TaskID uint `json:"task_id"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
+		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
+	}
+	if req.TaskID == 0 {
+		return nil, "", edgeControlRequestError("invalid_payload", "task_id is required", false, http.StatusBadRequest)
+	}
+	task, err := h.detection.Resume(req.TaskID)
+	targetID := strconv.FormatUint(uint64(req.TaskID), 10)
+	if err != nil {
+		return nil, targetID, err
+	}
+	return task, targetID, nil
 }
 
 func (h *EdgeControlHandler) writeVariable(c *gin.Context, envelope edgeControlEnvelope) (any, string, error) {

@@ -23,6 +23,8 @@ const (
 
 const (
 	ScopeServiceRealtimeRead = "service_realtime_read"
+	ScopeServiceMetadataRead = "service_metadata_read"
+	ScopeServiceRuntimeRead  = "service_runtime_read"
 	ScopeServiceControlCall  = "service_control_call"
 	ScopeServiceSSOVerify    = "service_sso_verify"
 	ScopeEdgeDetectionStart  = "edge.detection.start"

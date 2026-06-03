@@ -535,6 +535,12 @@ export const resources = {
           value: '当前值',
           status: '状态',
         },
+        view: {
+          emptyCardsTitle: '当前工位未配置卡片变量',
+          emptyCardsHint: '请在工位视图模板中绑定当前项目的变量，后端不会用全量变量列表自动兜底。',
+          emptyTableTitle: '当前没有检测表格项',
+          emptyTableHint: '运行中的检测任务会优先显示标准快照；未运行时显示模板里的检测项绑定。',
+        },
         alarms: {
           title: '报警日志',
           scope: '类型',
@@ -1641,6 +1647,12 @@ export const resources = {
           value: 'Value',
           status: 'Status',
         },
+        view: {
+          emptyCardsTitle: 'No card variables configured',
+          emptyCardsHint: 'Bind variables for this project in the station view template. The backend will not fall back to the full variable list.',
+          emptyTableTitle: 'No detection table items',
+          emptyTableHint: 'An active run shows its standard snapshot first. When idle, the page shows detection item bindings from the template.',
+        },
         alarms: {
           title: 'Alarm log',
           scope: 'Type',
@@ -2746,6 +2758,12 @@ export const resources = {
           standard: '標準範囲',
           value: '現在値',
           status: '状態',
+        },
+        view: {
+          emptyCardsTitle: 'カード変数が未設定です',
+          emptyCardsHint: '工位ビューのテンプレートで、このプロジェクトの変数を紐付けてください。後端は全量変数リストで自動補完しません。',
+          emptyTableTitle: '検査テーブル項目がありません',
+          emptyTableHint: '実行中の検査では標準スナップショットを優先表示します。未実行時はテンプレートの検査項目バインドを表示します。',
         },
         alarms: {
           title: '警報ログ',

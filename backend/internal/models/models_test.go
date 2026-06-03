@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -206,5 +207,63 @@ func TestTagStringCycleAndStoreTask(t *testing.T) {
 func TestDataTypeHelpers(t *testing.T) {
 	if !IsStringDataType("varchar") || IsStringDataType("float") {
 		t.Fatal("string data type helper failed")
+	}
+}
+
+func TestStationViewBindingHelpers(t *testing.T) {
+	limitL := 10.0
+	limitH := 20.0
+	tagBinding := StationViewBindingFromTag("project_variable", TagConfig{
+		VarID:               101,
+		VarName:             "temp",
+		VarGroup:            "air",
+		DisplayName:         "",
+		DisplayNameEN:       "Temperature",
+		DisplayNameJA:       "温度",
+		DataType:            "FLOAT",
+		Unit:                "C",
+		DecimalPlaces:       2,
+		DefaultLimitL:       &limitL,
+		DefaultLimitH:       &limitH,
+		DefaultAlarmEnabled: true,
+	}, 7)
+	if tagBinding.Source != "project_variable" || tagBinding.VarIDText != "101" || tagBinding.DisplayName != "temp" || !tagBinding.CheckEnabled || tagBinding.SortOrder != 7 {
+		t.Fatalf("unexpected tag binding: %+v", tagBinding)
+	}
+	if tagBinding.LimitL == nil || *tagBinding.LimitL != limitL || tagBinding.LimitH == nil || *tagBinding.LimitH != limitH {
+		t.Fatalf("tag binding limits not copied: %+v", tagBinding)
+	}
+
+	runBinding := StationViewBindingFromRunItem(DetectionRunStandardItem{
+		VarID:         202,
+		VarName:       "pressure",
+		DisplayName:   "",
+		DisplayNameEN: "Pressure",
+		DisplayNameJA: "圧力",
+		Unit:          "Pa",
+		DecimalPlaces: 0,
+		LimitL:        &limitL,
+		LimitH:        &limitH,
+		CheckEnabled:  true,
+		AlarmEnabled:  true,
+		SortOrder:     3,
+	})
+	if runBinding.Source != "detection_item" || runBinding.VarIDText != "202" || runBinding.DisplayName != "pressure" || !runBinding.AlarmEnabled || runBinding.SortOrder != 3 {
+		t.Fatalf("unexpected run binding: %+v", runBinding)
+	}
+
+	payload, err := json.Marshal(StationViewEffectiveResponse{
+		Project:        StationViewProjectRef{ID: 1, ProjectCode: "AC-01"},
+		Template:       StationViewTemplateRef{TemplateUID: "tpl", TemplateCode: "TPL", Version: 1},
+		Regions:        []StationViewRegionDTO{{RegionKey: "left", RegionType: "metric_grid", SortOrder: 1}},
+		Items:          []StationViewItemDTO{{ItemUID: "item", RegionKey: "left", BindingType: StationViewBindingVarName, ResolvedBindings: []StationViewResolvedBinding{tagBinding}}},
+		WSSubscription: StationViewWSSubscription{Topics: []string{"realtime.variables"}, ProjectID: 1, VarIDs: []string{"101"}},
+		HTTPCompanion:  StationViewHTTPCompanion{CurrentRunRequired: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(payload) {
+		t.Fatalf("invalid station view json: %s", string(payload))
 	}
 }

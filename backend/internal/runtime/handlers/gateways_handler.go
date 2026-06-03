@@ -123,6 +123,14 @@ func (h *GatewaysHandler) Register(group *gin.RouterGroup, authService *auth.Ser
 	group.POST("/gateways/:gateway_id/kio/query-all", authService.RequirePermission(auth.PermManageGateways), h.kioQueryAll)
 }
 
+func (h *GatewaysHandler) RegisterServiceRoutes(group *gin.RouterGroup, authService *auth.Service) {
+	control := group.Group("/edge-control")
+	control.GET("/runtime/channels", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeChannels)
+	control.GET("/runtime/channels/detail", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeChannelDetails)
+	control.GET("/runtime/notifications", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeNotifications)
+	control.GET("/runtime/workers", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeWorkers)
+}
+
 func (h *GatewaysHandler) runtimeChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, h.channels.Stats())
 }

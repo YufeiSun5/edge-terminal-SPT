@@ -92,6 +92,13 @@ func (h *TaskFlowsHandler) Register(group *gin.RouterGroup, authService *auth.Se
 	group.GET("/task-flow-runs/:id/sql-logs", authService.RequirePermission(auth.PermSystemSettings), h.listRunSQLLogs)
 }
 
+func (h *TaskFlowsHandler) RegisterServiceRoutes(group *gin.RouterGroup, authService *auth.Service) {
+	control := group.Group("/edge-control")
+	control.GET("/task-modules", authService.RequireServiceScope(auth.ScopeServiceMetadataRead), h.modules)
+	control.GET("/task-flow-templates", authService.RequireServiceScope(auth.ScopeServiceMetadataRead), h.templates)
+	control.GET("/task-flows/runtime", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtime)
+}
+
 func (h *TaskFlowsHandler) modules(c *gin.Context) {
 	c.JSON(http.StatusOK, []gin.H{
 		{

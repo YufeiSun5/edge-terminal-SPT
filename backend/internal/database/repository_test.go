@@ -1133,6 +1133,143 @@ func TestDetectionStandardItemsFreezeVariableDisplaySnapshot(t *testing.T) {
 	}
 }
 
+func TestRepositoryStationViewEffectiveSelectionAndBindings(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+
+	project := &models.Project{ProjectCode: "AC-SV-01", Name: "Station View 1", DisplayName: "工位一", ModelName: "KFR", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	otherProject := &models.Project{ProjectCode: "AC-SV-02", Name: "Station View 2", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := repo.CreateProject(otherProject); err != nil {
+		t.Fatal(err)
+	}
+	limitL := 10.0
+	limitH := 20.0
+	tags := []models.TagConfig{
+		{VarID: 22, GatewayID: 1, SourcePath: "sv/project-1/humidity", ProjectID: &project.ID, ProjectCode: project.ProjectCode, VarName: "humidity", VarGroup: "air", DisplayName: "湿度", DataType: "FLOAT", Unit: "%", DecimalPlaces: 1, Enabled: true},
+		{VarID: 11, GatewayID: 1, SourcePath: "sv/project-1/temp", ProjectID: &project.ID, ProjectCode: project.ProjectCode, VarName: "temp", VarGroup: "air", DisplayName: "温度", DisplayNameEN: "Temperature", DataType: "FLOAT", Unit: "C", DecimalPlaces: 2, DefaultLimitL: &limitL, DefaultLimitH: &limitH, DefaultAlarmEnabled: true, Enabled: true},
+		{VarID: 99, GatewayID: 1, SourcePath: "sv/project-2/temp", ProjectID: &otherProject.ID, ProjectCode: otherProject.ProjectCode, VarName: "temp", VarGroup: "air", DisplayName: "其他项目温度", DataType: "FLOAT", Enabled: true},
+	}
+	if err := db.Create(&tags).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	defaultView, err := repo.GetEffectiveStationView(project.ID, "edge-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultView.Template.TemplateCode != "STATION-DEFAULT" || len(defaultView.Regions) != 2 {
+		t.Fatalf("default view not seeded: %+v", defaultView)
+	}
+	if got := strings.Join(defaultView.WSSubscription.VarIDs, ","); got != "11,22" {
+		t.Fatalf("default view should only subscribe current project tags, got %s", got)
+	}
+	if !defaultView.HTTPCompanion.CurrentRunRequired || len(defaultView.Warnings) == 0 {
+		t.Fatalf("default view should require current run and warn when absent: %+v warnings=%v", defaultView.HTTPCompanion, defaultView.Warnings)
+	}
+	if _, err := repo.GetEffectiveStationView(project.ID, "edge-b"); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("edge mismatch should be not found, got %v", err)
+	}
+
+	customTemplate := models.StationViewTemplate{
+		TemplateUID:  "station-custom",
+		TemplateCode: "STATION-CUSTOM",
+		Name:         "Custom station view",
+		Version:      3,
+		Status:       models.StationViewStatusPublished,
+		OwnerScope:   "edge",
+	}
+	customRegions := []models.StationViewRegion{
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: "left", RegionType: "metric_grid", SortOrder: 1, Enabled: true},
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: "right", RegionType: "inspection_table", SortOrder: 2, Enabled: true},
+	}
+	customItems := []models.StationViewItem{
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: "left", ItemUID: "custom-temp", ItemType: "metric_card", BindingType: models.StationViewBindingVarName, BindingKey: "temp", SortOrder: 10, Visible: true},
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: "right", ItemUID: "custom-run-items", ItemType: "inspection_row", BindingType: models.StationViewBindingDetectionItems, SortOrder: 20, Visible: true},
+	}
+	customAssignment := models.StationViewAssignment{
+		TemplateUID: customTemplate.TemplateUID,
+		TargetType:  models.StationViewTargetProject,
+		TargetKey:   project.ProjectCode,
+		Priority:    10,
+		Enabled:     true,
+	}
+	if err := db.Create(&customTemplate).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&customRegions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&customItems).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&customAssignment).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now().Add(-time.Minute)
+	task := models.DetectionTask{
+		TestNo:      "SV-RUN-1",
+		ProjectID:   project.ID,
+		ProjectCode: project.ProjectCode,
+		Mode:        "standard",
+		Status:      models.DetectionStatusPaused,
+		StartedAt:   &started,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	runItems := []models.DetectionRunStandardItem{
+		{TaskID: task.ID, TestNo: task.TestNo, VarID: 33, VarName: "pressure", DisplayName: "压力", Unit: "Pa", DecimalPlaces: 0, CheckEnabled: true, AlarmEnabled: true, SortOrder: 30},
+		{TaskID: task.ID, TestNo: task.TestNo, VarID: 11, VarName: "temp", DisplayName: "运行温度", Unit: "C", DecimalPlaces: 2, CheckEnabled: true, AlarmEnabled: true, SortOrder: 10},
+	}
+	if err := db.Create(&runItems).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	effective, err := repo.GetEffectiveStationView(project.ID, "edge-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.Template.TemplateCode != "STATION-CUSTOM" || effective.Template.Version != 3 {
+		t.Fatalf("project assignment should select custom template, got %+v", effective.Template)
+	}
+	if len(effective.Items) != 2 || len(effective.Items[0].ResolvedBindings) != 1 || effective.Items[0].ResolvedBindings[0].VarID != 11 {
+		t.Fatalf("var_name item should bind only project temp tag: %+v", effective.Items)
+	}
+	runBindings := effective.Items[1].ResolvedBindings
+	if len(runBindings) != 2 || runBindings[0].VarID != 11 || runBindings[1].VarID != 33 {
+		t.Fatalf("run bindings should use current paused run sorted by sort_order: %+v", runBindings)
+	}
+	if got := strings.Join(effective.WSSubscription.VarIDs, ","); got != "11,33" {
+		t.Fatalf("effective ws var ids should include resolved card and run items, got %s", got)
+	}
+}
+
+func TestStationViewAssignmentScore(t *testing.T) {
+	project := models.Project{ID: 7, ProjectCode: "AC-SCORE", ModelName: "MODEL-A"}
+	cases := []struct {
+		name       string
+		assignment models.StationViewAssignment
+		edge       string
+		want       int
+	}{
+		{name: "project code", assignment: models.StationViewAssignment{TargetType: models.StationViewTargetProject, TargetKey: "AC-SCORE"}, want: 400},
+		{name: "project id", assignment: models.StationViewAssignment{TargetType: models.StationViewTargetProject, TargetKey: "7"}, want: 400},
+		{name: "edge", assignment: models.StationViewAssignment{TargetType: models.StationViewTargetEdge, TargetKey: "edge-a"}, edge: "edge-a", want: 300},
+		{name: "model", assignment: models.StationViewAssignment{TargetType: models.StationViewTargetModel, TargetKey: "MODEL-A"}, want: 200},
+		{name: "global", assignment: models.StationViewAssignment{TargetType: models.StationViewTargetGlobal, TargetKey: "*"}, want: 100},
+		{name: "miss", assignment: models.StationViewAssignment{TargetType: models.StationViewTargetProject, TargetKey: "other"}, want: 0},
+	}
+	for _, tc := range cases {
+		if got := stationViewAssignmentScore(tc.assignment, project, tc.edge); got != tc.want {
+			t.Fatalf("%s score got=%d want=%d", tc.name, got, tc.want)
+		}
+	}
+}
+
 func newRepositoryTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})

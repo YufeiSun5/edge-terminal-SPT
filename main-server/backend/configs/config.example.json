@@ -11,6 +11,14 @@
   },
   "edge": {
     "base_url": "http://127.0.0.1:18080",
-    "query_proxy_enabled": true
+    "edge_instance_id": "edge-local",
+    "service_token_ref": "EDGE_MAIN_SERVICE_TOKEN",
+    "enabled": true,
+    "query_proxy_enabled": false
+  },
+  "auth": {
+    "jwt_secret_ref": "MAIN_SERVER_JWT_SECRET",
+    "jwt_secret": "main-server-dev-secret-change-before-release",
+    "access_token_ttl_seconds": 1800
   }
 }

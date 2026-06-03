@@ -14,9 +14,6 @@ import (
 func TestStationViewEffectiveFiltersCurrentProjectVariables(t *testing.T) {
 	db := newHandlerTestDB(t)
 	repo := database.NewRepository(db)
-	if err := repo.EnsureDefaultStationViewTemplate(); err != nil {
-		t.Fatalf("seed default station view: %v", err)
-	}
 	projectA := models.Project{ProjectCode: "P-A", Name: "Station A", DisplayName: "工位A", Enabled: true}
 	projectB := models.Project{ProjectCode: "P-B", Name: "Station B", DisplayName: "工位B", Enabled: true}
 	if err := db.Create(&projectA).Error; err != nil {
@@ -45,6 +42,9 @@ func TestStationViewEffectiveFiltersCurrentProjectVariables(t *testing.T) {
 	if response.Project.ID != projectA.ID {
 		t.Fatalf("expected project A, got %+v", response.Project)
 	}
+	if response.Template.TemplateCode != "STATION-DEFAULT" {
+		t.Fatalf("expected auto-seeded default template, got %+v", response.Template)
+	}
 	if len(response.Regions) != 2 {
 		t.Fatalf("expected default left/right regions, got %+v", response.Regions)
 	}
@@ -60,7 +60,45 @@ func TestStationViewEffectiveFiltersCurrentProjectVariables(t *testing.T) {
 	}
 }
 
+func TestStationViewEffectiveReturnsEmptyBindingsForEmptyProject(t *testing.T) {
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	project := models.Project{ProjectCode: "P-EMPTY", Name: "Empty Station", DisplayName: "空工位", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	handler := NewStationViewHandler(repo, "edge-01")
+	rec := callHandler(t, http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(project.ID), 10), nil, handler.effective)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response models.StationViewEffectiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got := response.WSSubscription.VarIDs; len(got) != 0 {
+		t.Fatalf("expected empty ws subscription for empty project, got %#v", got)
+	}
+	for _, item := range response.Items {
+		if len(item.ResolvedBindings) != 0 {
+			t.Fatalf("expected empty bindings for empty project item=%+v", item)
+		}
+	}
+	if len(response.Warnings) == 0 {
+		t.Fatalf("expected warning for missing current run")
+	}
+}
+
 func TestStationViewEffectiveUsesCurrentRunDetectionItems(t *testing.T) {
+	testStationViewEffectiveUsesCurrentRunDetectionItems(t, models.DetectionStatusRunning)
+}
+
+func TestStationViewEffectiveUsesPausedRunDetectionItems(t *testing.T) {
+	testStationViewEffectiveUsesCurrentRunDetectionItems(t, models.DetectionStatusPaused)
+}
+
+func testStationViewEffectiveUsesCurrentRunDetectionItems(t *testing.T, status string) {
 	db := newHandlerTestDB(t)
 	repo := database.NewRepository(db)
 	project := models.Project{ProjectCode: "P-A", Name: "Station A", DisplayName: "工位A", Enabled: true}
@@ -77,8 +115,11 @@ func TestStationViewEffectiveUsesCurrentRunDetectionItems(t *testing.T) {
 		ProjectID:   project.ID,
 		ProjectCode: project.ProjectCode,
 		Mode:        "manual",
-		Status:      models.DetectionStatusRunning,
+		Status:      status,
 		StartedAt:   &now,
+	}
+	if status == models.DetectionStatusPaused {
+		task.PauseStartedAt = &now
 	}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatalf("create task: %v", err)

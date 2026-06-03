@@ -239,6 +239,8 @@ func applyEnv(cfg *Config) {
 			Token:    value,
 			Scopes: []string{
 				"service_realtime_read",
+				"service_metadata_read",
+				"service_runtime_read",
 				"service_control_call",
 				"service_sso_verify",
 				"edge.detection.start",

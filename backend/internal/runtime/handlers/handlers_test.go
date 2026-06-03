@@ -1007,6 +1007,106 @@ func TestEdgeControlHandlerWriteVariableAndScope(t *testing.T) {
 	}
 }
 
+func TestEdgeRealtimeHandlerVariablesRequiresServiceScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	project := createHandlerProject(t, repo)
+	serviceToken := "edge-realtime-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes:     auth.NormalizeScopes([]string{auth.ScopeServiceRealtimeRead}),
+		Enabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{{
+		VarID:       9101,
+		GatewayID:   1,
+		SourceType:  models.TagSourceMQTT,
+		SourceTopic: "topic/a",
+		SourcePath:  "$.temp",
+		RawName:     "raw_temp",
+		VarName:     "temp",
+		JSONPath:    "$.temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+	}})
+	if tag, ok := tags.Get(9101); ok {
+		tag.UpdateNumeric(25.5, time.Now(), 1)
+	}
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewEdgeRealtimeHandler(services.NewVariablesService(repo, tags)).Register(group, authService)
+
+	resp := callRouterWithToken(t, router, http.MethodGet, "/api/v1/edge-control/realtime/variables?project_id=1", nil, serviceToken)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("realtime status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var items []models.TagSnapshot
+	mustDecodeHandler(t, resp, &items)
+	if len(items) != 1 || items[0].VarID != 9101 || items[0].Value != 25.5 || items[0].VarIDText != "9101" {
+		t.Fatalf("unexpected realtime items: %+v", items)
+	}
+
+	forbidden := callRouterWithToken(t, router, http.MethodGet, "/api/v1/edge-control/realtime/variables", nil, "bad-token")
+	if forbidden.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized for bad service token, got %d body=%s", forbidden.Code, forbidden.Body.String())
+	}
+}
+
+func TestEdgeServiceReadRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	serviceToken := "edge-read-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes: auth.NormalizeScopes([]string{
+			auth.ScopeServiceMetadataRead,
+			auth.ScopeServiceRuntimeRead,
+		}),
+		Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	channels := pipeline.NewChannels()
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewGatewaysHandler(repo, mqttx.NewManager(channels), channels, services.NewNotificationHub(nil)).RegisterServiceRoutes(group, authService)
+	NewTaskFlowsHandler(repo, pipeline.NewTaskFlowExecutor(repo, pipeline.NewTagManager(), pipeline.NewTaskManager(), channels)).RegisterServiceRoutes(group, authService)
+
+	for _, item := range []struct {
+		path string
+		want string
+	}{
+		{"/api/v1/edge-control/task-modules", `"builtin.start_detection_run"`},
+		{"/api/v1/edge-control/task-flow-templates", `"variable-request-start-detection"`},
+		{"/api/v1/edge-control/runtime/channels/detail", `"pressure_threshold"`},
+		{"/api/v1/edge-control/runtime/notifications", `"published"`},
+		{"/api/v1/edge-control/runtime/workers", `"items"`},
+		{"/api/v1/edge-control/task-flows/runtime", `"submitted"`},
+	} {
+		resp := callRouterWithToken(t, router, http.MethodGet, item.path, nil, serviceToken)
+		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), item.want) {
+			t.Fatalf("%s status=%d body=%s", item.path, resp.Code, resp.Body.String())
+		}
+	}
+
+	forbidden := callRouterWithToken(t, router, http.MethodGet, "/api/v1/edge-control/task-modules", nil, "bad-token")
+	if forbidden.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized for bad service token, got %d body=%s", forbidden.Code, forbidden.Body.String())
+	}
+}
+
 func TestEdgeControlHandlerDetectionOperations(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newHandlerTestDB(t)
@@ -1020,6 +1120,8 @@ func TestEdgeControlHandlerDetectionOperations(t *testing.T) {
 		ClientID:   "main-server",
 		SecretHash: auth.HashOpaqueToken(serviceToken),
 		Scopes: auth.NormalizeScopes([]string{
+			auth.ScopeEdgeDetectionStart,
+			auth.ScopeEdgeDetectionStop,
 			auth.ScopeEdgeAlarmMute,
 			auth.ScopeEdgeLimitUpdate,
 			auth.ScopeEdgeFeatureRefresh,
@@ -1184,6 +1286,30 @@ func TestEdgeControlHandlerDetectionOperations(t *testing.T) {
 	var requestCount int64
 	if err := db.Model(&models.DetectionRunReportRequest{}).Where("task_id = ?", task.ID).Count(&requestCount).Error; err != nil || requestCount != 1 {
 		t.Fatalf("expected one report request count=%d err=%v", requestCount, err)
+	}
+
+	pauseResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/pause", map[string]any{
+		"command_id":        "cmd-pause-1",
+		"operator_username": "admin",
+		"payload":           map[string]any{"task_id": task.ID, "reason": "pause for service control"},
+	}, serviceToken)
+	if pauseResp.Code != http.StatusOK || !strings.Contains(pauseResp.Body.String(), `"status":"paused"`) {
+		t.Fatalf("pause status=%d body=%s", pauseResp.Code, pauseResp.Body.String())
+	}
+	if _, ok := tasks.ActiveForProject(project.ID); ok {
+		t.Fatal("paused task should be removed from runtime task map")
+	}
+
+	resumeResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection/resume", map[string]any{
+		"command_id":        "cmd-resume-1",
+		"operator_username": "admin",
+		"payload":           map[string]any{"task_id": task.ID},
+	}, serviceToken)
+	if resumeResp.Code != http.StatusOK || !strings.Contains(resumeResp.Body.String(), `"status":"running"`) {
+		t.Fatalf("resume status=%d body=%s", resumeResp.Code, resumeResp.Body.String())
+	}
+	if _, ok := tasks.ActiveForProject(project.ID); !ok {
+		t.Fatal("resumed task should return to runtime task map")
 	}
 }
 

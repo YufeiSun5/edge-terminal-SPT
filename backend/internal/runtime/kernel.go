@@ -273,6 +273,11 @@ func (k *Kernel) mountRoutes() {
 
 	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).WithNotificationHub(k.notify).Register(v1, k.auth)
 	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).Register(v1, k.auth)
+	handlers.NewEdgeRealtimeHandler(variablesService).Register(v1, k.auth)
+	gatewaysHandler := handlers.NewGatewaysHandler(k.repo, k.mqtt, k.channels, k.notify)
+	taskFlowsHandler := handlers.NewTaskFlowsHandler(k.repo, k.flows)
+	gatewaysHandler.RegisterServiceRoutes(v1, k.auth)
+	taskFlowsHandler.RegisterServiceRoutes(v1, k.auth)
 	handlers.NewUsersHandler(k.repo).Register(protected, k.auth)
 	handlers.NewProjectsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewStationViewHandler(k.repo, k.cfg.Auth.EdgeInstanceID).Register(protected, k.auth)
@@ -280,14 +285,14 @@ func (k *Kernel) mountRoutes() {
 	handlers.NewStorageRoutesHandler(k.repo).Register(protected, k.auth)
 	handlers.NewHistoryHandler(k.repo).Register(protected, k.auth)
 	handlers.NewDetectionStandardsHandler(k.repo).Register(protected, k.auth)
-	handlers.NewGatewaysHandler(k.repo, k.mqtt, k.channels, k.notify).Register(protected, k.auth)
+	gatewaysHandler.Register(protected, k.auth)
 	handlers.NewReportTemplatesHandler(reportTemplatesService).Register(protected, k.auth)
 	handlers.NewDetectionRunsHandler(detectionRunsService).Register(protected, k.auth)
 	handlers.NewSystemConfigHandler(systemConfigService).Register(protected, k.auth)
 	handlers.NewAuditLogsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewNotificationsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewLimitAlarmsHandler(k.repo).Register(protected, k.auth)
-	handlers.NewTaskFlowsHandler(k.repo, k.flows).Register(protected, k.auth)
+	taskFlowsHandler.Register(protected, k.auth)
 }
 
 func corsMiddleware() gin.HandlerFunc {

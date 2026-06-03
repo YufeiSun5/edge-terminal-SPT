@@ -10,6 +10,7 @@ type Config struct {
 	App      AppConfig      `json:"app"`
 	Database DatabaseConfig `json:"database"`
 	Edge     EdgeConfig     `json:"edge"`
+	Auth     AuthConfig     `json:"auth"`
 }
 
 type AppConfig struct {
@@ -26,7 +27,16 @@ type DatabaseConfig struct {
 
 type EdgeConfig struct {
 	BaseURL           string `json:"base_url"`
+	EdgeInstanceID    string `json:"edge_instance_id"`
+	ServiceTokenRef   string `json:"service_token_ref"`
+	Enabled           *bool  `json:"enabled"`
 	QueryProxyEnabled bool   `json:"query_proxy_enabled"`
+}
+
+type AuthConfig struct {
+	JWTSecret             string `json:"jwt_secret"`
+	JWTSecretRef          string `json:"jwt_secret_ref"`
+	AccessTokenTTLSeconds int    `json:"access_token_ttl_seconds"`
 }
 
 func Load(path string) (*Config, error) {
@@ -47,8 +57,30 @@ func Load(path string) (*Config, error) {
 	if cfg.Edge.BaseURL == "" {
 		cfg.Edge.BaseURL = "http://127.0.0.1:18080"
 	}
+	if cfg.Edge.EdgeInstanceID == "" {
+		cfg.Edge.EdgeInstanceID = "edge-local"
+	}
+	if cfg.Edge.ServiceTokenRef == "" {
+		cfg.Edge.ServiceTokenRef = "EDGE_MAIN_SERVICE_TOKEN"
+	}
+	if cfg.Auth.JWTSecretRef == "" {
+		cfg.Auth.JWTSecretRef = "MAIN_SERVER_JWT_SECRET"
+	}
+	if value := os.Getenv(cfg.Auth.JWTSecretRef); value != "" {
+		cfg.Auth.JWTSecret = value
+	}
+	if cfg.Auth.JWTSecret == "" {
+		cfg.Auth.JWTSecret = "main-server-dev-secret-change-before-release"
+	}
+	if cfg.Auth.AccessTokenTTLSeconds <= 0 {
+		cfg.Auth.AccessTokenTTLSeconds = 1800
+	}
 	if cfg.Database.Host == "" || cfg.Database.User == "" || cfg.Database.Name == "" {
 		return nil, fmt.Errorf("database host, user, and name are required")
 	}
 	return &cfg, nil
+}
+
+func (e EdgeConfig) IsEnabled() bool {
+	return e.Enabled == nil || *e.Enabled
 }

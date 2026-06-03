@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,6 +22,12 @@ func TestDefaultAndMissingFileLoad(t *testing.T) {
 	}
 	if len(cfg.Auth.ServiceClients) != 1 || cfg.Auth.ServiceClients[0].ClientID != "main" || !cfg.Auth.ServiceClients[0].Enabled {
 		t.Fatalf("service client env seed not applied: %+v", cfg.Auth.ServiceClients)
+	}
+	scopes := strings.Join(cfg.Auth.ServiceClients[0].Scopes, ",")
+	for _, required := range []string{"service_realtime_read", "service_metadata_read", "service_runtime_read", "service_control_call"} {
+		if !strings.Contains(scopes, required) {
+			t.Fatalf("service client env seed missing scope %s: %+v", required, cfg.Auth.ServiceClients[0].Scopes)
+		}
 	}
 }
 
