@@ -13,6 +13,7 @@ import {
   getTaskFlows,
   getTaskFlowTemplates,
   getTaskModules,
+  getReportTemplates,
   getVariables,
   runTaskFlow,
   updateTaskFlow,
@@ -27,6 +28,7 @@ import type {
   TaskFlowSqlLog,
   TaskFlowTemplate,
   VariableConfig,
+  ReportTemplate,
 } from '@/shared/api/types'
 import { languageCode } from '@/shared/i18n/language'
 import '@/features/settings/settings.css'
@@ -46,6 +48,12 @@ type PLCWriteRow = {
   ack_timeout_sec?: number
   settle_ms?: number
 }
+type ReportRequestRow = {
+  template_id?: number
+  report_name?: string
+  var_ids?: WireVarID[]
+  params_json?: string
+}
 type TaskRequestFormValues = {
   project_id?: number
   request_var_id?: WireVarID
@@ -60,11 +68,7 @@ type TaskRequestFormValues = {
   enable_storage?: boolean
   enable_alarm?: boolean
   operator_note?: string
-  report_template_id?: number
-  report_var_ids?: WireVarID[]
-  report_ext_1?: string
-  report_ext_2?: string
-  report_ext_3?: string
+  report_requests?: ReportRequestRow[]
   end_type?: string
   reason?: string
   var_id?: WireVarID
@@ -170,12 +174,12 @@ function taskFlowVarKey(variable: Pick<NonNullable<TaskFlow['vars']>[number], 'v
   return variable.var_id_text ?? String(variable.var_id)
 }
 
-function variableProjectId(variable: Pick<VariableConfig, 'project_id' | 'device_id'>) {
-  return variable.project_id ?? variable.device_id
+function variableProjectId(variable: Pick<VariableConfig, 'project_id'>) {
+  return variable.project_id
 }
 
-function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
-  return project?.project_code || project?.device_code || ''
+function projectCode(project?: Pick<Project, 'project_code'>) {
+  return project?.project_code || ''
 }
 
 export function TaskFlowsPage() {
@@ -227,6 +231,11 @@ export function TaskFlowsPage() {
     queryFn: getTaskFlowTemplates,
     retry: false,
   })
+  const reportTemplatesQuery = useQuery({
+    queryKey: ['task-flows', 'report-templates'],
+    queryFn: () => getReportTemplates({ enabled: true }),
+    retry: false,
+  })
   const runsQuery = useQuery({
     queryKey: ['task-flows', 'runs', projectFilter],
     queryFn: () =>
@@ -249,6 +258,7 @@ export function TaskFlowsPage() {
   const flows = useMemo(() => flowsQuery.data ?? [], [flowsQuery.data])
   const modules = useMemo(() => modulesQuery.data ?? [], [modulesQuery.data])
   const templates = useMemo(() => templatesQuery.data ?? [], [templatesQuery.data])
+  const reportTemplates = useMemo(() => reportTemplatesQuery.data ?? [], [reportTemplatesQuery.data])
   const runs = useMemo(() => runsQuery.data?.items ?? [], [runsQuery.data?.items])
   const sqlLogs = useMemo(() => sqlLogsQuery.data ?? [], [sqlLogsQuery.data])
   const enabledFlows = flows.filter((item) => item.enabled)
@@ -465,7 +475,7 @@ export function TaskFlowsPage() {
       limit_check_enabled: true,
       enable_storage: true,
       enable_alarm: true,
-      report_var_ids: [],
+      report_requests: [{ template_id: reportTemplates[0]?.id, var_ids: [], params_json: '{\n  "inlet_area_m2": 1.25\n}' }],
       process_params: [{ key: 'inlet_area_m2', value_type: 'number' }],
       plc_writes: [{ value_from: 'process_params.inlet_area_m2', value_type: 'number', wait_ack: true, ack_timeout_sec: 5 }],
     }
@@ -704,7 +714,7 @@ export function TaskFlowsPage() {
                   children: selectedRunId ? (
                     <TaskFlowSqlLogsTable logs={sqlLogs} loading={sqlLogsQuery.isFetching} />
                   ) : (
-                    <Alert type="info" showIcon message={t('taskFlows.logs.selectRun')} />
+                    <Alert type="info" showIcon title={t('taskFlows.logs.selectRun')} />
                   ),
                 },
               ]}
@@ -720,7 +730,7 @@ export function TaskFlowsPage() {
         onCancel={() => setRequestModalOpen(false)}
         footer={null}
       >
-        <Alert className="task-flow-request-alert" type="info" showIcon message={t('taskFlows.request.hint')} />
+        <Alert className="task-flow-request-alert" type="info" showIcon title={t('taskFlows.request.hint')} />
         <Form
           form={requestForm}
           layout="vertical"
@@ -749,7 +759,7 @@ export function TaskFlowsPage() {
                 className="task-flow-request-alert"
                 type={!requestVariableId ? 'info' : requestVariableWatchFlows.length > 0 ? 'success' : 'warning'}
                 showIcon
-                message={
+                title={
                   !requestVariableId
                     ? t('taskFlows.request.watchFlowsEmpty')
                     : requestVariableWatchFlows.length > 0
@@ -793,29 +803,11 @@ export function TaskFlowsPage() {
                 <Form.Item name="check_interval_ms" label="check_interval_ms">
                   <InputNumber min={0} style={{ width: '100%' }} />
                 </Form.Item>
-                <Form.Item name="report_template_id" label="report_template_id">
-                  <InputNumber min={1} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item className="task-flow-form-wide" name="report_var_ids" label={t('taskFlows.request.reportVariables')}>
-                  <Select
-                    allowClear
-                    mode="multiple"
-                    optionFilterProp="label"
-                    options={requestProjectVariables.map((variable) => ({
-                      label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
-                      value: variableWireId(variable),
-                    }))}
-                  />
-                </Form.Item>
-                <Form.Item name="report_ext_1" label="report_request.ext_1">
-                  <Input />
-                </Form.Item>
-                <Form.Item name="report_ext_2" label="report_request.ext_2">
-                  <Input />
-                </Form.Item>
-                <Form.Item name="report_ext_3" label="report_request.ext_3">
-                  <Input />
-                </Form.Item>
+                <TaskRequestReportRequestsEditor
+                  language={i18n.resolvedLanguage}
+                  reportTemplates={reportTemplates}
+                  variables={requestProjectVariables}
+                />
                 <Form.Item name="limit_check_enabled" label="limit_check_enabled" valuePropName="checked">
                   <Switch />
                 </Form.Item>
@@ -854,7 +846,7 @@ export function TaskFlowsPage() {
               <strong>{t('taskFlows.request.preview')}</strong>
               <span>{t('taskFlows.request.previewHint')}</span>
             </div>
-            {taskRequestPreviewError ? <Alert className="task-flow-request-alert" type="error" showIcon message={taskRequestPreviewError} /> : null}
+            {taskRequestPreviewError ? <Alert className="task-flow-request-alert" type="error" showIcon title={taskRequestPreviewError} /> : null}
             <Input.TextArea className="task-flow-code task-flow-request-preview" readOnly rows={8} spellCheck={false} value={taskRequestPreview} />
           </div>
 
@@ -928,25 +920,28 @@ export function TaskFlowsPage() {
             <Form.List name="vars">
               {(fields, { add, remove }) => (
                 <div className="task-flow-var-list">
-                  {fields.map((field) => (
-                    <div className="task-flow-var-row" key={field.key}>
-                      <Form.Item {...field} name={[field.name, 'var_id']} rules={[{ required: true }]}>
-                        <Select
-                          showSearch
-                          optionFilterProp="label"
-                          placeholder={t('taskFlows.vars.variable')}
-                          options={projectVariables.map((variable) => ({
-                            label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
-                            value: variableWireId(variable),
-                          }))}
-                        />
-                      </Form.Item>
-                      <Form.Item {...field} name={[field.name, 'role']}>
-                        <Select options={roleOptions} />
-                      </Form.Item>
-                      <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
-                    </div>
-                  ))}
+                  {fields.map((field) => {
+                    const { key, ...restField } = field
+                    return (
+                      <div className="task-flow-var-row" key={key}>
+                        <Form.Item {...restField} name={[field.name, 'var_id']} rules={[{ required: true }]}>
+                          <Select
+                            showSearch
+                            optionFilterProp="label"
+                            placeholder={t('taskFlows.vars.variable')}
+                            options={projectVariables.map((variable) => ({
+                              label: `${variableTitle(variable, i18n.resolvedLanguage)} · ${variable.var_name}`,
+                              value: variableWireId(variable),
+                            }))}
+                          />
+                        </Form.Item>
+                        <Form.Item {...restField} name={[field.name, 'role']}>
+                          <Select options={roleOptions} />
+                        </Form.Item>
+                        <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
+                      </div>
+                    )
+                  })}
                   <Button size="small" icon={<Plus size={14} />} onClick={() => add({ role: 'watch' })}>
                     {t('taskFlows.vars.add')}
                   </Button>
@@ -1033,7 +1028,7 @@ function TaskFlowModuleParamsEditor({
   const entries = getParamSchemaEntries(module)
 
   if (!module || entries.length === 0) {
-    return <Alert type="info" showIcon message={t('taskFlows.params.empty')} />
+    return <Alert type="info" showIcon title={t('taskFlows.params.empty')} />
   }
 
   function updateParam(name: string, value: unknown) {
@@ -1067,6 +1062,73 @@ function TaskFlowModuleParamsEditor({
   )
 }
 
+function TaskRequestReportRequestsEditor({
+  language,
+  reportTemplates,
+  variables,
+}: {
+  language?: string
+  reportTemplates: ReportTemplate[]
+  variables: VariableConfig[]
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="task-flow-section task-flow-form-wide">
+      <div className="task-flow-section-head">
+        <strong>{t('taskFlows.request.reportRequests')}</strong>
+        <span>{t('taskFlows.request.reportRequestsHint')}</span>
+      </div>
+      <Form.List name="report_requests">
+        {(fields, { add, remove }) => (
+          <div className="task-flow-param-list">
+            {fields.map((field) => {
+              const { key, ...restField } = field
+              return (
+                <div className="task-flow-request-row report" key={key}>
+                  <Form.Item {...restField} name={[field.name, 'template_id']}>
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder={t('station.run.reportTemplate')}
+                      options={reportTemplates.map((template) => ({
+                        label: `${template.display_name || template.name || template.template_code} · ${template.template_code}`,
+                        value: template.id,
+                      }))}
+                    />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'report_name']}>
+                    <Input placeholder={t('taskFlows.request.reportName')} />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'var_ids']}>
+                    <Select
+                      allowClear
+                      mode="multiple"
+                      optionFilterProp="label"
+                      placeholder={t('taskFlows.request.reportVariables')}
+                      options={variables.map((variable) => ({
+                        label: `${variableTitle(variable, language)} · ${variable.var_name}`,
+                        value: variableWireId(variable),
+                      }))}
+                    />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'params_json']}>
+                    <Input.TextArea className="task-flow-code" rows={3} spellCheck={false} placeholder='{"inlet_area_m2":1.25}' />
+                  </Form.Item>
+                  <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
+                </div>
+              )
+            })}
+            <Button size="small" icon={<Plus size={14} />} onClick={() => add({ template_id: reportTemplates[0]?.id, var_ids: [], params_json: '{}' })}>
+              {t('taskFlows.request.addReportRequest')}
+            </Button>
+          </div>
+        )}
+      </Form.List>
+    </div>
+  )
+}
+
 function TaskRequestProcessParamsEditor() {
   const { t } = useTranslation()
   return (
@@ -1078,20 +1140,23 @@ function TaskRequestProcessParamsEditor() {
       <Form.List name="process_params">
         {(fields, { add, remove }) => (
           <div className="task-flow-param-list">
-            {fields.map((field) => (
-              <div className="task-flow-request-row process" key={field.key}>
-                <Form.Item {...field} name={[field.name, 'key']}>
-                  <Input placeholder="inlet_area_m2" />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'value_type']}>
-                  <Select options={scalarValueTypeOptions} />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'value']}>
-                  <Input placeholder={t('taskFlows.request.value')} />
-                </Form.Item>
-                <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
-              </div>
-            ))}
+            {fields.map((field) => {
+              const { key, ...restField } = field
+              return (
+                <div className="task-flow-request-row process" key={key}>
+                  <Form.Item {...restField} name={[field.name, 'key']}>
+                    <Input placeholder="inlet_area_m2" />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'value_type']}>
+                    <Select options={scalarValueTypeOptions} />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'value']}>
+                    <Input placeholder={t('taskFlows.request.value')} />
+                  </Form.Item>
+                  <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
+                </div>
+              )
+            })}
             <Button size="small" icon={<Plus size={14} />} onClick={() => add({ value_type: 'string' })}>
               {t('taskFlows.request.addProcessParam')}
             </Button>
@@ -1295,45 +1360,48 @@ function TaskRequestPLCWritesEditor({
         <strong>{t('taskFlows.request.plcWrites')}</strong>
         <span>{t('taskFlows.request.plcWritesHint')}</span>
       </div>
-      <Alert className="task-flow-request-alert" type="warning" showIcon message={t('taskFlows.request.plcWritesRequireVar')} />
+      <Alert className="task-flow-request-alert" type="warning" showIcon title={t('taskFlows.request.plcWritesRequireVar')} />
       <Form.List name="plc_writes">
         {(fields, { add, remove }) => (
           <div className="task-flow-param-list">
-            {fields.map((field) => (
-              <div className="task-flow-request-row plc" key={field.key}>
-                <Form.Item {...field} name={[field.name, 'var_id']}>
-                  <Select
-                    allowClear
-                    showSearch
-                    optionFilterProp="label"
-                    placeholder={t('taskFlows.vars.variable')}
-                    options={writableVariables.map((variable) => ({
-                      label: `${variableTitle(variable, language)} · ${variable.var_name}`,
-                      value: variableWireId(variable),
-                    }))}
-                  />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'value_from']}>
-                  <Input placeholder="process_params.inlet_area_m2" />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'value_type']}>
-                  <Select options={scalarValueTypeOptions} />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'value']}>
-                  <Input placeholder={t('taskFlows.request.literalValue')} />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'wait_ack']} valuePropName="checked">
-                  <Switch />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'ack_timeout_sec']}>
-                  <InputNumber min={0} placeholder="ack" />
-                </Form.Item>
-                <Form.Item {...field} name={[field.name, 'settle_ms']}>
-                  <InputNumber min={0} placeholder="settle" />
-                </Form.Item>
-                <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
-              </div>
-            ))}
+            {fields.map((field) => {
+              const { key, ...restField } = field
+              return (
+                <div className="task-flow-request-row plc" key={key}>
+                  <Form.Item {...restField} name={[field.name, 'var_id']}>
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder={t('taskFlows.vars.variable')}
+                      options={writableVariables.map((variable) => ({
+                        label: `${variableTitle(variable, language)} · ${variable.var_name}`,
+                        value: variableWireId(variable),
+                      }))}
+                    />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'value_from']}>
+                    <Input placeholder="process_params.inlet_area_m2" />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'value_type']}>
+                    <Select options={scalarValueTypeOptions} />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'value']}>
+                    <Input placeholder={t('taskFlows.request.literalValue')} />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'wait_ack']} valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'ack_timeout_sec']}>
+                    <InputNumber min={0} placeholder="ack" />
+                  </Form.Item>
+                  <Form.Item {...restField} name={[field.name, 'settle_ms']}>
+                    <InputNumber min={0} placeholder="settle" />
+                  </Form.Item>
+                  <Button danger size="small" icon={<Trash2 size={13} />} onClick={() => remove(field.name)} />
+                </div>
+              )
+            })}
             <Button size="small" icon={<Plus size={14} />} onClick={() => add({ value_from: 'process_params.inlet_area_m2', value_type: 'number', wait_ack: true, ack_timeout_sec: 5 })}>
               {t('taskFlows.request.addPLCWrite')}
             </Button>
@@ -1488,14 +1556,8 @@ function buildTaskRequestPayload(values: TaskRequestFormValues) {
     setIfPresent(payload, 'enable_storage', values.enable_storage)
     setIfPresent(payload, 'enable_alarm', values.enable_alarm)
     setIfPresent(payload, 'operator_note', values.operator_note)
-    setIfPresent(payload, 'report_template_id', values.report_template_id)
-    const reportVarIds = (values.report_var_ids ?? []).filter((item) => item !== undefined && item !== null && item !== '')
-    const reportRequest: Record<string, unknown> = {}
-    if (reportVarIds.length > 0) reportRequest.var_ids = reportVarIds
-    setIfPresent(reportRequest, 'ext_1', values.report_ext_1?.trim())
-    setIfPresent(reportRequest, 'ext_2', values.report_ext_2?.trim())
-    setIfPresent(reportRequest, 'ext_3', values.report_ext_3?.trim())
-    if (Object.keys(reportRequest).length > 0) payload.report_request = reportRequest
+    const reports = buildReportRequestReports(values.report_requests)
+    if (reports.length > 0) payload.report_request = { enabled: true, reports }
     const processParams = Object.fromEntries(
       (values.process_params ?? [])
         .filter((row) => row.key?.trim())
@@ -1570,6 +1632,21 @@ function buildTaskRequestPayload(values: TaskRequestFormValues) {
     if (plcWrites.length > 0) payload.plc_writes = plcWrites
   }
   return payload
+}
+
+function buildReportRequestReports(rows?: ReportRequestRow[]) {
+  return (rows ?? [])
+    .map((row) => {
+      const varIds = (row.var_ids ?? []).filter((item) => item !== undefined && item !== null && item !== '')
+      if (varIds.length === 0) return undefined
+      const report: Record<string, unknown> = { var_ids: varIds }
+      setIfPresent(report, 'template_id', row.template_id)
+      setIfPresent(report, 'report_name', row.report_name?.trim())
+      const paramsText = row.params_json?.trim()
+      if (paramsText) report.params = JSON.parse(paramsText) as unknown
+      return report
+    })
+    .filter((item): item is Record<string, unknown> => Boolean(item))
 }
 
 function setIfPresent(target: Record<string, unknown>, key: string, value: unknown) {

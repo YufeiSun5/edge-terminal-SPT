@@ -458,7 +458,7 @@ export const resources = {
       },
       station: {
         status: {
-          device: '项目 ID',
+          projectCode: '项目编号',
           noDevice: '未绑定项目',
           project: '项目名称',
           task: '检测任务',
@@ -487,7 +487,7 @@ export const resources = {
           idle: '未运行检测',
           running: '检测运行中',
           startTitle: '开始检测任务',
-          device: '项目',
+          project: '项目',
           testNo: '任务编号',
           mode: '检测模式',
           standard: '检测标准',
@@ -989,7 +989,7 @@ export const resources = {
         messages: {
           gatewaySaved: '站点配置已保存',
           discoverRequested: '已请求上游推送全量变量',
-          deviceCreated: '分组已创建',
+          projectCreated: '分组已创建',
           variableAssigned: '变量已分配',
           variablesAssigned: '已分配 {{count}} 个变量',
           variableSaved: '变量配置已保存',
@@ -1544,7 +1544,7 @@ export const resources = {
       },
       station: {
         status: {
-          device: 'Project ID',
+          projectCode: 'Project code',
           noDevice: 'No project',
           project: 'Project',
           task: 'Detection run',
@@ -1573,7 +1573,7 @@ export const resources = {
           idle: 'No active run',
           running: 'Detection running',
           startTitle: 'Start detection run',
-          device: 'Project',
+          project: 'Project',
           testNo: 'Run number',
           mode: 'Mode',
           standard: 'Detection standard',
@@ -2075,7 +2075,7 @@ export const resources = {
         messages: {
           gatewaySaved: 'Site configuration saved',
           discoverRequested: 'Requested upstream full variable push',
-          deviceCreated: 'Group created',
+          projectCreated: 'Group created',
           variableAssigned: 'Variable assigned',
           variablesAssigned: '{{count}} variables assigned',
           variableSaved: 'Variable configuration saved',
@@ -2630,7 +2630,7 @@ export const resources = {
       },
       station: {
         status: {
-          device: 'プロジェクト ID',
+          projectCode: 'プロジェクト番号',
           noDevice: 'プロジェクト未選択',
           project: 'プロジェクト',
           task: '試験タスク',
@@ -2659,7 +2659,7 @@ export const resources = {
           idle: '試験未実行',
           running: '試験実行中',
           startTitle: '試験タスクを開始',
-          device: 'プロジェクト / 設備',
+          project: 'プロジェクト',
           testNo: 'タスク番号',
           mode: '試験モード',
           standard: '試験標準',
@@ -3161,7 +3161,7 @@ export const resources = {
         messages: {
           gatewaySaved: 'サイト設定を保存しました',
           discoverRequested: '上流へ全量変数プッシュを要求しました',
-          deviceCreated: '分組を作成しました',
+          projectCreated: '分組を作成しました',
           variableAssigned: '変数を割り当てました',
           variablesAssigned: '{{count}} 件の変数を割り当てました',
           variableSaved: '変数設定を保存しました',

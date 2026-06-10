@@ -20,3 +20,11 @@
 - 只是一次性任务说明。
 - 与已有 instruction 高度重叠。
 - 只是 open/blocked 工作项，应写入根目录 `AI_BOARD.md`。
+
+## 当前文件
+
+- `ai-workflow.md`：所有 AI 身份的通用工作流、看板纪律和证据来源。
+- `backend-go-edge.md`：Go 后端、MQTT、实时、存储、控制和边缘/主服务器边界。
+- `frontend-electron-react.md`：Electron + React 桌面、页面、登录、SSO、i18n 和前端交互。
+- `testing-smoke.md`：测试、smoke、发布门禁和证据记录。
+- `review-ai.md`：审阅、计划、交互看板更新、施工顺序重排、风险状态更新和小幅跨域修正。

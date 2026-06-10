@@ -18,12 +18,12 @@ import (
 )
 
 type result struct {
-	DeviceID   uint   `json:"device_id"`
-	DeviceCode string `json:"device_code"`
-	StandardID uint   `json:"standard_id"`
-	TaskID     uint   `json:"task_id,omitempty"`
-	TestNo     string `json:"test_no,omitempty"`
-	Variables  int    `json:"variables"`
+	ProjectID   uint   `json:"project_id"`
+	ProjectCode string `json:"project_code"`
+	StandardID  uint   `json:"standard_id"`
+	TaskID      uint   `json:"task_id,omitempty"`
+	TestNo      string `json:"test_no,omitempty"`
+	Variables   int    `json:"variables"`
 }
 
 type statsResult struct {
@@ -40,7 +40,7 @@ func main() {
 	cfgPath := flag.String("config", "configs/config.json", "backend config path")
 	vars := flag.Int("vars", 520, "number of perf variables")
 	start := flag.Bool("start", true, "start a running detection task")
-	reuse := flag.Bool("reuse", false, "reuse existing perf device, variables and standard, and only create a new task")
+	reuse := flag.Bool("reuse", false, "reuse existing perf project, variables and standard, and only create a new task")
 	statsTestNo := flag.String("stats-test-no", "", "print perf stats for a test number instead of creating data")
 	flag.Parse()
 
@@ -71,63 +71,72 @@ func main() {
 	}
 
 	now := time.Now()
-	device := models.Device{
-		DeviceCode:  "PERF-520",
-		Name:        "Perf 520 Variables",
-		DisplayName: "Perf 520 Variables",
-		Enabled:     true,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	project := models.Project{
+		ProjectCode:   "PERF-520",
+		Name:          "Perf 520 Variables",
+		DisplayName:   "Perf 520 Variables",
+		DisplayNameEN: "Perf 520 Variables",
+		DisplayNameJA: "Perf 520 Variables",
+		Enabled:       true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
-	if err := db.Create(&device).Error; err != nil {
-		log.Fatalf("create device: %v", err)
+	if err := db.Create(&project).Error; err != nil {
+		log.Fatalf("create project: %v", err)
 	}
 
 	tags := make([]models.TagConfig, 0, *vars)
+	routes := make([]models.StorageRoute, 0, *vars)
 	items := make([]models.DetectionStandardItem, 0, *vars)
 	limitL := -50.0
 	limitH := 50.0
 	for i := 1; i <= *vars; i++ {
 		name := fmt.Sprintf("perf_%04d", i)
 		tag := models.TagConfig{
-			VarID:                 int64(900000 + i),
-			GatewayID:             1,
-			SourceTopic:           "datachange_S_KIO_Project",
-			SourcePath:            kio.PathFor(name, kio.ValueKey),
-			SourceType:            models.TagSourceManual,
-			RawName:               name,
-			DeviceID:              &device.ID,
-			DeviceCode:            device.DeviceCode,
-			VarGroup:              "perf",
-			VarName:               name,
-			DisplayName:           name,
-			DisplayNameEN:         name,
-			DisplayNameJA:         name,
-			JSONPath:              kio.PathFor(name, kio.ValueKey),
-			DataType:              "FLOAT",
-			DecimalPlaces:         2,
-			ScaleFactor:           1,
-			StoreMode:             3,
-			StoreTrigger:          models.StoreTriggerOnDetection,
-			StoreCycleSec:         1,
-			StoreDeadband:         0,
-			StorageName:           name,
-			StorageTarget:         models.StorageTargetHistoryEAV,
-			StorageTable:          "rt_history_data",
-			StorageValueColumn:    "value",
-			StorageKeyColumn:      "var_id",
-			StorageTimeColumn:     "source_time",
-			QueryAlias:            name,
-			RWMode:                models.RWModeRead,
-			WriteRequiresAudit:    true,
-			StartupSnapshotEnable: true,
-			Discovered:            false,
-			Placeholder:           false,
-			Enabled:               true,
-			CreatedAt:             now,
-			UpdatedAt:             now,
+			VarID:              int64(900000 + i),
+			GatewayID:          1,
+			SourceTopic:        "datachange_S_KIO_Project",
+			SourcePath:         kio.PathFor(name, kio.ValueKey),
+			SourceType:         models.TagSourceManual,
+			RawName:            name,
+			ProjectID:          &project.ID,
+			ProjectCode:        project.ProjectCode,
+			VarGroup:           "perf",
+			VarName:            name,
+			DisplayName:        name,
+			DisplayNameEN:      name,
+			DisplayNameJA:      name,
+			JSONPath:           kio.PathFor(name, kio.ValueKey),
+			DataType:           "FLOAT",
+			DecimalPlaces:      2,
+			ScaleFactor:        1,
+			RWMode:             models.RWModeRead,
+			WriteRequiresAudit: true,
+			Discovered:         false,
+			Placeholder:        false,
+			Enabled:            true,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		tags = append(tags, tag)
+		routes = append(routes, models.StorageRoute{
+			ProjectID:     project.ID,
+			VarID:         tag.VarID,
+			RouteCode:     fmt.Sprintf("perf_520_%04d", i),
+			StorageTarget: models.StorageTargetWideTable,
+			StorageTable:  database.ProjectWideTableName(project.ID),
+			ColumnName:    database.NormalizeStorageColumnName(name, name, tag.VarID),
+			ColumnType:    database.StorageColumnTypeForDataType(tag.DataType),
+			FormFieldKey:  name,
+			QueryAlias:    name,
+			TriggerMode:   models.StoreTriggerOnCycle,
+			CycleMS:       1000,
+			Deadband:      0,
+			StoreOnStart:  true,
+			Enabled:       true,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
 		items = append(items, models.DetectionStandardItem{
 			VarID:           tag.VarID,
 			VarName:         tag.VarName,
@@ -153,12 +162,15 @@ func main() {
 	if err := db.CreateInBatches(&tags, 200).Error; err != nil {
 		log.Fatalf("create tags: %v", err)
 	}
+	if err := db.CreateInBatches(&routes, 200).Error; err != nil {
+		log.Fatalf("create storage routes: %v", err)
+	}
 	standard := &models.DetectionStandard{
 		StandardCode: "PERF-520-STD",
 		Name:         "Perf 520 Standard",
 		DisplayName:  "Perf 520 Standard",
-		DeviceID:     &device.ID,
-		DeviceCode:   device.DeviceCode,
+		ProjectID:    &project.ID,
+		ProjectCode:  project.ProjectCode,
 		Mode:         "standard",
 		Enabled:      true,
 	}
@@ -166,11 +178,11 @@ func main() {
 		log.Fatalf("create standard: %v", err)
 	}
 
-	out := result{DeviceID: device.ID, DeviceCode: device.DeviceCode, StandardID: standard.ID, Variables: *vars}
+	out := result{ProjectID: project.ID, ProjectCode: project.ProjectCode, StandardID: standard.ID, Variables: *vars}
 	if *start {
 		testNo := fmt.Sprintf("PERF-520-%s", now.Format("20060102-150405"))
 		task, err := repo.StartDetectionTaskWithOptions(database.StartDetectionOptions{
-			DeviceID:    device.ID,
+			ProjectID:   project.ID,
 			TestNo:      testNo,
 			Mode:        "standard",
 			StandardID:  &standard.ID,
@@ -192,16 +204,16 @@ func printResult(out result) {
 }
 
 func startReuseTask(db *gorm.DB, repo *database.Repository, start bool) result {
-	var device models.Device
-	if err := db.First(&device, "device_code = ?", "PERF-520").Error; err != nil {
-		log.Fatalf("load perf device: %v", err)
+	var project models.Project
+	if err := db.First(&project, "project_code = ?", "PERF-520").Error; err != nil {
+		log.Fatalf("load perf project: %v", err)
 	}
 	var standard models.DetectionStandard
 	if err := db.First(&standard, "standard_code = ?", "PERF-520-STD").Error; err != nil {
 		log.Fatalf("load perf standard: %v", err)
 	}
 	if err := db.Model(&models.DetectionTask{}).
-		Where("device_id = ? AND status = ?", device.ID, models.DetectionStatusRunning).
+		Where("project_id = ? AND status = ?", project.ID, models.DetectionStatusRunning).
 		Updates(map[string]interface{}{
 			"status":   models.DetectionStatusStopped,
 			"ended_at": time.Now(),
@@ -209,17 +221,17 @@ func startReuseTask(db *gorm.DB, repo *database.Repository, start bool) result {
 		}).Error; err != nil {
 		log.Fatalf("stop previous perf tasks: %v", err)
 	}
-	if err := db.Model(&models.Device{}).Where("id = ?", device.ID).Update("current_task_id", gorm.Expr("NULL")).Error; err != nil {
+	if err := db.Model(&models.Project{}).Where("id = ?", project.ID).Update("current_task_id", gorm.Expr("NULL")).Error; err != nil {
 		log.Fatalf("clear current task: %v", err)
 	}
 
-	out := result{DeviceID: device.ID, DeviceCode: device.DeviceCode, StandardID: standard.ID, Variables: 520}
+	out := result{ProjectID: project.ID, ProjectCode: project.ProjectCode, StandardID: standard.ID, Variables: 520}
 	if !start {
 		return out
 	}
 	testNo := fmt.Sprintf("PERF-520-%s", time.Now().Format("20060102-150405"))
 	task, err := repo.StartDetectionTaskWithOptions(database.StartDetectionOptions{
-		DeviceID:    device.ID,
+		ProjectID:   project.ID,
 		TestNo:      testNo,
 		Mode:        "standard",
 		StandardID:  &standard.ID,
@@ -326,8 +338,14 @@ func cleanupPerfData(db *gorm.DB) error {
 			return err
 		}
 	}
-	if err := db.Model(&models.Device{}).
-		Where("device_code = ?", "PERF-520").
+	if err := db.Delete(&models.StorageRoute{}, "var_id BETWEEN ? AND ?", 900001, 900000+10000).Error; err != nil {
+		return err
+	}
+	if err := db.Delete(&models.StorageRoute{}, "query_alias LIKE ?", "perf_%").Error; err != nil {
+		return err
+	}
+	if err := db.Model(&models.Project{}).
+		Where("project_code = ?", "PERF-520").
 		Update("current_task_id", gorm.Expr("NULL")).Error; err != nil {
 		return err
 	}
@@ -337,5 +355,5 @@ func cleanupPerfData(db *gorm.DB) error {
 	if err := db.Delete(&models.TagConfig{}, "var_name LIKE ?", "perf_%").Error; err != nil {
 		return err
 	}
-	return db.Delete(&models.Device{}, "device_code = ?", "PERF-520").Error
+	return db.Delete(&models.Project{}, "project_code = ?", "PERF-520").Error
 }

@@ -58,13 +58,51 @@ func (c *Client) ServiceTokenRef() string {
 	return c.serviceTokenRef
 }
 
-func (c *Client) Forward(ctx context.Context, path string, rawQuery string, body []byte, commandID string) (Response, error) {
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
+func (c *Client) IsEnabled() bool {
+	return c.enabled
+}
+
+func (c *Client) Timeout() time.Duration {
+	return c.timeout
+}
+
+func (c *Client) ServiceToken() (string, error) {
 	if !c.enabled {
-		return Response{}, ErrDisabled
+		return "", ErrDisabled
 	}
 	token := strings.TrimSpace(c.getenv(c.serviceTokenRef))
 	if token == "" {
-		return Response{}, ErrMissingToken
+		return "", ErrMissingToken
+	}
+	return token, nil
+}
+
+func (c *Client) WebSocketURL(path string, rawQuery string) (string, error) {
+	target, err := c.targetURL(path, rawQuery)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return "", err
+	}
+	switch parsed.Scheme {
+	case "https":
+		parsed.Scheme = "wss"
+	default:
+		parsed.Scheme = "ws"
+	}
+	return parsed.String(), nil
+}
+
+func (c *Client) Forward(ctx context.Context, path string, rawQuery string, body []byte, commandID string) (Response, error) {
+	token, err := c.ServiceToken()
+	if err != nil {
+		return Response{}, err
 	}
 	target, err := c.targetURL(path, rawQuery)
 	if err != nil {
@@ -98,12 +136,9 @@ func (c *Client) Forward(ctx context.Context, path string, rawQuery string, body
 }
 
 func (c *Client) ForwardRead(ctx context.Context, path string, rawQuery string) (Response, error) {
-	if !c.enabled {
-		return Response{}, ErrDisabled
-	}
-	token := strings.TrimSpace(c.getenv(c.serviceTokenRef))
-	if token == "" {
-		return Response{}, ErrMissingToken
+	token, err := c.ServiceToken()
+	if err != nil {
+		return Response{}, err
 	}
 	target, err := c.targetURL(path, rawQuery)
 	if err != nil {

@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,9 +15,11 @@ import (
 	"spindle-main-server/backend/internal/auth"
 	"spindle-main-server/backend/internal/config"
 	"spindle-main-server/backend/internal/query"
+	"spindle-main-server/backend/internal/reports"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/gorilla/websocket"
 	"gorm.io/gorm"
 )
 
@@ -94,15 +99,219 @@ func TestStationViewEffectiveRouteSuccess(t *testing.T) {
 	}
 }
 
+func TestStationViewEffectiveRouteTemplateConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	project := query.Project{ProjectCode: "AC-ROUTE-CONFLICT", Name: "Conflict Project", EdgeInstanceID: "edge-a", ModelName: "MODEL-CONFLICT", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	templates := []query.StationViewTemplate{
+		{TemplateUID: "tpl-route-edge-conflict", TemplateCode: "TPL-ROUTE-EDGE-CONFLICT", Name: "Edge Template", Version: 1, Status: query.StationViewStatusPublished},
+		{TemplateUID: "tpl-route-model-conflict", TemplateCode: "TPL-ROUTE-MODEL-CONFLICT", Name: "Model Template", Version: 1, Status: query.StationViewStatusPublished},
+	}
+	assignments := []query.StationViewAssignment{
+		{TemplateUID: "tpl-route-edge-conflict", TargetType: query.StationViewTargetEdge, TargetKey: "edge-a", Priority: 0, Enabled: true},
+		{TemplateUID: "tpl-route-model-conflict", TargetType: query.StationViewTargetModel, TargetKey: "MODEL-CONFLICT", Priority: 100, Enabled: true},
+	}
+	if err := db.Create(&templates).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&assignments).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ensureTestAdmin(t, db)
+	cfg := testConfig()
+	cfg.Edges = []config.EdgeConfig{{BaseURL: "http://127.0.0.1:18080", EdgeInstanceID: "edge-a", ServiceTokenRef: "EDGE_A_TOKEN"}}
+	router := NewRouter(cfg, db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	rec := httptest.NewRecorder()
+	req := authedRequest(http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(project.ID), 10), token, nil)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"station_view_template_conflict"`) {
+		t.Fatalf("template conflict status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStationViewEffectiveRouteResolvesProjectEdgeInstance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	project := query.Project{ProjectCode: "AC-ROUTE-B", Name: "Route Project B", EdgeInstanceID: "edge-b", Enabled: true}
+	legacy := query.Project{ProjectCode: "AC-ROUTE-LEGACY", Name: "Legacy Project", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	tag := query.TagConfig{VarID: 22, ProjectID: &project.ID, ProjectCode: project.ProjectCode, VarName: "temp", VarGroup: "air", DisplayName: "温度", Enabled: true}
+	if err := db.Create(&tag).Error; err != nil {
+		t.Fatal(err)
+	}
+	template := query.StationViewTemplate{TemplateUID: "tpl-route-b", TemplateCode: "TPL-ROUTE-B", Name: "Route Template B", Version: 1, Status: query.StationViewStatusPublished}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.StationViewRegion{TemplateUID: template.TemplateUID, RegionKey: "left", RegionType: "metric_grid", SortOrder: 1, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.StationViewItem{TemplateUID: template.TemplateUID, RegionKey: "left", ItemUID: "route-b-temp", ItemType: "metric_card", BindingType: query.StationViewBindingVarName, BindingKey: "temp", SortOrder: 1, Visible: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.StationViewAssignment{TemplateUID: template.TemplateUID, TargetType: query.StationViewTargetProject, TargetKey: project.ProjectCode, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	ensureTestAdmin(t, db)
+	cfg := testConfig()
+	cfg.Edges = []config.EdgeConfig{
+		{BaseURL: "http://127.0.0.1:18080", EdgeInstanceID: "edge-a", ServiceTokenRef: "EDGE_A_TOKEN"},
+		{BaseURL: "http://127.0.0.1:18081", EdgeInstanceID: "edge-b", ServiceTokenRef: "EDGE_B_TOKEN"},
+	}
+	router := NewRouter(cfg, db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	projectOnly := httptest.NewRecorder()
+	router.ServeHTTP(projectOnly, authedRequest(http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(project.ID), 10), token, nil))
+	if projectOnly.Code != http.StatusOK {
+		t.Fatalf("project-only station view should resolve edge-b status=%d body=%s", projectOnly.Code, projectOnly.Body.String())
+	}
+	var response query.StationViewEffectiveResponse
+	if err := json.Unmarshal(projectOnly.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.EdgeInstanceID != "edge-b" || response.Template.TemplateCode != "TPL-ROUTE-B" || len(response.WSSubscription.VarIDs) != 1 || response.WSSubscription.VarIDs[0] != "22" {
+		t.Fatalf("unexpected project-only station view response: %+v", response)
+	}
+
+	mismatch := httptest.NewRecorder()
+	router.ServeHTTP(mismatch, authedRequest(http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(project.ID), 10)+"&edge_instance_id=edge-a", token, nil))
+	if mismatch.Code != http.StatusNotFound || !strings.Contains(mismatch.Body.String(), `"code":"station_view_edge_instance_mismatch"`) {
+		t.Fatalf("station view mismatch status=%d body=%s", mismatch.Code, mismatch.Body.String())
+	}
+
+	ambiguous := httptest.NewRecorder()
+	router.ServeHTTP(ambiguous, authedRequest(http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(legacy.ID), 10), token, nil))
+	if ambiguous.Code != http.StatusConflict || !strings.Contains(ambiguous.Body.String(), `"code":"station_view_edge_instance_ambiguous"`) {
+		t.Fatalf("station view ambiguous edge status=%d body=%s", ambiguous.Code, ambiguous.Body.String())
+	}
+
+	missing := httptest.NewRecorder()
+	router.ServeHTTP(missing, authedRequest(http.MethodGet, "/api/v1/station-view/effective?project_id=9999", token, nil))
+	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), `"code":"station_view_project_not_found"`) {
+		t.Fatalf("station view missing project status=%d body=%s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestStationViewTemplatesAndReloadRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	project := query.Project{ProjectCode: "AC-MAIN-RELOAD", Name: "Main Reload Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	tag := query.TagConfig{VarID: 7001, GatewayID: 1, SourcePath: "main/reload/temp", ProjectID: &project.ID, ProjectCode: project.ProjectCode, VarName: "temp", DisplayName: "温度", DataType: "FLOAT", Enabled: true}
+	if err := db.Create(&tag).Error; err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now().Add(-time.Minute)
+	task := query.DetectionTask{TestNo: "MAIN-RELOAD-RUN", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "manual", Status: query.DetectionStatusRunning, StartedAt: &startedAt}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	limitH := 44.0
+	if err := db.Create(&query.DetectionRunStandardItem{TaskID: task.ID, TestNo: task.TestNo, VarID: tag.VarID, VarName: tag.VarName, DisplayName: "运行温度", CheckEnabled: true, AlarmEnabled: true, LimitH: &limitH}).Error; err != nil {
+		t.Fatal(err)
+	}
+	template := query.StationViewTemplate{TemplateUID: "tpl-list", TemplateCode: "TPL-LIST", Name: "List Template", Version: 3, Status: query.StationViewStatusPublished}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.StationViewAssignment{TemplateUID: template.TemplateUID, TargetType: query.StationViewTargetEdge, TargetKey: "edge-a", Enabled: true, Priority: 5}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ensureTestAdmin(t, db)
+	router := NewRouter(testConfig(), db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	list := httptest.NewRecorder()
+	router.ServeHTTP(list, authedRequest(http.MethodGet, "/api/v1/station-view/templates?status=published", token, nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("templates status=%d body=%s", list.Code, list.Body.String())
+	}
+	if body := list.Body.String(); !strings.Contains(body, `"template_code":"TPL-LIST"`) || !strings.Contains(body, `"version":3`) || !strings.Contains(body, `"query_source":"synced_mysql"`) {
+		t.Fatalf("unexpected templates body=%s", body)
+	}
+
+	var tasksBefore, tagsBefore, runItemsBefore int64
+	if err := db.Model(&query.DetectionTask{}).Count(&tasksBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&query.TagConfig{}).Count(&tagsBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&query.DetectionRunStandardItem{}).Count(&runItemsBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	reload := httptest.NewRecorder()
+	router.ServeHTTP(reload, authedRequest(http.MethodPost, "/api/v1/station-view/reload", token, strings.NewReader(`{}`)))
+	if reload.Code != http.StatusOK {
+		t.Fatalf("reload status=%d body=%s", reload.Code, reload.Body.String())
+	}
+	if body := reload.Body.String(); !strings.Contains(body, `"reload_mode":"sync_diagnostics_only"`) || !strings.Contains(body, `"query_source":"synced_mysql"`) {
+		t.Fatalf("unexpected reload body=%s", body)
+	}
+	var tasksAfter, tagsAfter, runItemsAfter int64
+	if err := db.Model(&query.DetectionTask{}).Count(&tasksAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&query.TagConfig{}).Count(&tagsAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&query.DetectionRunStandardItem{}).Count(&runItemsAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tasksAfter != tasksBefore || tagsAfter != tagsBefore || runItemsAfter != runItemsBefore {
+		t.Fatalf("main-server reload must be read-only counts tasks %d/%d tags %d/%d runItems %d/%d", tasksBefore, tasksAfter, tagsBefore, tagsAfter, runItemsBefore, runItemsAfter)
+	}
+	var taskAfter query.DetectionTask
+	if err := db.First(&taskAfter, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if taskAfter.Status != query.DetectionStatusRunning || taskAfter.EndedAt != nil {
+		t.Fatalf("main-server reload must not stop synced detection task: %+v", taskAfter)
+	}
+	var tagAfter query.TagConfig
+	if err := db.First(&tagAfter, "var_id = ?", tag.VarID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tagAfter.VarName != tag.VarName || tagAfter.DisplayName != tag.DisplayName || !tagAfter.Enabled {
+		t.Fatalf("main-server reload must not mutate synced tag: %+v", tagAfter)
+	}
+	var runItemAfter query.DetectionRunStandardItem
+	if err := db.First(&runItemAfter, "task_id = ? AND var_id = ?", task.ID, tag.VarID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if runItemAfter.LimitH == nil || *runItemAfter.LimitH != limitH {
+		t.Fatalf("main-server reload must not mutate synced run snapshot: %+v", runItemAfter)
+	}
+}
+
 func TestProjectsAndCurrentRunRoutesReadSyncedTables(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newServerTestDB(t)
 	project := query.Project{ProjectCode: "AC-CURRENT", Name: "Current Project", EdgeInstanceID: "edge-a", Enabled: true}
 	other := query.Project{ProjectCode: "AC-OTHER", Name: "Other Project", EdgeInstanceID: "edge-b", Enabled: true}
+	otherSecond := query.Project{ProjectCode: "AC-OTHER-2", Name: "Other Project 2", EdgeInstanceID: "edge-b", Enabled: true}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&otherSecond).Error; err != nil {
 		t.Fatal(err)
 	}
 	started := time.Now().Add(-time.Minute)
@@ -156,6 +365,34 @@ func TestProjectsAndCurrentRunRoutesReadSyncedTables(t *testing.T) {
 	}
 	if len(projects) != 1 || projects[0].ProjectCode != project.ProjectCode {
 		t.Fatalf("projects should be filtered to configured edge, got %+v", projects)
+	}
+	legacyProject := query.Project{ProjectCode: "AC-LEGACY", Name: "Legacy Project", Enabled: true}
+	if err := db.Create(&legacyProject).Error; err != nil {
+		t.Fatal(err)
+	}
+	edgeBProjectsRec := httptest.NewRecorder()
+	router.ServeHTTP(edgeBProjectsRec, authedRequest(http.MethodGet, "/api/v1/projects?edge_instance_id=edge-b", token, nil))
+	if edgeBProjectsRec.Code != http.StatusOK {
+		t.Fatalf("edge-b projects status=%d body=%s", edgeBProjectsRec.Code, edgeBProjectsRec.Body.String())
+	}
+	var edgeBProjects []query.Project
+	if err := json.Unmarshal(edgeBProjectsRec.Body.Bytes(), &edgeBProjects); err != nil {
+		t.Fatal(err)
+	}
+	if len(edgeBProjects) != 2 || edgeBProjects[0].ProjectCode != other.ProjectCode || edgeBProjects[1].ProjectCode != otherSecond.ProjectCode {
+		t.Fatalf("explicit edge-b projects should not use default edge-a, got %+v", edgeBProjects)
+	}
+	limitedProjectsRec := httptest.NewRecorder()
+	router.ServeHTTP(limitedProjectsRec, authedRequest(http.MethodGet, "/api/v1/projects?edge_instance_id=edge-b&limit=1", token, nil))
+	if limitedProjectsRec.Code != http.StatusOK {
+		t.Fatalf("limited projects status=%d body=%s", limitedProjectsRec.Code, limitedProjectsRec.Body.String())
+	}
+	var limitedProjects []query.Project
+	if err := json.Unmarshal(limitedProjectsRec.Body.Bytes(), &limitedProjects); err != nil {
+		t.Fatal(err)
+	}
+	if len(limitedProjects) != 1 || limitedProjects[0].ProjectCode != other.ProjectCode {
+		t.Fatalf("project limit should be applied to explicit edge query, got %+v", limitedProjects)
 	}
 
 	currentRec := httptest.NewRecorder()
@@ -428,8 +665,8 @@ func TestGatewayConfigsReadSyncedTables(t *testing.T) {
 	runtimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/gateways", nil)
 	runtimeReq.Header.Set("Authorization", "Bearer "+token)
 	router.ServeHTTP(runtime, runtimeReq)
-	if runtime.Code != http.StatusNotImplemented || !strings.Contains(runtime.Body.String(), `"code":"main_server_runtime_diagnostic_unsupported"`) {
-		t.Fatalf("main-server gateway runtime should be explicit 501 status=%d body=%s", runtime.Code, runtime.Body.String())
+	if runtime.Code != http.StatusServiceUnavailable || !strings.Contains(runtime.Body.String(), `"code":"edge_runtime_token_missing"`) {
+		t.Fatalf("main-server gateway runtime should require edge runtime token status=%d body=%s", runtime.Code, runtime.Body.String())
 	}
 
 	writeRec := httptest.NewRecorder()
@@ -469,6 +706,7 @@ func TestVariablesAndHistoryRoutesReadSyncedTables(t *testing.T) {
 		DisplayName: "温度",
 		JSONPath:    "$.temp",
 		DataType:    "FLOAT",
+		Writable:    true,
 		Enabled:     true,
 		Discovered:  true,
 	}
@@ -505,6 +743,28 @@ func TestVariablesAndHistoryRoutesReadSyncedTables(t *testing.T) {
 	}
 	if !strings.Contains(variablesRec.Body.String(), `"var_id_text":"1001"`) {
 		t.Fatalf("variables response should include var_id_text: %s", variablesRec.Body.String())
+	}
+	legacyDeviceRec := httptest.NewRecorder()
+	router.ServeHTTP(legacyDeviceRec, authedRequest(http.MethodGet, "/api/v1/variables?device_id=1", token, nil))
+	if legacyDeviceRec.Code != http.StatusBadRequest || !strings.Contains(legacyDeviceRec.Body.String(), "unsupported_query_param") {
+		t.Fatalf("legacy device_id should be rejected, got status=%d body=%s", legacyDeviceRec.Code, legacyDeviceRec.Body.String())
+	}
+	filteredVariablesRec := httptest.NewRecorder()
+	router.ServeHTTP(filteredVariablesRec, authedRequest(http.MethodGet, "/api/v1/variables?project_id=1&project_code=AC-HISTORY&var_group=air&writable=true&source_type=mqtt", token, nil))
+	if filteredVariablesRec.Code != http.StatusOK {
+		t.Fatalf("filtered variables status=%d body=%s", filteredVariablesRec.Code, filteredVariablesRec.Body.String())
+	}
+	var filteredVariables []query.TagConfig
+	if err := json.Unmarshal(filteredVariablesRec.Body.Bytes(), &filteredVariables); err != nil {
+		t.Fatal(err)
+	}
+	if len(filteredVariables) != 1 || filteredVariables[0].VarID != tag.VarID || !filteredVariables[0].Writable {
+		t.Fatalf("unexpected filtered variables: %+v", filteredVariables)
+	}
+	badWritableRec := httptest.NewRecorder()
+	router.ServeHTTP(badWritableRec, authedRequest(http.MethodGet, "/api/v1/variables?writable=bad", token, nil))
+	if badWritableRec.Code != http.StatusBadRequest {
+		t.Fatalf("bad writable status=%d body=%s", badWritableRec.Code, badWritableRec.Body.String())
 	}
 
 	historyRec := httptest.NewRecorder()
@@ -841,12 +1101,40 @@ func TestAuditLogsAndNotificationsReadSyncedTables(t *testing.T) {
 		t.Fatalf("notification edge mismatch status=%d body=%s", mismatchRec.Code, mismatchRec.Body.String())
 	}
 
-	writeRec := httptest.NewRecorder()
-	writeReq := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/read-all", nil)
-	writeReq.Header.Set("Authorization", "Bearer "+token)
-	router.ServeHTTP(writeRec, writeReq)
-	if writeRec.Code != http.StatusNotImplemented || !strings.Contains(writeRec.Body.String(), `"code":"main_server_notification_read_unsupported"`) {
-		t.Fatalf("notification write diagnostic status=%d body=%s", writeRec.Code, writeRec.Body.String())
+	readAlarmRec := httptest.NewRecorder()
+	readAlarmReq := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/read-all?type=alarm.limit.enter", nil)
+	readAlarmReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(readAlarmRec, readAlarmReq)
+	if readAlarmRec.Code != http.StatusOK || !strings.Contains(readAlarmRec.Body.String(), `"updated":1`) {
+		t.Fatalf("notification scoped read status=%d body=%s", readAlarmRec.Code, readAlarmRec.Body.String())
+	}
+	alarmCountRec := httptest.NewRecorder()
+	alarmCountReq := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/unread-count?type=alarm.limit.enter", nil)
+	alarmCountReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(alarmCountRec, alarmCountReq)
+	if alarmCountRec.Code != http.StatusOK || !strings.Contains(alarmCountRec.Body.String(), `"unread":0`) {
+		t.Fatalf("alarm unread count status=%d body=%s", alarmCountRec.Code, alarmCountRec.Body.String())
+	}
+	remainingCountRec := httptest.NewRecorder()
+	remainingCountReq := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/unread-count", nil)
+	remainingCountReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(remainingCountRec, remainingCountReq)
+	if remainingCountRec.Code != http.StatusOK || !strings.Contains(remainingCountRec.Body.String(), `"unread":1`) {
+		t.Fatalf("remaining unread count status=%d body=%s", remainingCountRec.Code, remainingCountRec.Body.String())
+	}
+	readOneRec := httptest.NewRecorder()
+	readOneReq := httptest.NewRequest(http.MethodPost, "/api/v1/notifications/"+strconv.FormatUint(globalNotification.ID, 10)+"/read", nil)
+	readOneReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(readOneRec, readOneReq)
+	if readOneRec.Code != http.StatusOK || !strings.Contains(readOneRec.Body.String(), `"ok":true`) {
+		t.Fatalf("notification read-one status=%d body=%s", readOneRec.Code, readOneRec.Body.String())
+	}
+	finalCountRec := httptest.NewRecorder()
+	finalCountReq := httptest.NewRequest(http.MethodGet, "/api/v1/notifications/unread-count", nil)
+	finalCountReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(finalCountRec, finalCountReq)
+	if finalCountRec.Code != http.StatusOK || !strings.Contains(finalCountRec.Body.String(), `"unread":0`) {
+		t.Fatalf("final unread count status=%d body=%s", finalCountRec.Code, finalCountRec.Body.String())
 	}
 
 	badAuditRec := httptest.NewRecorder()
@@ -1485,6 +1773,175 @@ func TestMainServerReportReadinessChecksSyncedRunData(t *testing.T) {
 	}
 }
 
+func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+	project := query.Project{ProjectCode: "AC-REPORT-JOB", Name: "Report Job Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
+	task := query.DetectionTask{TestNo: "RUN-REPORT-JOB", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &ended, EndedAt: &ended}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := query.DetectionRunReportRequest{TaskID: task.ID, TestNo: task.TestNo, ProjectID: project.ID, ProjectCode: project.ProjectCode, TemplateCode: "PERF", TemplateVersion: 3, VarID: 7001, VarName: "temp", VariablesJSON: `[{"var_id":"7001"}]`, ParamsJSON: `{"area":1.5}`, ReportName: "Temp Report", Status: "pending"}
+	if err := db.Create(&request).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.DetectionRunSummary{TaskID: task.ID, TestNo: task.TestNo, ProjectID: project.ID, ProjectCode: project.ProjectCode, ResultStatus: "ok", HistoryRows: 1, StartedAt: &ended, EndedAt: &ended, LastRefreshedAt: ended}).Error; err != nil {
+		t.Fatal(err)
+	}
+	avg := 27.5
+	if err := db.Create(&query.DetectionRunFeature{TaskID: task.ID, TestNo: task.TestNo, ProjectID: project.ID, ProjectCode: project.ProjectCode, VarID: 7001, VarName: "temp", SampleCount: 1, AvgValue: &avg, FirstSampleTime: ended, LastSampleTime: ended}).Error; err != nil {
+		t.Fatal(err)
+	}
+	value := 27.5
+	if err := db.Create(&query.HistoryData{GatewayID: 1, Topic: "topic", ProjectID: project.ID, TaskID: task.ID, TestNo: task.TestNo, VarID: 7001, VarName: "temp", ProjectCode: project.ProjectCode, Value: &value, Quality: 1, SourceTime: ended}).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Reports.ArtifactDir = t.TempDir()
+	router := NewRouter(cfg, db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	enqueue := httptest.NewRecorder()
+	router.ServeHTTP(enqueue, authedRequest(http.MethodPost, "/api/v1/main-server/report-jobs/enqueue", token, strings.NewReader(`{"task_id":1}`)))
+	if enqueue.Code != http.StatusOK {
+		t.Fatalf("enqueue status=%d body=%s", enqueue.Code, enqueue.Body.String())
+	}
+	var enqueuePayload struct {
+		Jobs []reports.MainReportJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(enqueue.Body.Bytes(), &enqueuePayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(enqueuePayload.Jobs) != 1 || enqueuePayload.Jobs[0].Status != reports.StatusPending || enqueuePayload.Jobs[0].RequestID != request.ID {
+		t.Fatalf("unexpected enqueue payload: %s", enqueue.Body.String())
+	}
+
+	service := reports.NewService(db, query.NewStationViewQuery(db), reports.Options{ArtifactDir: cfg.Reports.ArtifactDir})
+	processed, err := service.RunDueOnce(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processed) != 1 || processed[0].Status != reports.StatusSuccess || processed[0].ArtifactRef == "" {
+		t.Fatalf("unexpected processed jobs: %+v", processed)
+	}
+	if _, err := os.Stat(processed[0].ArtifactRef); err != nil {
+		t.Fatalf("manifest was not written: %v", err)
+	}
+
+	detail := httptest.NewRecorder()
+	router.ServeHTTP(detail, authedRequest(http.MethodGet, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(processed[0].ID, 10), token, nil))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"status":"success"`) || !strings.Contains(detail.Body.String(), `"artifact_name"`) {
+		t.Fatalf("detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+	download := httptest.NewRecorder()
+	router.ServeHTTP(download, authedRequest(http.MethodGet, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(processed[0].ID, 10)+"/artifact", token, nil))
+	if download.Code != http.StatusOK || !strings.Contains(download.Header().Get("Content-Disposition"), processed[0].ArtifactName) || download.Header().Get("Content-Type") != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
+		t.Fatalf("artifact download status=%d headers=%v body=%s", download.Code, download.Header(), download.Body.String())
+	}
+	events := httptest.NewRecorder()
+	router.ServeHTTP(events, authedRequest(http.MethodGet, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(processed[0].ID, 10)+"/events?limit=20", token, nil))
+	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"event_type":"succeeded"`) || !strings.Contains(events.Body.String(), `"artifact_name"`) || !strings.Contains(events.Body.String(), `"manifest_ref"`) {
+		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
+	}
+	notificationCount := httptest.NewRecorder()
+	router.ServeHTTP(notificationCount, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications/unread-count", token, nil))
+	if notificationCount.Code != http.StatusOK || !strings.Contains(notificationCount.Body.String(), `"unread":2`) {
+		t.Fatalf("notification count status=%d body=%s", notificationCount.Code, notificationCount.Body.String())
+	}
+	notifications := httptest.NewRecorder()
+	router.ServeHTTP(notifications, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications?unread=true&job_id="+strconv.FormatUint(processed[0].ID, 10)+"&limit=10", token, nil))
+	if notifications.Code != http.StatusOK || !strings.Contains(notifications.Body.String(), `"title":"报表生成完成"`) || !strings.Contains(notifications.Body.String(), `"event_type":"succeeded"`) {
+		t.Fatalf("notifications status=%d body=%s", notifications.Code, notifications.Body.String())
+	}
+	var notificationsPayload struct {
+		Items []reports.ReportNotificationDTO `json:"items"`
+	}
+	if err := json.Unmarshal(notifications.Body.Bytes(), &notificationsPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(notificationsPayload.Items) != 2 {
+		t.Fatalf("expected two unread report notifications, body=%s", notifications.Body.String())
+	}
+	readOne := httptest.NewRecorder()
+	router.ServeHTTP(readOne, authedRequest(http.MethodPost, "/api/v1/main-server/report-notifications/"+strconv.FormatUint(notificationsPayload.Items[0].ID, 10)+"/read", token, nil))
+	if readOne.Code != http.StatusOK {
+		t.Fatalf("read one notification status=%d body=%s", readOne.Code, readOne.Body.String())
+	}
+	readAll := httptest.NewRecorder()
+	router.ServeHTTP(readAll, authedRequest(http.MethodPost, "/api/v1/main-server/report-notifications/read-all?job_id="+strconv.FormatUint(processed[0].ID, 10), token, nil))
+	if readAll.Code != http.StatusOK || !strings.Contains(readAll.Body.String(), `"updated":1`) {
+		t.Fatalf("read all notifications status=%d body=%s", readAll.Code, readAll.Body.String())
+	}
+	notificationCountAfterRead := httptest.NewRecorder()
+	router.ServeHTTP(notificationCountAfterRead, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications/unread-count", token, nil))
+	if notificationCountAfterRead.Code != http.StatusOK || !strings.Contains(notificationCountAfterRead.Body.String(), `"unread":0`) {
+		t.Fatalf("notification count after read status=%d body=%s", notificationCountAfterRead.Code, notificationCountAfterRead.Body.String())
+	}
+
+	again := httptest.NewRecorder()
+	router.ServeHTTP(again, authedRequest(http.MethodPost, "/api/v1/main-server/report-jobs/enqueue", token, strings.NewReader(`{"task_id":1}`)))
+	if again.Code != http.StatusOK {
+		t.Fatalf("second enqueue status=%d body=%s", again.Code, again.Body.String())
+	}
+	var count int64
+	if err := db.Model(&reports.MainReportJob{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("enqueue should be idempotent count=%d err=%v", count, err)
+	}
+
+	retrySuccess := httptest.NewRecorder()
+	router.ServeHTTP(retrySuccess, authedRequest(http.MethodPost, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(processed[0].ID, 10)+"/retry", token, nil))
+	if retrySuccess.Code != http.StatusConflict || !strings.Contains(retrySuccess.Body.String(), `"code":"report_job_not_retryable"`) {
+		t.Fatalf("success job retry should conflict status=%d body=%s", retrySuccess.Code, retrySuccess.Body.String())
+	}
+}
+
+func TestMainServerReportJobArtifactNotReady(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+	cfg := testConfig()
+	cfg.Reports.ArtifactDir = t.TempDir()
+	job := reports.MainReportJob{JobKey: "edge-a:9:9", EdgeInstanceID: "edge-a", TaskID: 9, RequestID: 9, Status: reports.StatusPending, MaxAttempts: 3}
+	if err := db.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(cfg, db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(job.ID, 10)+"/artifact", token, nil))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"report_artifact_not_ready"`) {
+		t.Fatalf("not-ready artifact status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMainServerReportJobsRejectNotRequestedRun(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+	project := query.Project{ProjectCode: "AC-NO-REPORT", Name: "No Report Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
+	task := query.DetectionTask{TestNo: "RUN-NO-REPORT", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &ended, EndedAt: &ended}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(testConfig(), db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, authedRequest(http.MethodPost, "/api/v1/main-server/report-jobs/enqueue", token, strings.NewReader(`{"task_id":1}`)))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"report_not_requested"`) {
+		t.Fatalf("not requested enqueue status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestEdgeControlRouteForwardsWithServiceToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newServerTestDB(t)
@@ -1527,6 +1984,98 @@ func TestEdgeControlRouteForwardsWithServiceToken(t *testing.T) {
 	}
 	if seenAuth != "Bearer test-secret" || seenCommandID != "cmd-1" || seenBody != body {
 		t.Fatalf("unexpected forwarded request auth=%q command=%q body=%s", seenAuth, seenCommandID, seenBody)
+	}
+}
+
+func TestEdgeControlRouteResolvesTargetFromEnvelopePayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	projectA := query.Project{ProjectCode: "CTRL-A", Name: "Control A", EdgeInstanceID: "edge-a", Enabled: true}
+	projectB := query.Project{ProjectCode: "CTRL-B", Name: "Control B", EdgeInstanceID: "edge-b", Enabled: true}
+	if err := db.Create(&projectA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&projectB).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.TagConfig{VarID: 9007199254740994, ProjectID: &projectB.ID, ProjectCode: projectB.ProjectCode, VarName: "target_by_id", SourceType: "virtual", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.TagConfig{VarID: 9007199254740993, ProjectID: &projectB.ID, ProjectCode: projectB.ProjectCode, VarName: "target", SourceType: "virtual", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDGE_A_TOKEN", "token-a")
+	t.Setenv("EDGE_B_TOKEN", "token-b")
+	var edgeAHits int
+	var edgeBHits int
+	var edgeBAuth string
+	var edgeBBody string
+	edgeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		edgeAHits++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(edgeA.Close)
+	edgeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		edgeBHits++
+		edgeBAuth = r.Header.Get("Authorization")
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		edgeBBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"status":"success"}`))
+	}))
+	t.Cleanup(edgeB.Close)
+	cfg := testConfig()
+	cfg.Edges = []config.EdgeConfig{
+		{BaseURL: edgeA.URL, EdgeInstanceID: "edge-a", ServiceTokenRef: "EDGE_A_TOKEN"},
+		{BaseURL: edgeB.URL, EdgeInstanceID: "edge-b", ServiceTokenRef: "EDGE_B_TOKEN"},
+	}
+	router := NewRouter(cfg, db)
+
+	body := `{"command_id":"cmd-payload-project","operator_username":"admin","payload":{"project_id":` + strconv.FormatUint(uint64(projectB.ID), 10) + `,"var_id":"9007199254740993","value":"ok","trigger":false}}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/edge-control/variables/write", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("payload project route status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if edgeAHits != 0 || edgeBHits != 1 || edgeBAuth != "Bearer token-b" || !strings.Contains(edgeBBody, `"project_id":`+strconv.FormatUint(uint64(projectB.ID), 10)) {
+		t.Fatalf("expected payload project to route only edge-b hits a=%d b=%d auth=%q body=%s", edgeAHits, edgeBHits, edgeBAuth, edgeBBody)
+	}
+
+	varIDOnly := httptest.NewRecorder()
+	varIDOnlyReq := httptest.NewRequest(http.MethodPost, "/api/v1/edge-control/variables/write", strings.NewReader(`{"command_id":"cmd-payload-var","operator_username":"admin","payload":{"var_id":"9007199254740993","value":"ok","trigger":false}}`))
+	varIDOnlyReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(varIDOnly, varIDOnlyReq)
+	if varIDOnly.Code != http.StatusOK || edgeBHits != 2 || edgeAHits != 0 {
+		t.Fatalf("expected payload var_id to route edge-b status=%d body=%s hits a=%d b=%d", varIDOnly.Code, varIDOnly.Body.String(), edgeAHits, edgeBHits)
+	}
+
+	projectCodeOnly := httptest.NewRecorder()
+	projectCodeOnlyReq := httptest.NewRequest(http.MethodPost, "/api/v1/edge-control/variables/write", strings.NewReader(`{"command_id":"cmd-payload-code","operator_username":"admin","payload":{"project_code":"CTRL-B","var_name":"target","value":"ok","trigger":false}}`))
+	projectCodeOnlyReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(projectCodeOnly, projectCodeOnlyReq)
+	if projectCodeOnly.Code != http.StatusOK || edgeBHits != 3 || edgeAHits != 0 {
+		t.Fatalf("expected payload project_code to route edge-b status=%d body=%s hits a=%d b=%d", projectCodeOnly.Code, projectCodeOnly.Body.String(), edgeAHits, edgeBHits)
+	}
+
+	mismatch := httptest.NewRecorder()
+	mismatchReq := httptest.NewRequest(http.MethodPost, "/api/v1/edge-control/variables/write?edge_instance_id=edge-a", strings.NewReader(body))
+	mismatchReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(mismatch, mismatchReq)
+	if mismatch.Code != http.StatusNotFound || !strings.Contains(mismatch.Body.String(), `"code":"control_edge_instance_mismatch"`) {
+		t.Fatalf("expected payload mismatch 404, got %d body=%s", mismatch.Code, mismatch.Body.String())
+	}
+
+	unresolved := httptest.NewRecorder()
+	unresolvedReq := httptest.NewRequest(http.MethodPost, "/api/v1/edge-control/variables/write", strings.NewReader(`{"command_id":"cmd-no-target","operator_username":"admin","payload":{"value":"ok"}}`))
+	unresolvedReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(unresolved, unresolvedReq)
+	if unresolved.Code != http.StatusConflict || !strings.Contains(unresolved.Body.String(), `"code":"control_edge_instance_unresolved"`) {
+		t.Fatalf("expected multi-edge unresolved, got %d body=%s", unresolved.Code, unresolved.Body.String())
 	}
 }
 
@@ -1591,6 +2140,17 @@ func TestRealtimeVariablesRouteForwardsToEdgeServiceEndpoint(t *testing.T) {
 	router := NewRouter(cfg, db)
 	token := loginForTest(t, router, "admin", "Admin@12345")
 
+	badRec := httptest.NewRecorder()
+	badReq := httptest.NewRequest(http.MethodGet, "/api/v1/realtime/variables?device_id=1", nil)
+	badReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest || !strings.Contains(badRec.Body.String(), "unsupported_query_param") {
+		t.Fatalf("legacy realtime device_id should be rejected, got status=%d body=%s", badRec.Code, badRec.Body.String())
+	}
+	if seenPath != "" {
+		t.Fatalf("legacy realtime device_id should not be forwarded to edge, got path=%s", seenPath)
+	}
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/realtime/variables?project_id=1&var_id=9101", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -1603,6 +2163,106 @@ func TestRealtimeVariablesRouteForwardsToEdgeServiceEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"var_id_text":"9101"`) || !strings.Contains(rec.Body.String(), `"value":25.5`) {
 		t.Fatalf("unexpected realtime body=%s", rec.Body.String())
+	}
+}
+
+func TestRealtimeVariablesAndWebSocketRouteByProjectEdgeRegistry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	passwordHash, err := auth.HashPassword("Admin@12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&auth.SysUser{Username: "admin", PasswordHash: passwordHash, Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	projectA := query.Project{ProjectCode: "AC-EDGE-A", Name: "Edge A", EdgeInstanceID: "edge-a", Enabled: true}
+	projectB := query.Project{ProjectCode: "AC-EDGE-B", Name: "Edge B", EdgeInstanceID: "edge-b", Enabled: true}
+	if err := db.Create(&projectA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&projectB).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.TagConfig{VarID: 9007199254740994, ProjectID: &projectB.ID, ProjectCode: projectB.ProjectCode, VarName: "target_by_id", SourceType: "virtual", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDGE_A_TOKEN", "token-a")
+	t.Setenv("EDGE_B_TOKEN", "token-b")
+	var edgeAHTTPHits int
+	var edgeBHTTPHits int
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	edgeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/edge-control/realtime/variables" {
+			edgeAHTTPHits++
+			_, _ = w.Write([]byte(`[{"edge":"a"}]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(edgeA.Close)
+	edgeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/edge-control/realtime/variables":
+			edgeBHTTPHits++
+			if r.Header.Get("Authorization") != "Bearer token-b" || r.URL.Query().Get("project_id") != strconv.FormatUint(uint64(projectB.ID), 10) || r.URL.Query().Get("edge_instance_id") != "" {
+				t.Fatalf("edge-b realtime request was not cleaned/routed auth=%q query=%q", r.Header.Get("Authorization"), r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`[{"edge":"b"}]`))
+		case "/api/v1/edge-control/ws":
+			if r.Header.Get("Authorization") != "Bearer token-b" {
+				t.Fatalf("edge-b ws auth=%q", r.Header.Get("Authorization"))
+			}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("edge-b websocket upgrade failed: %v", err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_ = conn.WriteJSON(map[string]any{"type": "connection.ready", "payload": map[string]any{"edge": "b"}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(edgeB.Close)
+
+	cfg := testConfig()
+	cfg.Edges = []config.EdgeConfig{
+		{BaseURL: edgeA.URL, EdgeInstanceID: "edge-a", ServiceTokenRef: "EDGE_A_TOKEN"},
+		{BaseURL: edgeB.URL, EdgeInstanceID: "edge-b", ServiceTokenRef: "EDGE_B_TOKEN"},
+	}
+	router := NewRouter(cfg, db)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/v1/realtime/variables?project_id="+strconv.FormatUint(uint64(projectB.ID), 10), token, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"edge":"b"`) || edgeBHTTPHits != 1 || edgeAHTTPHits != 0 {
+		t.Fatalf("project edge-b realtime should route to edge-b status=%d body=%s hits a=%d b=%d", rec.Code, rec.Body.String(), edgeAHTTPHits, edgeBHTTPHits)
+	}
+	mismatch := httptest.NewRecorder()
+	router.ServeHTTP(mismatch, authedRequest(http.MethodGet, "/api/v1/realtime/variables?project_id="+strconv.FormatUint(uint64(projectB.ID), 10)+"&edge_instance_id=edge-a", token, nil))
+	if mismatch.Code != http.StatusNotFound || !strings.Contains(mismatch.Body.String(), `"code":"project_edge_instance_mismatch"`) {
+		t.Fatalf("project/edge mismatch should fail status=%d body=%s", mismatch.Code, mismatch.Body.String())
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/ws?access_token=" + token + "&topic=realtime.variables&project_id=" + strconv.FormatUint(uint64(projectB.ID), 10)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("edge-b websocket route failed: %v", err)
+	}
+	ready := readMainWSMessageOfType(t, conn, "connection.ready")
+	_ = conn.Close()
+	if ready["edge_instance_id"] != "edge-b" {
+		t.Fatalf("expected ws edge-b injection, got %#v", ready)
+	}
+	badURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/ws?access_token=" + token + "&topic=realtime.variables&project_id=" + strconv.FormatUint(uint64(projectB.ID), 10) + "&edge_instance_id=edge-a"
+	if badConn, resp, err := websocket.DefaultDialer.Dial(badURL, nil); err == nil {
+		_ = badConn.Close()
+		t.Fatal("project/edge mismatch websocket should not upgrade")
+	} else if resp == nil || resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("mismatch websocket status=%v err=%v", resp, err)
 	}
 }
 
@@ -2020,6 +2680,7 @@ func TestMainServerRuntimeDiagnosticsForwardToEdgeServiceEndpoints(t *testing.T)
 	token := loginForTest(t, router, "admin", "Admin@12345")
 
 	expected := map[string]string{
+		"/api/v1/gateways":                "/api/v1/edge-control/gateways",
 		"/api/v1/runtime/channels":        "/api/v1/edge-control/runtime/channels",
 		"/api/v1/runtime/channels/detail": "/api/v1/edge-control/runtime/channels/detail",
 		"/api/v1/runtime/notifications":   "/api/v1/edge-control/runtime/notifications",
@@ -2074,7 +2735,7 @@ func TestMainServerRuntimeDiagnosticsRequireConfiguredToken(t *testing.T) {
 	}
 }
 
-func TestMainServerRealtimeWebSocketIsExplicitlyUnsupported(t *testing.T) {
+func TestMainServerRealtimeWebSocketBridge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newServerTestDB(t)
 	passwordHash, err := auth.HashPassword("Admin@12345")
@@ -2084,16 +2745,75 @@ func TestMainServerRealtimeWebSocketIsExplicitlyUnsupported(t *testing.T) {
 	if err := db.Create(&auth.SysUser{Username: "admin", PasswordHash: passwordHash, Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}).Error; err != nil {
 		t.Fatal(err)
 	}
-	proxyCalled := false
+	t.Setenv("EDGE_WS_TEST_TOKEN", "edge-ws-secret")
+	var seenWSAuth string
+	var seenWSPath string
+	var seenWSQuery string
+	var seenCommandAuth string
+	var seenCommandPath string
+	var seenCommandBody string
+	commandHits := 0
+	wsConnections := 0
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalled = true
-		w.WriteHeader(http.StatusSwitchingProtocols)
+		switch r.URL.Path {
+		case "/api/v1/edge-control/ws":
+			wsConnections++
+			seenWSAuth = r.Header.Get("Authorization")
+			seenWSPath = r.URL.Path
+			seenWSQuery = r.URL.RawQuery
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("edge websocket upgrade failed: %v", err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			if err := conn.WriteJSON(map[string]any{
+				"type": "connection.ready",
+				"payload": map[string]any{
+					"subscription": map[string]any{"topics": []string{"realtime.variables"}},
+				},
+			}); err != nil {
+				return
+			}
+			if err := conn.WriteJSON(map[string]any{
+				"type": "realtime.variables.snapshot",
+				"payload": map[string]any{
+					"items": []map[string]any{{"var_id": 9101, "var_id_text": "9101", "project_id": 1, "value": 25.5}},
+				},
+			}); err != nil {
+				return
+			}
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		case "/api/v1/edge-control/detection/pause":
+			commandHits++
+			seenCommandAuth = r.Header.Get("Authorization")
+			seenCommandPath = r.URL.Path
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read command body failed: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			seenCommandBody = string(raw)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"command_id":"cmd-pause-1","status":"success","result":{"task_id":123,"status":"paused"}}`))
+		default:
+			t.Errorf("unexpected edge path=%s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	t.Cleanup(edge.Close)
 	cfg := testConfig()
 	cfg.Edge.BaseURL = edge.URL
-	cfg.Edge.QueryProxyEnabled = true
+	cfg.Edge.ServiceTokenRef = "EDGE_WS_TEST_TOKEN"
 	router := NewRouter(cfg, db)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
 
 	unauthorized := httptest.NewRecorder()
 	router.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/ws?topic=realtime.variables", nil))
@@ -2102,18 +2822,270 @@ func TestMainServerRealtimeWebSocketIsExplicitlyUnsupported(t *testing.T) {
 	}
 
 	token := loginForTest(t, router, "admin", "Admin@12345")
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ws?topic=realtime.variables", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), `"code":"main_server_realtime_ws_unsupported"`) {
-		t.Fatalf("main-server ws should be explicit 501 status=%d body=%s", rec.Code, rec.Body.String())
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/ws?access_token=" + token + "&topic=realtime.variables&project_id=1"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("main-server websocket dial failed: %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), `"path":"/api/v1/ws"`) || !strings.Contains(rec.Body.String(), "service-token websocket bridge") {
-		t.Fatalf("main-server ws diagnostic should include path and next action: %s", rec.Body.String())
+	defer func() { _ = conn.Close() }()
+
+	ready := readMainWSMessageOfType(t, conn, "connection.ready")
+	if ready["edge_instance_id"] != "edge-a" {
+		t.Fatalf("expected bridged edge_instance_id on ready message, got %#v", ready)
 	}
-	if proxyCalled {
-		t.Fatal("main-server ws route should not fall through to the edge query proxy")
+	snapshot := readMainWSMessageOfType(t, conn, "realtime.variables.snapshot")
+	if snapshot["edge_instance_id"] != "edge-a" || !strings.Contains(mustJSONForServerTest(t, snapshot), `"var_id_text":"9101"`) {
+		t.Fatalf("unexpected bridged snapshot: %#v", snapshot)
+	}
+	if seenWSAuth != "Bearer edge-ws-secret" || seenWSPath != "/api/v1/edge-control/ws" || !strings.Contains(seenWSQuery, "project_id=1") || strings.Contains(seenWSQuery, "access_token") {
+		t.Fatalf("edge ws was not bridged with service token/query cleanup auth=%q path=%q query=%q", seenWSAuth, seenWSPath, seenWSQuery)
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":       "command.detection.pause",
+		"request_id": "req-pause-1",
+		"command_id": "cmd-pause-1",
+		"payload":    map[string]any{"task_id": 123, "reason": "operator pause"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ack := readMainWSMessageOfType(t, conn, "command.ack")
+	if ack["edge_instance_id"] != "edge-a" || ack["command_id"] != "cmd-pause-1" {
+		t.Fatalf("unexpected ws command ack: %#v", ack)
+	}
+	if seenCommandAuth != "Bearer edge-ws-secret" || seenCommandPath != "/api/v1/edge-control/detection/pause" || !strings.Contains(seenCommandBody, `"operator_username":"admin"`) || !strings.Contains(seenCommandBody, `"task_id":123`) {
+		t.Fatalf("command was not forwarded through edge-control auth=%q path=%q body=%s", seenCommandAuth, seenCommandPath, seenCommandBody)
+	}
+
+	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "reconnect")); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	reconnected, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("main-server websocket reconnect failed: %v", err)
+	}
+	defer func() { _ = reconnected.Close() }()
+	_ = readMainWSMessageOfType(t, reconnected, "connection.ready")
+	_ = readMainWSMessageOfType(t, reconnected, "realtime.variables.snapshot")
+	time.Sleep(50 * time.Millisecond)
+	if commandHits != 1 {
+		t.Fatalf("websocket reconnect must not replay prior command, command hits=%d", commandHits)
+	}
+	if wsConnections < 2 {
+		t.Fatalf("expected reconnect to open a new edge websocket, got %d", wsConnections)
+	}
+}
+
+func TestMainServerRealtimeWebSocketCommandOnlySurvivesClosedEdgeStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	passwordHash, err := auth.HashPassword("Admin@12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&auth.SysUser{Username: "admin", PasswordHash: passwordHash, Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDGE_WS_TEST_TOKEN", "edge-ws-secret")
+	var seenCommandAuth string
+	var seenCommandPath string
+	var seenCommandBody string
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/edge-control/ws":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("edge websocket upgrade failed: %v", err)
+				return
+			}
+			_ = conn.Close()
+		case "/api/v1/edge-control/variables/write":
+			seenCommandAuth = r.Header.Get("Authorization")
+			seenCommandPath = r.URL.Path
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read command body failed: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			seenCommandBody = string(raw)
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(seenCommandBody, `"command_id":"cmd-write-fail"`) {
+				w.WriteHeader(http.StatusGatewayTimeout)
+				_, _ = w.Write([]byte(`{"ok":false,"command_id":"cmd-write-fail","status":"failed","error":{"code":"kio_ack_timeout","message":"ack timeout","retryable":true},"result":{"var_id_text":"9101","value":"bad","broker_accepted":true,"project_confirmed":false,"kio":{"status":"ack_timeout_or_unmatched","broker_accepted":true}}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"command_id":"cmd-write-1","status":"success","result":{"var_id_text":"9101","value":"ok"}}`))
+		default:
+			t.Errorf("unexpected edge path=%s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(edge.Close)
+	cfg := testConfig()
+	cfg.Edge.BaseURL = edge.URL
+	cfg.Edge.ServiceTokenRef = "EDGE_WS_TEST_TOKEN"
+	router := NewRouter(cfg, db)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	token := loginForTest(t, router, "admin", "Admin@12345")
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/ws?access_token=" + token
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("main-server websocket dial failed: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":       "command.write_variable",
+		"request_id": "req-write-1",
+		"command_id": "cmd-write-1",
+		"payload":    map[string]any{"var_id": "9101", "value": "ok", "trigger": false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ack := readMainWSMessageOfType(t, conn, "command.ack")
+	if ack["edge_instance_id"] != "edge-a" || ack["command_id"] != "cmd-write-1" {
+		t.Fatalf("unexpected command-only ack: %#v", ack)
+	}
+	if seenCommandAuth != "Bearer edge-ws-secret" || seenCommandPath != "/api/v1/edge-control/variables/write" || !strings.Contains(seenCommandBody, `"operator_username":"admin"`) || !strings.Contains(seenCommandBody, `"trigger":false`) {
+		t.Fatalf("command-only write was not forwarded through edge-control auth=%q path=%q body=%s", seenCommandAuth, seenCommandPath, seenCommandBody)
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":       "command.write_variable",
+		"request_id": "req-write-fail",
+		"command_id": "cmd-write-fail",
+		"payload":    map[string]any{"var_id": "9101", "value": "bad", "trigger": false, "wait_ack": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	errorMessage := readMainWSMessageOfType(t, conn, "error")
+	if errorMessage["edge_instance_id"] != "edge-a" || errorMessage["command_id"] != "cmd-write-fail" {
+		t.Fatalf("unexpected command-only error: %#v", errorMessage)
+	}
+	payload, ok := errorMessage["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error payload with partial result: %#v", errorMessage)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok || result["var_id_text"] != "9101" || result["broker_accepted"] != true {
+		t.Fatalf("expected partial result passthrough: %#v", errorMessage)
+	}
+}
+
+func TestMainServerRealtimeWebSocketCommandOnlyRoutesByPayloadProject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	passwordHash, err := auth.HashPassword("Admin@12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&auth.SysUser{Username: "admin", PasswordHash: passwordHash, Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	projectA := query.Project{ProjectCode: "WS-CTRL-A", Name: "WS Control A", EdgeInstanceID: "edge-a", Enabled: true}
+	projectB := query.Project{ProjectCode: "WS-CTRL-B", Name: "WS Control B", EdgeInstanceID: "edge-b", Enabled: true}
+	if err := db.Create(&projectA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&projectB).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.TagConfig{VarID: 9007199254740994, ProjectID: &projectB.ID, ProjectCode: projectB.ProjectCode, VarName: "target_by_id", SourceType: "virtual", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDGE_A_TOKEN", "token-a")
+	t.Setenv("EDGE_B_TOKEN", "token-b")
+	var edgeACommandHits int
+	var edgeBCommandHits int
+	var edgeBCommandAuth string
+	var edgeBCommandBody string
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	edgeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/edge-control/ws":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("edge-a websocket upgrade failed: %v", err)
+				return
+			}
+			_ = conn.Close()
+		case "/api/v1/edge-control/variables/write":
+			edgeACommandHits++
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(edgeA.Close)
+	edgeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/edge-control/variables/write":
+			edgeBCommandHits++
+			edgeBCommandAuth = r.Header.Get("Authorization")
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			edgeBCommandBody = string(raw)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"command_id":"cmd-write-edge-b","status":"success","result":{"value":"ok"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(edgeB.Close)
+	cfg := testConfig()
+	cfg.Edges = []config.EdgeConfig{
+		{BaseURL: edgeA.URL, EdgeInstanceID: "edge-a", ServiceTokenRef: "EDGE_A_TOKEN"},
+		{BaseURL: edgeB.URL, EdgeInstanceID: "edge-b", ServiceTokenRef: "EDGE_B_TOKEN"},
+	}
+	router := NewRouter(cfg, db)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	token := loginForTest(t, router, "admin", "Admin@12345")
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/ws?access_token=" + token
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("main-server websocket dial failed: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":       "command.write_variable",
+		"request_id": "req-write-edge-b",
+		"command_id": "cmd-write-edge-b",
+		"payload":    map[string]any{"project_id": projectB.ID, "var_name": "target", "value": "ok", "trigger": false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ack := readMainWSMessageOfType(t, conn, "command.ack")
+	if ack["edge_instance_id"] != "edge-b" || ack["command_id"] != "cmd-write-edge-b" {
+		t.Fatalf("unexpected payload-routed ack: %#v", ack)
+	}
+	if edgeACommandHits != 0 || edgeBCommandHits != 1 || edgeBCommandAuth != "Bearer token-b" || !strings.Contains(edgeBCommandBody, `"project_id":`+strconv.FormatUint(uint64(projectB.ID), 10)) {
+		t.Fatalf("expected ws command payload project to route only edge-b hits a=%d b=%d auth=%q body=%s", edgeACommandHits, edgeBCommandHits, edgeBCommandAuth, edgeBCommandBody)
+	}
+
+	if err := conn.WriteJSON(map[string]any{
+		"type":       "command.write_variable",
+		"request_id": "req-write-edge-b-var",
+		"command_id": "cmd-write-edge-b-var",
+		"payload":    map[string]any{"var_id": "9007199254740994", "value": "ok2", "trigger": false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	varAck := readMainWSMessageOfType(t, conn, "command.ack")
+	if varAck["edge_instance_id"] != "edge-b" || varAck["command_id"] != "cmd-write-edge-b-var" {
+		t.Fatalf("unexpected payload var_id routed ack: %#v", varAck)
+	}
+	if edgeACommandHits != 0 || edgeBCommandHits != 2 || edgeBCommandAuth != "Bearer token-b" || !strings.Contains(edgeBCommandBody, `"var_id":"9007199254740994"`) {
+		t.Fatalf("expected ws command payload var_id to route only edge-b hits a=%d b=%d auth=%q body=%s", edgeACommandHits, edgeBCommandHits, edgeBCommandAuth, edgeBCommandBody)
 	}
 }
 
@@ -2287,6 +3259,32 @@ func containsString(items []string, want string) bool {
 	return false
 }
 
+func readMainWSMessageOfType(t *testing.T, conn *websocket.Conn, want string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		var msg map[string]any
+		if err := conn.ReadJSON(&msg); err != nil {
+			continue
+		}
+		if msg["type"] == want {
+			return msg
+		}
+	}
+	t.Fatalf("websocket message type %s not received", want)
+	return nil
+}
+
+func mustJSONForServerTest(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 func loginForTest(t *testing.T, router http.Handler, username string, password string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -2369,6 +3367,11 @@ func newServerTestDB(t *testing.T) *gorm.DB {
 		&query.AuditLog{},
 		&query.SysNotification{},
 		&query.SysNotificationRecipient{},
+		&query.MainNotificationRead{},
+		&reports.MainReportJob{},
+		&reports.MainReportJobEvent{},
+		&reports.MainReportNotification{},
+		&reports.MainReportNotificationRecipient{},
 		&auth.SysUser{},
 	); err != nil {
 		t.Fatal(err)

@@ -16,9 +16,26 @@
     "enabled": true,
     "query_proxy_enabled": false
   },
+  "edges": [
+    {
+      "base_url": "http://127.0.0.1:18080",
+      "edge_instance_id": "edge-local",
+      "service_token_ref": "EDGE_MAIN_SERVICE_TOKEN",
+      "enabled": true
+    }
+  ],
   "auth": {
     "jwt_secret_ref": "MAIN_SERVER_JWT_SECRET",
     "jwt_secret": "main-server-dev-secret-change-before-release",
     "access_token_ttl_seconds": 1800
+  },
+  "reports": {
+    "artifact_dir": "data/reports",
+    "default_template_code": "SPINDLE_DEFAULT_REPORT",
+    "default_template_version": 1,
+    "default_template_file_ref": "templates/default-report-template.xlsx",
+    "worker_enabled": true,
+    "worker_interval_seconds": 30,
+    "max_attempts": 3
   }
 }

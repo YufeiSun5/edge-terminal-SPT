@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"spindle-edge/backend/internal/models"
@@ -110,7 +111,7 @@ func (s *KIOWriteService) Write(ctx context.Context, input KIOWriteInput) (KIOWr
 
 	if !input.WaitAck {
 		if err := s.broker.Publish(writeCtx, input.GatewayID, topic, payload, qos, input.Retain); err != nil {
-			return KIOWriteResult{}, KIOServiceError{Status: 502, Message: err.Error()}
+			return kioWriteFailureResult(input.GatewayID, topic, "", qid, false, err), KIOServiceError{Status: 502, Message: err.Error()}
 		}
 		return KIOWriteResult{
 			GatewayID:        input.GatewayID,
@@ -128,7 +129,8 @@ func (s *KIOWriteService) Write(ctx context.Context, input KIOWriteInput) (KIOWr
 	}
 	if ackTopic != "" {
 		if err := s.broker.Subscribe(writeCtx, input.GatewayID, ackTopic, qos); err != nil {
-			return KIOWriteResult{}, KIOServiceError{Status: 502, Message: fmt.Sprintf("ack subscribe failed: %v", err)}
+			message := fmt.Sprintf("ack subscribe failed: %v", err)
+			return kioWriteFailureResult(input.GatewayID, topic, ackTopic, qid, false, fmt.Errorf("%s", message)), KIOServiceError{Status: 502, Message: message}
 		}
 	}
 	ack, brokerAccepted, err := s.broker.PublishAndWaitKIOAck(writeCtx, input.GatewayID, topic, payload, qos, input.Retain, qid)
@@ -137,6 +139,10 @@ func (s *KIOWriteService) Write(ctx context.Context, input KIOWriteInput) (KIOWr
 		if !brokerAccepted {
 			status = 502
 		}
+		resultStatus := "ack_timeout_or_unmatched"
+		if !brokerAccepted {
+			resultStatus = kioWriteFailureStatus(err)
+		}
 		return KIOWriteResult{
 			GatewayID:        input.GatewayID,
 			Topic:            topic,
@@ -144,7 +150,8 @@ func (s *KIOWriteService) Write(ctx context.Context, input KIOWriteInput) (KIOWr
 			QID:              qid,
 			BrokerAccepted:   brokerAccepted,
 			ProjectConfirmed: false,
-			Status:           "ack_timeout_or_unmatched",
+			Message:          err.Error(),
+			Status:           resultStatus,
 		}, KIOServiceError{Status: status, Message: err.Error()}
 	}
 	resultStatus := "rejected"
@@ -163,6 +170,40 @@ func (s *KIOWriteService) Write(ctx context.Context, input KIOWriteInput) (KIOWr
 		Message:          ack.Message,
 		Status:           resultStatus,
 	}, nil
+}
+
+func kioWriteFailureResult(gatewayID int, topic string, ackTopic string, qid int64, brokerAccepted bool, err error) KIOWriteResult {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	return KIOWriteResult{
+		GatewayID:        gatewayID,
+		Topic:            topic,
+		AckTopic:         ackTopic,
+		QID:              qid,
+		BrokerAccepted:   brokerAccepted,
+		ProjectConfirmed: false,
+		Message:          message,
+		Status:           kioWriteFailureStatus(err),
+	}
+}
+
+func kioWriteFailureStatus(err error) string {
+	if err == nil {
+		return "failed"
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "gateway is not connected") || strings.Contains(text, "gateway offline") {
+		return "gateway_offline"
+	}
+	if strings.Contains(text, "publish") {
+		return "publish_failed"
+	}
+	if strings.Contains(text, "subscribe") {
+		return "ack_subscribe_failed"
+	}
+	return "failed"
 }
 
 func HTTPStatusForKIOError(err error) int {

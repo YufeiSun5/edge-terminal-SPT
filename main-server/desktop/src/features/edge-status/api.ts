@@ -7,9 +7,6 @@ import type {
   BulkRemapKioProjectsResult,
   ChannelStats,
   CommandAcceptedResponse,
-  Device,
-  DevicePatchPayload,
-  DevicePayload,
   DetectionRun,
   DetectionRunEventsResponse,
   DetectionRunListParams,
@@ -207,10 +204,6 @@ export function getProjects() {
   return getJson<Project[]>("/api/v1/projects").then((items) => items.map(withProjectAliases));
 }
 
-export function getDevices() {
-  return getProjects().then((items) => items.map(withDeviceAliases) as Device[]);
-}
-
 export function getProjectMembers(projectId: number) {
   return getJson<ProjectMembersResponse>(`/api/v1/projects/${projectId}/members`);
 }
@@ -226,16 +219,8 @@ export function createProject(payload: ProjectPayload) {
   return postJson<Project, Record<string, unknown>>("/api/v1/projects", withProjectPayload(payload)).then(withProjectAliases);
 }
 
-export function createDevice(payload: DevicePayload) {
-  return postJson<Device, Record<string, unknown>>("/api/v1/projects", withProjectPayload(payload)).then(withDeviceAliases);
-}
-
 export function updateProject(projectId: number, payload: ProjectPatchPayload) {
   return patchJson<Project, ProjectPatchPayload>(`/api/v1/projects/${projectId}`, payload).then(withProjectAliases);
-}
-
-export function updateDevice(deviceId: number, payload: DevicePatchPayload) {
-  return updateProject(deviceId, payload).then(withDeviceAliases);
 }
 
 export function createGatewayConfig(payload: GatewayConfigPayload) {
@@ -322,7 +307,6 @@ export function bulkRemapKioProjects(payload: BulkRemapKioProjectsPayload = {}) 
 export function getStorageRoutes(params: StorageRouteListParams = {}) {
   const query = new URLSearchParams();
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.var_id !== undefined) query.set("var_id", String(params.var_id));
   if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
   const suffix = query.toString();
@@ -349,7 +333,6 @@ export function getRealtimeVariables(params: RealtimeVariableListParams = {}) {
   if (params.source_type) query.set("source_type", params.source_type);
   if (params.gateway_id !== undefined) query.set("gateway_id", String(params.gateway_id));
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.var_id !== undefined) {
     const varIds = Array.isArray(params.var_id) ? params.var_id : [params.var_id];
     for (const varId of varIds) query.append("var_id", String(varId));
@@ -365,7 +348,6 @@ export function getActiveDetectionRuns() {
 export function getDetectionRuns(params: DetectionRunListParams = {}) {
   const query = new URLSearchParams();
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.project_code) query.set("project_code", params.project_code);
   if (params.status) query.set("status", params.status);
   if (params.test_no) query.set("test_no", params.test_no);
@@ -428,9 +410,7 @@ export function addDetectionRunNote(runId: number, payload: DetectionRunNotePayl
 export function getDetectionStandards(params: DetectionStandardListParams = {}) {
   const query = new URLSearchParams();
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.project_code) query.set("project_code", params.project_code);
-  else if (params.device_code) query.set("project_code", params.device_code);
   if (params.mode) query.set("mode", params.mode);
   if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
   if (params.keyword) query.set("keyword", params.keyword);
@@ -543,74 +523,44 @@ export function getTaskFlowSqlLogs(flowRunId: number, limit = 100) {
   return getJson<TaskFlowSqlLog[]>(`/api/v1/task-flow-runs/${flowRunId}/sql-logs?${query.toString()}`);
 }
 
-function withProjectAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
+function withProjectAliases<T extends { project_code?: string }>(item: T): T {
   return {
     ...item,
-    project_code: item.project_code || item.device_code || "",
-  };
-}
-
-function withDeviceAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
-  return {
-    ...withProjectAliases(item),
-    device_code: item.device_code || item.project_code || "",
+    project_code: item.project_code || "",
   };
 }
 
 function withVariableAliases<T extends VariableConfig>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-  };
+  return item;
 }
 
 function withTagSnapshotAliases<T extends TagSnapshot>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-  };
+  return item;
 }
 
-function withStorageRouteAliases<T extends { project_id?: number; device_id?: number }>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-  };
+function withStorageRouteAliases<T>(item: T): T {
+  return item;
 }
 
-function withRunAliases<T extends { project_id?: number; project_code?: string; device_id?: number; device_code?: string; storage_routes?: Array<{ project_id?: number; device_id?: number }> }>(item: T): T {
+function withRunAliases<T>(item: T): T {
+  const run = item as T & { storage_routes?: unknown[] };
+  if (!Array.isArray(run.storage_routes)) return item;
   return {
     ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-    storage_routes: item.storage_routes?.map(withStorageRouteAliases),
+    storage_routes: run.storage_routes.map(withStorageRouteAliases),
   };
 }
 
 function withStandardAliases<T extends DetectionStandard>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-  };
+  return item;
 }
 
 function withProjectPayload<T extends Record<string, unknown>>(payload: T): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...payload };
-  if (next.device_id !== undefined && next.project_id === undefined) next.project_id = next.device_id;
-  if (next.device_code !== undefined && next.project_code === undefined) next.project_code = next.device_code;
-  if (next.device_code !== undefined) delete next.device_code;
-  if (next.device_id !== undefined) delete next.device_id;
-  return next;
+  return { ...payload };
 }
 
 function withoutProjectAliases<T extends Record<string, unknown>>(payload: T): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...payload };
-  delete next.device_id;
-  delete next.device_code;
-  return next;
+  return { ...payload };
 }
 
 function withoutVariableStoragePayload(payload: Record<string, unknown>): Record<string, unknown> {

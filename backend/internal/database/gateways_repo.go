@@ -19,9 +19,13 @@ func (r *Repository) UpsertGatewaySeeds(gateways []models.GatewayConfig) error {
 	}).Create(&gateways).Error
 }
 
-func (r *Repository) LoadGateways() ([]models.GatewayConfig, error) {
+func (r *Repository) LoadGateways(edgeInstanceID string) ([]models.GatewayConfig, error) {
 	var gateways []models.GatewayConfig
-	err := r.db.Where("enabled = ?", true).Order("id asc").Find(&gateways).Error
+	query := r.db.Where("enabled = ?", true)
+	if edgeInstanceID != "" {
+		query = query.Where("(edge_instance_id = ? OR edge_instance_id = '' OR edge_instance_id IS NULL)", edgeInstanceID)
+	}
+	err := query.Order("id asc").Find(&gateways).Error
 	return gateways, err
 }
 

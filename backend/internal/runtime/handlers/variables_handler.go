@@ -368,34 +368,9 @@ func variableUpdates(req variablePatchRequest) map[string]interface{} {
 
 func parseTagFilter(c *gin.Context) (database.TagFilter, error) {
 	var filter database.TagFilter
-	if raw := c.Query("gateway_id"); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil {
-			return filter, fmt.Errorf("invalid gateway_id")
-		}
-		filter.GatewayID = &value
+	if _, exists := c.GetQuery("device_id"); exists {
+		return filter, fmt.Errorf("unsupported_query_param: device_id")
 	}
-	if raw := c.Query("enabled"); raw != "" {
-		value, err := strconv.ParseBool(raw)
-		if err != nil {
-			return filter, fmt.Errorf("invalid enabled")
-		}
-		filter.Enabled = &value
-	}
-	if raw := c.Query("discovered"); raw != "" {
-		value, err := strconv.ParseBool(raw)
-		if err != nil {
-			return filter, fmt.Errorf("invalid discovered")
-		}
-		filter.Discovered = &value
-	}
-	filter.SourceType = c.Query("source_type")
-	filter.Keyword = c.Query("keyword")
-	return filter, nil
-}
-
-func parseRealtimeVariableFilter(c *gin.Context) (services.RealtimeVariableFilter, error) {
-	var filter services.RealtimeVariableFilter
 	if raw := c.Query("gateway_id"); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil {
@@ -411,10 +386,50 @@ func parseRealtimeVariableFilter(c *gin.Context) (services.RealtimeVariableFilte
 		projectID := uint(value)
 		filter.ProjectID = &projectID
 	}
-	if raw := c.Query("device_id"); raw != "" && filter.ProjectID == nil {
+	if raw := c.Query("enabled"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, fmt.Errorf("invalid enabled")
+		}
+		filter.Enabled = &value
+	}
+	if raw := c.Query("discovered"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, fmt.Errorf("invalid discovered")
+		}
+		filter.Discovered = &value
+	}
+	if raw := c.Query("writable"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, fmt.Errorf("invalid writable")
+		}
+		filter.Writable = &value
+	}
+	filter.SourceType = c.Query("source_type")
+	filter.ProjectCode = c.Query("project_code")
+	filter.VarGroup = c.Query("var_group")
+	filter.Keyword = c.Query("keyword")
+	return filter, nil
+}
+
+func parseRealtimeVariableFilter(c *gin.Context) (services.RealtimeVariableFilter, error) {
+	var filter services.RealtimeVariableFilter
+	if _, exists := c.GetQuery("device_id"); exists {
+		return filter, fmt.Errorf("unsupported_query_param: device_id")
+	}
+	if raw := c.Query("gateway_id"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return filter, fmt.Errorf("invalid gateway_id")
+		}
+		filter.GatewayID = &value
+	}
+	if raw := c.Query("project_id"); raw != "" {
 		value, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
-			return filter, fmt.Errorf("invalid device_id")
+			return filter, fmt.Errorf("invalid project_id")
 		}
 		projectID := uint(value)
 		filter.ProjectID = &projectID

@@ -1,5 +1,26 @@
+.variable-config-page .detection-config-workspace {
+  min-width: 0;
+}
+
+.variable-config-page .detection-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.variable-config-page .detection-config-main {
+  min-width: 0;
+  width: 100%;
+}
+
 .variable-config-page .variable-config-search {
   width: min(320px, 30vw);
+}
+
+.variable-config-page .variable-config-table,
+.variable-config-page .ant-table-wrapper {
+  min-width: 0;
+  width: 100%;
 }
 
 .variable-config-unassigned {

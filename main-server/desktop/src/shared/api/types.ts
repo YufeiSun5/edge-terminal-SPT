@@ -293,8 +293,6 @@ export type VariableConfig = {
   raw_name: string;
   project_id?: number;
   project_code: string;
-  device_id?: number;
-  device_code: string;
   var_group: string;
   var_name: string;
   display_name: string;
@@ -398,8 +396,6 @@ export type VariableCreatePayload = Partial<
     | "raw_name"
     | "project_id"
     | "project_code"
-    | "device_id"
-    | "device_code"
     | "var_group"
     | "display_name"
     | "display_name_en"
@@ -492,7 +488,6 @@ export type CommandAcceptedResponse = {
 export type Project = {
   id: number;
   project_code: string;
-  device_code?: string;
   site_no: string;
   name: string;
   display_name: string;
@@ -508,25 +503,8 @@ export type Project = {
   updated_at: string;
 };
 
-export type Device = Project & {
-  device_code: string;
-};
-
 export type ProjectPayload = {
   project_code: string;
-  site_no?: string;
-  name?: string;
-  display_name?: string;
-  display_name_en?: string;
-  display_name_ja?: string;
-  model_name?: string;
-  image_ref?: string;
-  placeholder?: boolean;
-};
-
-export type DevicePayload = {
-  project_code?: string;
-  device_code: string;
   site_no?: string;
   name?: string;
   display_name?: string;
@@ -550,13 +528,9 @@ export type ProjectPatchPayload = Partial<{
   placeholder: boolean;
 }>;
 
-export type DevicePatchPayload = ProjectPatchPayload;
-
 export type VariableAssignmentPayload = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
-  device_code?: string;
   var_group: string;
   enabled: boolean;
 };
@@ -569,8 +543,6 @@ export type TagSnapshot = {
   source_path: string;
   project_id?: number;
   project_code: string;
-  device_id?: number;
-  device_code: string;
   var_group: string;
   var_name: string;
   display_name: string;
@@ -591,8 +563,6 @@ export type ActiveDetectionRun = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   mode: string;
   standard_id?: number;
   standard_code: string;
@@ -627,7 +597,6 @@ export type DetectionRunStorageRoute = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
   var_id: VarIdentifier;
   var_id_text?: string;
   route_id: number;
@@ -653,7 +622,6 @@ export type DetectionRunStorageRoutesResponse = {
 export type StorageRoute = {
   id: number;
   project_id: number;
-  device_id: number;
   var_id: VarIdentifier;
   var_id_text?: string;
   route_code: string;
@@ -676,7 +644,6 @@ export type StorageRoutePayload = Partial<
   Pick<
     StorageRoute,
     | "project_id"
-    | "device_id"
     | "var_id"
     | "route_code"
     | "storage_target"
@@ -695,7 +662,6 @@ export type StorageRoutePayload = Partial<
 
 export type StorageRouteListParams = {
   project_id?: number;
-  device_id?: number;
   var_id?: VarIdentifier;
   enabled?: boolean;
 };
@@ -775,8 +741,6 @@ export type DetectionRunEvent = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   event_type: string;
   event_level: string;
   message: string;
@@ -791,8 +755,6 @@ export type DetectionRunSummary = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   result_status: "running" | "ok" | "ng" | "unknown" | string;
   started_at?: string;
   ended_at?: string;
@@ -817,8 +779,6 @@ export type DetectionRun = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   mode: string;
   status: string;
   standard_id?: number;
@@ -847,7 +807,6 @@ export type DetectionRun = {
 export type DetectionRunListParams = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
   status?: string;
   test_no?: string;
   start?: string;
@@ -864,7 +823,6 @@ export type DetectionRunListResponse = {
 export type DetectionRunStartPayload = {
   project_id: number;
   project_code?: string;
-  device_id?: number;
   test_no: string;
   mode: string;
   standard_id?: number;
@@ -936,8 +894,6 @@ export type DetectionStandard = {
   display_name_ja: string;
   project_id?: number;
   project_code: string;
-  device_id?: number;
-  device_code: string;
   mode: string;
   report_template_id?: number;
   version: number;
@@ -986,8 +942,6 @@ export type DetectionStandardPayload = Partial<
     | "display_name_ja"
     | "project_id"
     | "project_code"
-    | "device_id"
-    | "device_code"
     | "mode"
     | "report_template_id"
     | "version"
@@ -1001,8 +955,6 @@ export type DetectionStandardPayload = Partial<
 export type DetectionStandardListParams = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
-  device_code?: string;
   mode?: string;
   enabled?: boolean;
   keyword?: string;
@@ -1036,7 +988,6 @@ export type RealtimeWebSocketSubscription = {
   source_type?: "mqtt" | "virtual" | "manual" | string;
   gateway_id?: number;
   project_id?: number;
-  device_id?: number;
   var_ids?: VarIdentifier[];
   var_id_texts?: string[];
 };
@@ -1045,7 +996,6 @@ export type RealtimeVariableListParams = {
   source_type?: "mqtt" | "virtual" | "manual" | string;
   gateway_id?: number;
   project_id?: number;
-  device_id?: number;
   var_id?: VarIdentifier | VarIdentifier[];
 };
 
@@ -1115,14 +1065,12 @@ export type HistoryDataItem = {
   gateway_id: number;
   topic: string;
   project_id: number;
-  device_id: number;
   task_id: number;
   test_no: string;
   var_id: VarIdentifier;
   var_id_text?: string;
   var_name: string;
   project_code: string;
-  device_code: string;
   value?: number | null;
   str_value?: string | null;
   quality: number;
@@ -1139,8 +1087,6 @@ export type HistoryDataResponse = {
 export type HistoryDataParams = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
-  device_code?: string;
   task_id?: number;
   test_no?: string;
   start?: string;

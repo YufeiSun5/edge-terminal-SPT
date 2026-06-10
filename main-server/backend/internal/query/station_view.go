@@ -12,22 +12,27 @@ import (
 )
 
 const (
-	StationViewStatusPublished     = "published"
-	StationViewTargetGlobal        = "global"
-	StationViewTargetEdge          = "edge"
-	StationViewTargetModel         = "model"
-	StationViewTargetProject       = "project"
-	StationViewBindingVarName      = "var_name"
-	StationViewBindingVarGroup     = "var_group"
-	StationViewBindingRunItems     = "detection_items"
-	StationViewBindingAlarmSummary = "alarm_summary"
-	StationViewBindingRunState     = "run_state"
-	DetectionStatusRunning         = "running"
-	DetectionStatusPaused          = "paused"
-	DetectionStatusStopped         = "stopped"
+	StationViewStatusPublished      = "published"
+	StationViewTargetGlobal         = "global"
+	StationViewTargetEdge           = "edge"
+	StationViewTargetModel          = "model"
+	StationViewTargetProject        = "project"
+	StationViewBindingVarName       = "var_name"
+	StationViewBindingVarGroup      = "var_group"
+	StationViewBindingRunItems      = "detection_items"
+	StationViewBindingAlarmSummary  = "alarm_summary"
+	StationViewBindingRunState      = "run_state"
+	StationViewLayoutAreaCardPool   = "card_pool"
+	StationViewLayoutAreaListLayout = "list_layout"
+	DetectionStatusRunning          = "running"
+	DetectionStatusPaused           = "paused"
+	DetectionStatusStopped          = "stopped"
 )
 
-var ErrStationViewSyncNotReady = errors.New("station view synced tables are not ready")
+var (
+	ErrStationViewSyncNotReady     = errors.New("station view synced tables are not ready")
+	ErrStationViewTemplateConflict = errors.New("station view template assignment conflict")
+)
 
 type StationViewQuery struct {
 	db *gorm.DB
@@ -141,6 +146,7 @@ type StationViewRegion struct {
 	ID          uint   `gorm:"column:id;primaryKey"`
 	TemplateUID string `gorm:"column:template_uid"`
 	RegionKey   string `gorm:"column:region_key"`
+	LayoutArea  string `gorm:"column:layout_area"`
 	RegionType  string `gorm:"column:region_type"`
 	LayoutJSON  string `gorm:"column:layout_json"`
 	SortOrder   int    `gorm:"column:sort_order"`
@@ -153,6 +159,7 @@ type StationViewItem struct {
 	ID          uint   `gorm:"column:id;primaryKey"`
 	TemplateUID string `gorm:"column:template_uid"`
 	RegionKey   string `gorm:"column:region_key"`
+	LayoutArea  string `gorm:"column:layout_area"`
 	ItemUID     string `gorm:"column:item_uid"`
 	ItemType    string `gorm:"column:item_type"`
 	BindingType string `gorm:"column:binding_type"`
@@ -166,15 +173,51 @@ type StationViewItem struct {
 func (StationViewItem) TableName() string { return "sys_station_view_items" }
 
 type StationViewAssignment struct {
-	ID          uint   `gorm:"column:id;primaryKey"`
-	TemplateUID string `gorm:"column:template_uid"`
-	TargetType  string `gorm:"column:target_type"`
-	TargetKey   string `gorm:"column:target_key"`
-	Priority    int    `gorm:"column:priority"`
-	Enabled     bool   `gorm:"column:enabled"`
+	ID          uint      `gorm:"column:id;primaryKey"`
+	TemplateUID string    `gorm:"column:template_uid"`
+	TargetType  string    `gorm:"column:target_type"`
+	TargetKey   string    `gorm:"column:target_key"`
+	Priority    int       `gorm:"column:priority"`
+	Enabled     bool      `gorm:"column:enabled"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+	UpdatedAt   time.Time `gorm:"column:updated_at"`
 }
 
 func (StationViewAssignment) TableName() string { return "sys_station_view_assignments" }
+
+type StationViewTemplateFilter struct {
+	Status     string
+	OwnerScope string
+	Keyword    string
+}
+
+type StationViewTemplateListItem struct {
+	ID            uint                       `json:"id"`
+	TemplateUID   string                     `json:"template_uid"`
+	TemplateCode  string                     `json:"template_code"`
+	Name          string                     `json:"name"`
+	DisplayName   string                     `json:"display_name"`
+	DisplayNameEN string                     `json:"display_name_en"`
+	DisplayNameJA string                     `json:"display_name_ja"`
+	Version       int                        `json:"version"`
+	Status        string                     `json:"status"`
+	OwnerScope    string                     `json:"owner_scope"`
+	LayoutJSON    string                     `json:"layout_json,omitempty"`
+	Assignments   []StationViewAssignmentDTO `json:"assignments,omitempty"`
+	CreatedAt     time.Time                  `json:"created_at"`
+	UpdatedAt     time.Time                  `json:"updated_at"`
+}
+
+type StationViewAssignmentDTO struct {
+	ID          uint      `json:"id"`
+	TemplateUID string    `json:"template_uid"`
+	TargetType  string    `json:"target_type"`
+	TargetKey   string    `json:"target_key"`
+	Priority    int       `json:"priority"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
 
 type DetectionTask struct {
 	ID                    uint                        `gorm:"column:id;primaryKey" json:"id"`
@@ -292,21 +335,22 @@ type StationViewTemplateRef struct {
 }
 
 type StationViewRegionDTO struct {
-	RegionKey  string `json:"region_key"`
-	RegionType string `json:"region_type"`
+	LayoutArea string `json:"layout_area"`
+	LayoutType string `json:"layout_type"`
 	LayoutJSON string `json:"layout_json,omitempty"`
 	SortOrder  int    `json:"sort_order"`
 }
 
 type StationViewItemDTO struct {
 	ItemUID          string                       `json:"item_uid"`
-	RegionKey        string                       `json:"region_key"`
+	LayoutArea       string                       `json:"layout_area"`
 	ItemType         string                       `json:"item_type"`
 	BindingType      string                       `json:"binding_type"`
 	BindingKey       string                       `json:"binding_key"`
 	BindingJSON      string                       `json:"binding_json,omitempty"`
 	DisplayJSON      string                       `json:"display_json,omitempty"`
 	SortOrder        int                          `json:"sort_order"`
+	Visible          bool                         `json:"visible"`
 	ResolvedBindings []StationViewResolvedBinding `json:"resolved_bindings,omitempty"`
 }
 
@@ -392,13 +436,14 @@ func (q *StationViewQuery) Effective(projectID uint, requestedEdgeInstanceID str
 	for _, item := range items {
 		dto := StationViewItemDTO{
 			ItemUID:     item.ItemUID,
-			RegionKey:   item.RegionKey,
+			LayoutArea:  itemLayoutArea(item),
 			ItemType:    item.ItemType,
 			BindingType: item.BindingType,
 			BindingKey:  item.BindingKey,
 			BindingJSON: item.BindingJSON,
 			DisplayJSON: item.DisplayJSON,
 			SortOrder:   item.SortOrder,
+			Visible:     item.Visible,
 		}
 		bindings, itemWarnings := resolveItemBindings(item, tags, currentRun, hasCurrentRun)
 		dto.ResolvedBindings = bindings
@@ -458,6 +503,43 @@ func (q *StationViewQuery) Effective(projectID uint, requestedEdgeInstanceID str
 	}, nil
 }
 
+func (q *StationViewQuery) ListStationViewTemplates(filter StationViewTemplateFilter) ([]StationViewTemplateListItem, error) {
+	db := q.db.Model(&StationViewTemplate{})
+	if status := strings.TrimSpace(filter.Status); status != "" {
+		db = db.Where("status = ?", status)
+	}
+	if ownerScope := strings.TrimSpace(filter.OwnerScope); ownerScope != "" {
+		db = db.Where("owner_scope = ?", ownerScope)
+	}
+	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
+		like := "%" + keyword + "%"
+		db = db.Where("template_code LIKE ? OR name LIKE ? OR display_name LIKE ?", like, like, like)
+	}
+	var templates []StationViewTemplate
+	if err := db.Order("updated_at DESC, id DESC").Find(&templates).Error; err != nil {
+		if isMissingTableError(err) {
+			return nil, ErrStationViewSyncNotReady
+		}
+		return nil, err
+	}
+	var assignments []StationViewAssignment
+	if err := q.db.Order("target_type ASC, target_key ASC, priority DESC, id ASC").Find(&assignments).Error; err != nil {
+		if isMissingTableError(err) {
+			return nil, ErrStationViewSyncNotReady
+		}
+		return nil, err
+	}
+	assignmentsByTemplate := make(map[string][]StationViewAssignmentDTO)
+	for _, assignment := range assignments {
+		assignmentsByTemplate[assignment.TemplateUID] = append(assignmentsByTemplate[assignment.TemplateUID], stationViewAssignmentDTO(assignment))
+	}
+	items := make([]StationViewTemplateListItem, 0, len(templates))
+	for _, template := range templates {
+		items = append(items, stationViewTemplateListItem(template, assignmentsByTemplate[template.TemplateUID]))
+	}
+	return items, nil
+}
+
 func (q *StationViewQuery) resolveTemplate(project Project, edgeInstanceID string) (StationViewTemplate, error) {
 	var assignments []StationViewAssignment
 	if err := q.db.Where("enabled = ?", true).Find(&assignments).Error; err != nil {
@@ -494,6 +576,9 @@ func (q *StationViewQuery) resolveTemplate(project Project, edgeInstanceID strin
 		}
 		return candidates[i].Assignment.ID < candidates[j].Assignment.ID
 	})
+	if len(candidates) > 1 && candidates[0].Score == candidates[1].Score && candidates[0].Template.Version == candidates[1].Template.Version {
+		return StationViewTemplate{}, ErrStationViewTemplateConflict
+	}
 	return candidates[0].Template, nil
 }
 
@@ -505,7 +590,7 @@ func (q *StationViewQuery) loadRegions(templateUID string) ([]StationViewRegion,
 
 func (q *StationViewQuery) loadItems(templateUID string) ([]StationViewItem, error) {
 	var items []StationViewItem
-	err := q.db.Where("template_uid = ? AND visible = ?", templateUID, true).Order("region_key ASC, sort_order ASC, id ASC").Find(&items).Error
+	err := q.db.Where("template_uid = ? AND visible = ?", templateUID, true).Order("layout_area ASC, sort_order ASC, id ASC").Find(&items).Error
 	return items, err
 }
 
@@ -656,13 +741,68 @@ func regionDTOs(regions []StationViewRegion) []StationViewRegionDTO {
 	result := make([]StationViewRegionDTO, 0, len(regions))
 	for _, region := range regions {
 		result = append(result, StationViewRegionDTO{
-			RegionKey:  region.RegionKey,
-			RegionType: region.RegionType,
+			LayoutArea: regionLayoutArea(region),
+			LayoutType: region.RegionType,
 			LayoutJSON: region.LayoutJSON,
 			SortOrder:  region.SortOrder,
 		})
 	}
 	return result
+}
+
+func itemLayoutArea(item StationViewItem) string {
+	if layoutArea := strings.TrimSpace(item.LayoutArea); layoutArea != "" {
+		return layoutArea
+	}
+	switch item.RegionKey {
+	case "left":
+		return StationViewLayoutAreaCardPool
+	case "right":
+		return StationViewLayoutAreaListLayout
+	default:
+		return strings.TrimSpace(item.RegionKey)
+	}
+}
+
+func regionLayoutArea(region StationViewRegion) string {
+	if layoutArea := strings.TrimSpace(region.LayoutArea); layoutArea != "" {
+		return layoutArea
+	}
+	switch region.RegionKey {
+	case "left":
+		return StationViewLayoutAreaCardPool
+	case "right":
+		return StationViewLayoutAreaListLayout
+	default:
+		return strings.TrimSpace(region.RegionKey)
+	}
+}
+
+func stationViewTemplateListItem(template StationViewTemplate, assignments []StationViewAssignmentDTO) StationViewTemplateListItem {
+	return StationViewTemplateListItem{
+		ID:            template.ID,
+		TemplateUID:   template.TemplateUID,
+		TemplateCode:  template.TemplateCode,
+		Name:          template.Name,
+		DisplayName:   template.DisplayName,
+		DisplayNameEN: template.DisplayNameEN,
+		DisplayNameJA: template.DisplayNameJA,
+		Version:       template.Version,
+		Status:        template.Status,
+		OwnerScope:    template.OwnerScope,
+		LayoutJSON:    template.LayoutJSON,
+		Assignments:   assignments,
+		CreatedAt:     template.CreatedAt,
+		UpdatedAt:     template.UpdatedAt,
+	}
+}
+
+func stationViewAssignmentDTO(assignment StationViewAssignment) StationViewAssignmentDTO {
+	return StationViewAssignmentDTO(assignment)
+}
+
+func isMissingTableError(err error) bool {
+	return classifySyncTableError(err) == "missing"
 }
 
 func firstDisplayName(displayName string, fallback string) string {

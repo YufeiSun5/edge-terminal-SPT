@@ -255,8 +255,8 @@ func TestStationViewBindingHelpers(t *testing.T) {
 	payload, err := json.Marshal(StationViewEffectiveResponse{
 		Project:        StationViewProjectRef{ID: 1, ProjectCode: "AC-01"},
 		Template:       StationViewTemplateRef{TemplateUID: "tpl", TemplateCode: "TPL", Version: 1},
-		Regions:        []StationViewRegionDTO{{RegionKey: "left", RegionType: "metric_grid", SortOrder: 1}},
-		Items:          []StationViewItemDTO{{ItemUID: "item", RegionKey: "left", BindingType: StationViewBindingVarName, ResolvedBindings: []StationViewResolvedBinding{tagBinding}}},
+		Regions:        []StationViewRegionDTO{{LayoutArea: StationViewLayoutAreaCardPool, LayoutType: "metric_grid", SortOrder: 1}},
+		Items:          []StationViewItemDTO{{ItemUID: "item", LayoutArea: StationViewLayoutAreaCardPool, BindingType: StationViewBindingVarName, ResolvedBindings: []StationViewResolvedBinding{tagBinding}}},
 		WSSubscription: StationViewWSSubscription{Topics: []string{"realtime.variables"}, ProjectID: 1, VarIDs: []string{"101"}},
 		HTTPCompanion:  StationViewHTTPCompanion{CurrentRunRequired: true},
 	})

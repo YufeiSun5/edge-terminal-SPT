@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -228,7 +229,9 @@ func extractReportRequestVarIDs(request DetectionRunReportRequest) []int64 {
 	}
 	if strings.TrimSpace(request.VariablesJSON) != "" {
 		var decoded any
-		if err := json.Unmarshal([]byte(request.VariablesJSON), &decoded); err == nil {
+		decoder := json.NewDecoder(bytes.NewReader([]byte(request.VariablesJSON)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&decoded); err == nil {
 			collectReportVarIDs(decoded, add)
 		}
 	}
@@ -243,9 +246,22 @@ func collectReportVarIDs(value any, add func(int64)) {
 			collectReportVarIDs(item, add)
 		}
 	case map[string]any:
+		hasTextID := false
+		for key, item := range typed {
+			lower := strings.ToLower(strings.TrimSpace(key))
+			if lower == "var_id_text" || lower == "varidtext" {
+				if parsed := reportVarIDFromAny(item); parsed > 0 {
+					add(parsed)
+					hasTextID = true
+				}
+			}
+		}
 		for key, item := range typed {
 			lower := strings.ToLower(strings.TrimSpace(key))
 			if lower == "var_id" || lower == "varid" {
+				if hasTextID {
+					continue
+				}
 				if parsed := reportVarIDFromAny(item); parsed > 0 {
 					add(parsed)
 				}
@@ -262,6 +278,9 @@ func collectReportVarIDs(value any, add func(int64)) {
 
 func reportVarIDFromAny(value any) int64 {
 	switch typed := value.(type) {
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
 	case float64:
 		return int64(typed)
 	case int64:

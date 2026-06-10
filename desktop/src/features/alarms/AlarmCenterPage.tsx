@@ -7,8 +7,8 @@ import type { Dayjs } from 'dayjs'
 import { useNavigate, useSearchParams } from 'react-router'
 import { ExternalLink, RefreshCw, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { getDetectionRun, getDevices, getLimitAlarms } from '@/features/edge-status/api'
-import type { Device, LimitAlarm, LimitAlarmListParams, LimitAlarmScope } from '@/shared/api/types'
+import { getDetectionRun, getLimitAlarms, getProjects } from '@/features/edge-status/api'
+import type { LimitAlarm, LimitAlarmListParams, LimitAlarmScope, Project } from '@/shared/api/types'
 import { languageCode } from '@/shared/i18n/language'
 import '../notifications/notification-center.css'
 
@@ -42,7 +42,7 @@ export function AlarmCenterPage() {
 
   const projectsQuery = useQuery({
     queryKey: ['alarm-center', 'projects'],
-    queryFn: getDevices,
+    queryFn: getProjects,
     staleTime: 30000,
     retry: false,
   })
@@ -94,12 +94,12 @@ export function AlarmCenterPage() {
     setSearchParams(params, { replace: true })
   }
 
-  function displayProject(project?: Pick<Device, 'device_code' | 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) {
+  function displayProject(project?: Pick<Project, 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) {
     if (!project) return ''
     const currentLanguage = languageCode(i18n.resolvedLanguage)
-    if (currentLanguage === 'en') return project.display_name_en || project.project_code || project.device_code
-    if (currentLanguage === 'ja') return project.display_name_ja || project.project_code || project.device_code
-    return project.display_name || project.name || project.project_code || project.device_code
+    if (currentLanguage === 'en') return project.display_name_en || project.project_code
+    if (currentLanguage === 'ja') return project.display_name_ja || project.project_code
+    return project.display_name || project.name || project.project_code
   }
 
   function alarmName(alarm: LimitAlarm) {

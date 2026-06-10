@@ -53,6 +53,7 @@ type ServiceClientSeed struct {
 
 type GatewaySeed struct {
 	ID               int    `json:"id"`
+	EdgeInstanceID   string `json:"edge_instance_id"`
 	Name             string `json:"name"`
 	Broker           string `json:"broker"`
 	ClientID         string `json:"client_id"`

@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +14,11 @@ import (
 	"spindle-edge/backend/internal/database"
 	"spindle-edge/backend/internal/models"
 	"spindle-edge/backend/internal/pipeline"
+	"spindle-edge/backend/internal/protocol/kio"
 	"spindle-edge/backend/internal/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 func TestRealtimeWSHandlerClientMessages(t *testing.T) {
@@ -50,6 +54,58 @@ func TestRealtimeWSHandlerClientMessages(t *testing.T) {
 	_, responses = handler.handleClientMessage(next, wsClientMessage{Type: "ping"}, principal)
 	if len(responses) != 1 || responses[0].Type != services.WSTypeHeartbeat {
 		t.Fatalf("unexpected ping response: %+v", responses)
+	}
+}
+
+func TestRealtimeWSHandlerWriteVariableErrorIncludesPartialResult(t *testing.T) {
+	projectID := uint(7)
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{{
+		VarID:         7101,
+		GatewayID:     1,
+		SourceType:    models.TagSourceMQTT,
+		SourcePath:    "pid_sp",
+		RawName:       "pid_sp",
+		ProjectID:     &projectID,
+		ProjectCode:   "AC-PID",
+		VarName:       "pid_sp",
+		JSONPath:      "pid_sp",
+		DataType:      "FLOAT",
+		ScaleFactor:   1,
+		RWMode:        models.RWModeReadWrite,
+		Writable:      true,
+		WriteSourceID: 1,
+		WritePath:     "pid_sp",
+		WriteDataType: "FLOAT",
+		Enabled:       true,
+		Discovered:    true,
+	}})
+	broker := &partialResultKIOBroker{waitErr: errors.New("ack timeout")}
+	handler := NewRealtimeWSHandler(
+		services.NewRealtimeWSService(tags, pipeline.NewTaskManager()),
+		nil,
+		nil,
+		services.NewVariableWriteService(nil, tags, services.NewKIOWriteService(broker), nil),
+	)
+	_, responses := handler.handleClientMessage(services.DefaultRealtimeSubscription(), wsClientMessage{
+		Type:      "command.write_variable",
+		RequestID: "req-pid-write",
+		CommandID: "cmd-pid-write",
+		Payload:   []byte(`{"var_id":"7101","value":12.5,"wait_ack":true,"ack_timeout_sec":1}`),
+	}, auth.Principal{AuthType: "user", UserID: 1, Username: "admin", Role: auth.RoleAdmin})
+	if len(responses) != 1 || responses[0].Type != services.WSTypeError {
+		t.Fatalf("unexpected write error response: %+v", responses)
+	}
+	payload, ok := responses[0].Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected error payload map, got %#v", responses[0].Payload)
+	}
+	result, ok := payload["result"].(services.VariableWriteResult)
+	if !ok {
+		t.Fatalf("expected partial variable write result, got %#v", payload["result"])
+	}
+	if result.VarIDText != "7101" || result.KIO == nil || !result.KIO.BrokerAccepted || result.KIO.Status != "ack_timeout_or_unmatched" {
+		t.Fatalf("unexpected partial result: %+v", result)
 	}
 }
 
@@ -276,6 +332,70 @@ func TestRealtimeWSHandlerWriteVariableByNameErrorsOnDuplicate(t *testing.T) {
 	}
 }
 
+func TestRealtimeWSHandlerServiceTokenEntry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	serviceToken := "edge-ws-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes:     auth.NormalizeScopes([]string{auth.ScopeServiceRealtimeRead}),
+		Enabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	projectID := uint(1)
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{{
+		VarID:       9101,
+		SourceType:  models.TagSourceMQTT,
+		GatewayID:   1,
+		SourceTopic: "topic/a",
+		SourcePath:  "$.temp",
+		RawName:     "raw_temp",
+		VarName:     "temp",
+		JSONPath:    "$.temp",
+		DataType:    "FLOAT",
+		ProjectID:   &projectID,
+		ProjectCode: "AC-WS-SVC",
+		Enabled:     true,
+	}})
+	if tag, ok := tags.Get(9101); ok {
+		tag.UpdateNumeric(26.5, time.Now(), 192)
+	}
+
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewRealtimeWSHandler(services.NewRealtimeWSService(tags, pipeline.NewTaskManager()), nil, repo).Register(group, authService)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	badURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/edge-control/ws?topic=realtime.variables&project_id=1"
+	if conn, resp, err := websocket.DefaultDialer.Dial(badURL, nil); err == nil {
+		_ = conn.Close()
+		t.Fatal("expected websocket auth failure without service token")
+	} else if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected websocket 401 without service token, resp=%v err=%v", resp, err)
+	}
+
+	headers := http.Header{"Authorization": []string{"Bearer " + serviceToken}}
+	conn, _, err := websocket.DefaultDialer.Dial(badURL, headers)
+	if err != nil {
+		t.Fatalf("service websocket dial failed: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	ready := readHandlerWSMessageOfType(t, conn, services.WSTypeConnectionReady)
+	if ready["type"] != services.WSTypeConnectionReady {
+		t.Fatalf("unexpected ready message: %#v", ready)
+	}
+	snapshot := readHandlerWSMessageOfType(t, conn, services.WSTypeRealtimeVariablesSnapshot)
+	if !strings.Contains(mustJSONForHandlerTest(t, snapshot), `"var_id_text":"9101"`) {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+}
+
 func TestSubscriptionFromQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -295,6 +415,65 @@ func TestSubscriptionFromQuery(t *testing.T) {
 	}
 }
 
+func readHandlerWSMessageOfType(t *testing.T, conn *websocket.Conn, want string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		var msg map[string]any
+		if err := conn.ReadJSON(&msg); err != nil {
+			continue
+		}
+		if msg["type"] == want {
+			return msg
+		}
+	}
+	t.Fatalf("websocket message type %s not received", want)
+	return nil
+}
+
+func mustJSONForHandlerTest(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
 func intPtrForHandlerTest(value int) *int {
 	return &value
+}
+
+type partialResultKIOBroker struct {
+	waitErr error
+}
+
+func (b *partialResultKIOBroker) Config(gatewayID int) (models.GatewayConfig, bool) {
+	if gatewayID != 1 {
+		return models.GatewayConfig{}, false
+	}
+	return models.GatewayConfig{
+		ID:               1,
+		QOS:              1,
+		KIOClientID:      "PID",
+		KIOWriter:        "writer",
+		SetDataTopic:     "setdata_PID",
+		WriteResultTopic: "setdata_result_PID",
+	}, true
+}
+
+func (b *partialResultKIOBroker) Publish(context.Context, int, string, []byte, byte, bool) error {
+	return nil
+}
+
+func (b *partialResultKIOBroker) Subscribe(context.Context, int, string, byte) error {
+	return nil
+}
+
+func (b *partialResultKIOBroker) PublishAndWaitKIOAck(context.Context, int, string, []byte, byte, bool, int64) (*kio.WriteAck, bool, error) {
+	if b.waitErr != nil {
+		return nil, true, b.waitErr
+	}
+	return &kio.WriteAck{QID: 1, ProcessStep: 100, Result: "ok", Success: true}, true, nil
 }

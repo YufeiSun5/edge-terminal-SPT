@@ -13,17 +13,21 @@ import (
 const StorageTargetWideTable = "wide_table"
 
 type VariableFilter struct {
-	GatewayID  *int
-	ProjectID  *uint
-	Enabled    *bool
-	Discovered *bool
-	SourceType string
-	Keyword    string
+	GatewayID   *int
+	ProjectID   *uint
+	Enabled     *bool
+	Discovered  *bool
+	Writable    *bool
+	SourceType  string
+	ProjectCode string
+	VarGroup    string
+	Keyword     string
 }
 
 type HistoryFilter struct {
 	ProjectID   *uint
 	TaskID      *uint
+	VarID       *int64
 	ProjectCode string
 	TestNo      string
 	Start       *time.Time
@@ -85,8 +89,17 @@ func (q *StationViewQuery) ListVariables(filter VariableFilter, edgeInstanceID s
 	if filter.Discovered != nil {
 		stmt = stmt.Where("sys_tags.discovered = ?", *filter.Discovered)
 	}
+	if filter.Writable != nil {
+		stmt = stmt.Where("sys_tags.writable = ?", *filter.Writable)
+	}
 	if strings.TrimSpace(filter.SourceType) != "" {
 		stmt = stmt.Where("sys_tags.source_type = ?", strings.TrimSpace(filter.SourceType))
+	}
+	if strings.TrimSpace(filter.ProjectCode) != "" {
+		stmt = stmt.Where("sys_tags.project_code = ?", strings.TrimSpace(filter.ProjectCode))
+	}
+	if strings.TrimSpace(filter.VarGroup) != "" {
+		stmt = stmt.Where("sys_tags.var_group = ?", strings.TrimSpace(filter.VarGroup))
 	}
 	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
 		like := "%" + keyword + "%"
@@ -124,6 +137,9 @@ func (q *StationViewQuery) QueryHistoryData(filter HistoryFilter, edgeInstanceID
 	}
 	if filter.TaskID != nil {
 		stmt = stmt.Where("rt_history_data.task_id = ?", *filter.TaskID)
+	}
+	if filter.VarID != nil {
+		stmt = stmt.Where("rt_history_data.var_id = ?", *filter.VarID)
 	}
 	if strings.TrimSpace(filter.ProjectCode) != "" {
 		stmt = stmt.Where("rt_history_data.project_code = ?", strings.TrimSpace(filter.ProjectCode))
@@ -205,6 +221,9 @@ func (q *StationViewQuery) historyStorageRoutes(filter HistoryFilter, edgeInstan
 	}
 	if filter.TaskID != nil {
 		stmt = stmt.Where("detection_run_storage_routes.task_id = ?", *filter.TaskID)
+	}
+	if filter.VarID != nil {
+		stmt = stmt.Where("detection_run_storage_routes.var_id = ?", *filter.VarID)
 	}
 	if filter.ProjectID != nil {
 		stmt = stmt.Where("detection_run_storage_routes.project_id = ?", *filter.ProjectID)

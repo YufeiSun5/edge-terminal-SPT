@@ -16,13 +16,17 @@ import (
 )
 
 type Worker struct {
-	repo *database.Repository
-	tags *pipeline.TagManager
-	seen sync.Map
+	repo           *database.Repository
+	tags           *pipeline.TagManager
+	edgeInstanceID string
+	seen           sync.Map
 }
 
-func Start(channels *pipeline.Channels, repo *database.Repository, tags *pipeline.TagManager) {
+func Start(channels *pipeline.Channels, repo *database.Repository, tags *pipeline.TagManager, edgeInstanceID ...string) {
 	worker := &Worker{repo: repo, tags: tags}
+	if len(edgeInstanceID) > 0 {
+		worker.edgeInstanceID = strings.TrimSpace(edgeInstanceID[0])
+	}
 	pipeline.GoRecovering("discovery", func() {
 		worker.run(channels)
 	})
@@ -43,7 +47,7 @@ func (w *Worker) run(channels *pipeline.Channels) {
 			log.Printf("[discovery] upsert failed gateway=%d count=%d err=%v", msg.GatewayID, len(discoveredTags), err)
 			continue
 		}
-		runtimeTags, err := w.repo.LoadTags()
+		runtimeTags, err := w.repo.LoadTags(w.edgeInstanceID)
 		if err != nil {
 			log.Printf("[discovery] runtime reload failed gateway=%d err=%v", msg.GatewayID, err)
 			continue

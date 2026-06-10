@@ -14,15 +14,21 @@ import (
 	"spindle-main-server/backend/internal/config"
 	"spindle-main-server/backend/internal/edgecontrol"
 	"spindle-main-server/backend/internal/query"
+	"spindle-main-server/backend/internal/reports"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
+	cfg.EnsureEdges()
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery(), cors())
 	stationViewQuery := query.NewStationViewQuery(db)
+	reportService := reports.NewService(db, stationViewQuery, reports.Options{
+		ArtifactDir: cfg.Reports.ArtifactDir,
+		MaxAttempts: cfg.Reports.MaxAttempts,
+	})
 	authService := auth.NewService(
 		auth.NewUserStore(db),
 		auth.NewJWTManager(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second),
@@ -32,12 +38,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			Getenv:              os.Getenv,
 		},
 	)
-	edgeControlClient := edgecontrol.NewClient(edgecontrol.Options{
-		BaseURL:         cfg.Edge.BaseURL,
-		ServiceTokenRef: cfg.Edge.ServiceTokenRef,
-		Enabled:         cfg.Edge.IsEnabled(),
-		Timeout:         10 * time.Second,
-	})
+	edges := newEdgeRegistry(cfg)
 
 	router.GET("/health", func(c *gin.Context) {
 		sqlDB, err := db.DB()
@@ -48,19 +49,23 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			"database_ok":      dbOK,
 			"edge_base_url":    cfg.Edge.BaseURL,
 			"edge_instance_id": cfg.Edge.EdgeInstanceID,
+			"edge_nodes":       edges.StatusNodes(cfg.Database.Name),
 			"time":             time.Now().Format(time.RFC3339Nano),
 		})
 	})
 
 	router.POST("/api/v1/auth/login", authService.Login)
 	router.POST("/api/v1/auth/sso-ticket/verify", authService.VerifySSOTicket)
+	router.GET("/api/v1/ws", authService.RequireUserFromBearerOrQuery(), authService.RequirePermission(auth.PermViewRealtime), mainServerRealtimeWSBridge(edges, stationViewQuery))
 	protected := router.Group("/api/v1")
 	protected.Use(authService.RequireUser())
 	protected.GET("/auth/me", authService.Me)
 	protected.POST("/auth/logout", authService.Logout)
 	protected.POST("/auth/sso-ticket", authService.RequirePermission(auth.PermSSOHandoff), authService.CreateSSOTicket)
 	protected.GET("/users", authService.RequirePermission(auth.PermManageUsers), authService.ListUsers)
-	protected.GET("/gateways", authService.RequirePermission(auth.PermViewRealtime), mainServerRuntimeDiagnosticUnsupported)
+	protected.GET("/gateways", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/gateways")
+	})
 	protected.GET("/gateway-configs", authService.RequirePermission(auth.PermManageGateways), func(c *gin.Context) {
 		gateways, err := stationViewQuery.ListGatewayConfigs()
 		if err != nil {
@@ -101,24 +106,23 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 	protected.PATCH("/system/database-config", authService.RequirePermission(auth.PermSystemSettings), mainServerDatabaseConfigUnsupported)
 	protected.POST("/system/database-config/test", authService.RequirePermission(auth.PermSystemSettings), mainServerDatabaseConfigUnsupported)
 	protected.GET("/runtime/channels", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeRuntimeRead(c, edgeControlClient, "api/v1/edge-control/runtime/channels")
+		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/runtime/channels")
 	})
 	protected.GET("/runtime/channels/detail", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeRuntimeRead(c, edgeControlClient, "api/v1/edge-control/runtime/channels/detail")
+		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/runtime/channels/detail")
 	})
 	protected.GET("/runtime/notifications", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeRuntimeRead(c, edgeControlClient, "api/v1/edge-control/runtime/notifications")
+		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/runtime/notifications")
 	})
 	protected.GET("/runtime/workers", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeRuntimeRead(c, edgeControlClient, "api/v1/edge-control/runtime/workers")
+		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/runtime/workers")
 	})
 	protected.GET("/task-modules", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeMetadataRead(c, edgeControlClient, "api/v1/edge-control/task-modules")
+		forwardEdgeMetadataRead(c, edges, stationViewQuery, "api/v1/edge-control/task-modules")
 	})
 	protected.GET("/task-flow-templates", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeMetadataRead(c, edgeControlClient, "api/v1/edge-control/task-flow-templates")
+		forwardEdgeMetadataRead(c, edges, stationViewQuery, "api/v1/edge-control/task-flow-templates")
 	})
-	protected.GET("/ws", authService.RequirePermission(auth.PermViewRealtime), mainServerRealtimeWSUnsupported)
 	protected.GET("/main-server/sync-diagnostics", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		diagnostics := stationViewQuery.SyncDiagnostics()
 		c.JSON(http.StatusOK, gin.H{
@@ -149,10 +153,184 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			"readiness":        readiness,
 		})
 	})
-	protected.GET("/realtime/variables", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
-		resp, err := edgeControlClient.ForwardRead(c.Request.Context(), "api/v1/edge-control/realtime/variables", c.Request.URL.RawQuery)
+	protected.POST("/main-server/report-jobs/enqueue", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		var req struct {
+			TaskID         uint   `json:"task_id"`
+			Force          bool   `json:"force"`
+			EdgeInstanceID string `json:"edge_instance_id"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.TaskID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "task_id is required", "code": "invalid_task_id"})
+			return
+		}
+		edgeInstanceID := strings.TrimSpace(req.EdgeInstanceID)
+		if edgeInstanceID == "" {
+			edgeInstanceID = edgeContext(c, cfg)
+		}
+		result, err := reportService.EnqueueTask(req.TaskID, edgeInstanceID, req.Force)
 		if err != nil {
-			writeEdgeRealtimeForwardError(c, err, edgeControlClient.ServiceTokenRef())
+			writeReportJobError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	})
+	protected.GET("/main-server/report-jobs", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		filter, err := parseReportJobFilter(c, cfg)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_query"})
+			return
+		}
+		jobs, total, limit, offset, err := reportService.ListJobs(filter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "report jobs query failed", "code": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": jobs, "total": total, "limit": limit, "offset": offset})
+	})
+	protected.GET("/main-server/report-jobs/:id", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		jobID, err := parseUintParam(c, "id")
+		if err != nil || jobID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report job id", "code": "invalid_report_job_id"})
+			return
+		}
+		job, err := reportService.GetJob(jobID)
+		if err != nil {
+			writeReportJobError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, job)
+	})
+	protected.GET("/main-server/report-jobs/:id/events", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		jobID, err := parseUintParam(c, "id")
+		if err != nil || jobID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report job id", "code": "invalid_report_job_id"})
+			return
+		}
+		limit, err := parseOptionalInt(c, "limit", 100)
+		if err != nil || limit <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit", "code": "invalid_limit"})
+			return
+		}
+		events, normalizedLimit, err := reportService.ListEvents(jobID, limit)
+		if err != nil {
+			writeReportJobError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": events, "count": len(events), "limit": normalizedLimit})
+	})
+	protected.GET("/main-server/report-jobs/:id/artifact", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		jobID, err := parseUintParam(c, "id")
+		if err != nil || jobID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report job id", "code": "invalid_report_job_id"})
+			return
+		}
+		path, name, contentType, err := reportService.Artifact(jobID)
+		if err != nil {
+			writeReportJobError(c, err)
+			return
+		}
+		c.Header("Content-Type", contentType)
+		c.FileAttachment(path, name)
+	})
+	protected.POST("/main-server/report-jobs/:id/retry", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		jobID, err := parseUintParam(c, "id")
+		if err != nil || jobID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report job id", "code": "invalid_report_job_id"})
+			return
+		}
+		job, err := reportService.RetryJob(jobID)
+		if err != nil {
+			writeReportJobError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, job)
+	})
+	protected.GET("/main-server/report-notifications", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromContext(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+			return
+		}
+		filter, err := parseReportNotificationFilter(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_query"})
+			return
+		}
+		items, total, limit, offset, err := reportService.ListNotifications(principal.UserID, filter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "report notifications query failed", "code": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "limit": limit, "offset": offset})
+	})
+	protected.GET("/main-server/report-notifications/unread-count", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromContext(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+			return
+		}
+		filter, err := parseReportNotificationFilter(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_query"})
+			return
+		}
+		count, err := reportService.UnreadNotificationCount(principal.UserID, filter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "report notification count failed", "code": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"unread": count})
+	})
+	protected.POST("/main-server/report-notifications/:id/read", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromContext(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+			return
+		}
+		notificationID, err := parseUintParam(c, "id")
+		if err != nil || notificationID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report notification id", "code": "invalid_report_notification_id"})
+			return
+		}
+		if err := reportService.MarkNotificationRead(principal.UserID, notificationID); err != nil {
+			writeReportNotificationError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	protected.POST("/main-server/report-notifications/read-all", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromContext(c)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized", "code": "unauthorized"})
+			return
+		}
+		filter, err := parseReportNotificationFilter(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_query"})
+			return
+		}
+		updated, err := reportService.MarkNotificationsRead(principal.UserID, filter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "report notifications read failed", "code": "internal_error"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "updated": updated})
+	})
+	protected.GET("/realtime/variables", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		if _, exists := c.GetQuery("device_id"); exists {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "unsupported_query_param: device_id",
+				"code":  "unsupported_query_param",
+			})
+			return
+		}
+		edgeClient, _, ok := resolveRealtimeEdgeClient(c, edges, stationViewQuery)
+		if !ok {
+			return
+		}
+		resp, err := edgeClient.ForwardRead(c.Request.Context(), "api/v1/edge-control/realtime/variables", edgeForwardRawQuery(c.Request.URL.Query()))
+		if err != nil {
+			writeEdgeRealtimeForwardError(c, err, edgeClient.ServiceTokenRef())
 			return
 		}
 		contentType := resp.ContentType
@@ -210,7 +388,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		c.JSON(http.StatusOK, flows)
 	})
 	protected.GET("/task-flows/runtime", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		forwardEdgeRuntimeRead(c, edgeControlClient, "api/v1/edge-control/task-flows/runtime")
+		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/task-flows/runtime")
 	})
 	protected.GET("/task-flows/:id", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		flowID, err := parseUintParam(c, "id")
@@ -351,8 +529,44 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		}
 		c.JSON(http.StatusOK, gin.H{"unread": count})
 	})
-	protected.POST("/notifications/:id/read", authService.RequirePermission(auth.PermViewRealtime), mainServerNotificationReadUnsupported)
-	protected.POST("/notifications/read-all", authService.RequirePermission(auth.PermViewRealtime), mainServerNotificationReadUnsupported)
+	protected.POST("/notifications/:id/read", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromContext(c)
+		if !ok || principal.AuthType != "user" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "login required", "code": "unauthorized"})
+			return
+		}
+		notificationID, err := parseUintParam(c, "id")
+		if err != nil || notificationID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid notification id", "code": "invalid_notification_id"})
+			return
+		}
+		if err := stationViewQuery.MarkNotificationRead(principal.UserID, notificationID, edgeContext(c, cfg)); err != nil {
+			writeSyncedReadError(c, err, "notification read update failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	protected.POST("/notifications/read-all", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		principal, ok := auth.PrincipalFromContext(c)
+		if !ok || principal.AuthType != "user" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "login required", "code": "unauthorized"})
+			return
+		}
+		filter, err := parseNotificationFilter(c, principal.UserID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+				"code":  "invalid_query",
+			})
+			return
+		}
+		updated, err := stationViewQuery.MarkUserNotificationsRead(filter, edgeContext(c, cfg))
+		if err != nil {
+			writeSyncedReadError(c, err, "notifications read update failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "updated": updated})
+	})
 
 	router.GET("/api/v1/main-server/status", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -360,19 +574,31 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			"query_source":        "local_mysql",
 			"edge_control_target": cfg.Edge.BaseURL,
 			"query_proxy_enabled": false,
-			"edge_nodes": []gin.H{{
-				"edge_instance_id":  cfg.Edge.EdgeInstanceID,
-				"base_url":          cfg.Edge.BaseURL,
-				"service_token_ref": cfg.Edge.ServiceTokenRef,
-				"enabled":           cfg.Edge.IsEnabled(),
-				"sync_database":     cfg.Database.Name,
-			}},
+			"edge_nodes":          edges.StatusNodes(cfg.Database.Name),
 		})
 	})
 
 	protected.GET("/projects", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
-		edgeInstanceID := edgeContext(c, cfg)
-		projects, err := stationViewQuery.ListProjects(edgeInstanceID)
+		edgeInstanceID := strings.TrimSpace(c.Query("edge_instance_id"))
+		includeLegacy := false
+		if edgeInstanceID == "" {
+			edgeInstanceID = edgeContext(c, cfg)
+			includeLegacy = true
+		}
+		limit, err := parseOptionalPositiveInt(c, "limit", 0)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid limit", "code": "invalid_limit"})
+			return
+		}
+		offset := 0
+		if rawOffset := strings.TrimSpace(c.Query("offset")); rawOffset != "" {
+			offset, err = strconv.Atoi(rawOffset)
+		}
+		if err != nil || offset < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset", "code": "invalid_offset"})
+			return
+		}
+		projects, err := stationViewQuery.ListProjects(edgeInstanceID, includeLegacy, limit, offset)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "projects query failed",
@@ -635,19 +861,19 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		c.JSON(http.StatusOK, gin.H{"items": notes, "count": len(notes), "limit": normalizedLimit})
 	})
 	protected.POST("/detection-runs", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
-		forwardUserDetectionControl(c, edgeControlClient, "api/v1/edge-control/detection/start", "")
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/start", "")
 	})
 	protected.POST("/detection-runs/:id/stop", authService.RequirePermission(auth.PermStopDetection), func(c *gin.Context) {
-		forwardUserDetectionControl(c, edgeControlClient, "api/v1/edge-control/detection/stop", "id")
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/stop", "id")
 	})
 	protected.POST("/detection-runs/:id/abnormal-stop", authService.RequirePermission(auth.PermStopDetection), func(c *gin.Context) {
-		forwardUserDetectionControl(c, edgeControlClient, "api/v1/edge-control/detection/abnormal-stop", "id")
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/abnormal-stop", "id")
 	})
 	protected.POST("/detection-runs/:id/pause", authService.RequirePermission(auth.PermStopDetection), func(c *gin.Context) {
-		forwardUserDetectionControl(c, edgeControlClient, "api/v1/edge-control/detection/pause", "id")
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/pause", "id")
 	})
 	protected.POST("/detection-runs/:id/resume", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
-		forwardUserDetectionControl(c, edgeControlClient, "api/v1/edge-control/detection/resume", "id")
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/resume", "id")
 	})
 	protected.POST("/detection-runs/:id/notes", authService.RequirePermission(auth.PermStartDetection), mainServerDetectionNoteWriteUnsupported)
 
@@ -660,15 +886,49 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			})
 			return
 		}
-		response, err := stationViewQuery.Effective(uint(projectID), edgeContext(c, cfg))
+		edgeInstanceID, ok := resolveStationViewEdgeInstanceID(c, edges, stationViewQuery, uint(projectID))
+		if !ok {
+			return
+		}
+		response, err := stationViewQuery.Effective(uint(projectID), edgeInstanceID)
 		if err != nil {
 			writeStationViewError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, response)
 	})
+	protected.GET("/station-view/templates", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		templates, err := stationViewQuery.ListStationViewTemplates(query.StationViewTemplateFilter{
+			Status:     c.Query("status"),
+			OwnerScope: c.Query("owner_scope"),
+			Keyword:    c.Query("keyword"),
+		})
+		if err != nil {
+			writeStationViewError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"items":        templates,
+			"count":        len(templates),
+			"query_source": "synced_mysql",
+		})
+	})
+	protected.POST("/station-view/reload", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		diagnostics := stationViewQuery.SyncDiagnostics()
+		status := http.StatusOK
+		if diagnostics.OverallStatus != "ok" {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{
+			"ok":           diagnostics.OverallStatus == "ok",
+			"reload_mode":  "sync_diagnostics_only",
+			"query_source": "synced_mysql",
+			"diagnostics":  diagnostics,
+			"next_action":  "wait for database synchronization to copy sys_station_view_* rows; main-server reload does not call edge-control",
+		})
+	})
 
-	registerEdgeControlRoutes(router, edgeControlClient)
+	registerEdgeControlRoutes(router, edges, stationViewQuery)
 
 	router.Any("/api/v1/edge-proxy/*path", func(c *gin.Context) {
 		if isWriteMethod(c.Request.Method) {
@@ -706,7 +966,7 @@ func cors() gin.HandlerFunc {
 	}
 }
 
-func registerEdgeControlRoutes(router *gin.Engine, client *edgecontrol.Client) {
+func registerEdgeControlRoutes(router *gin.Engine, registry *edgeRegistry, stationViewQuery *query.StationViewQuery) {
 	for _, route := range []string{
 		"/api/v1/edge-control/detection/start",
 		"/api/v1/edge-control/detection/stop",
@@ -721,12 +981,12 @@ func registerEdgeControlRoutes(router *gin.Engine, client *edgecontrol.Client) {
 	} {
 		path := route
 		router.POST(path, func(c *gin.Context) {
-			forwardEdgeControl(c, client, strings.TrimPrefix(path, "/"))
+			forwardEdgeControl(c, registry, stationViewQuery, strings.TrimPrefix(path, "/"))
 		})
 	}
 }
 
-func forwardEdgeControl(c *gin.Context, client *edgecontrol.Client, path string) {
+func forwardEdgeControl(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery, path string) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 4*1024*1024))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -735,8 +995,12 @@ func forwardEdgeControl(c *gin.Context, client *edgecontrol.Client, path string)
 		})
 		return
 	}
+	client, _, ok := resolveControlEdgeClient(c, registry, stationViewQuery, body)
+	if !ok {
+		return
+	}
 	commandID := firstNonEmpty(c.GetHeader("X-Command-ID"), commandIDFromBody(body))
-	resp, err := client.Forward(c.Request.Context(), path, c.Request.URL.RawQuery, body, commandID)
+	resp, err := client.Forward(c.Request.Context(), path, edgeForwardRawQuery(c.Request.URL.Query()), body, commandID)
 	if err != nil {
 		writeEdgeControlForwardError(c, err, client.ServiceTokenRef())
 		return
@@ -748,7 +1012,7 @@ func forwardEdgeControl(c *gin.Context, client *edgecontrol.Client, path string)
 	c.Data(resp.StatusCode, contentType, resp.Body)
 }
 
-func forwardUserDetectionControl(c *gin.Context, client *edgecontrol.Client, edgePath string, taskIDParam string) {
+func forwardUserDetectionControl(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery, edgePath string, taskIDParam string) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 4*1024*1024))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -763,6 +1027,10 @@ func forwardUserDetectionControl(c *gin.Context, client *edgecontrol.Client, edg
 			"error": "detection control request body is invalid",
 			"code":  "invalid_payload",
 		})
+		return
+	}
+	client, _, ok := resolveControlEdgeClient(c, registry, stationViewQuery, payload)
+	if !ok {
 		return
 	}
 	principal, ok := auth.PrincipalFromContext(c)
@@ -782,7 +1050,7 @@ func forwardUserDetectionControl(c *gin.Context, client *edgecontrol.Client, edg
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "edge control envelope build failed", "code": "internal_error"})
 		return
 	}
-	resp, err := client.Forward(c.Request.Context(), edgePath, c.Request.URL.RawQuery, envelope, commandID)
+	resp, err := client.Forward(c.Request.Context(), edgePath, edgeForwardRawQuery(c.Request.URL.Query()), envelope, commandID)
 	if err != nil {
 		writeEdgeControlForwardError(c, err, client.ServiceTokenRef())
 		return
@@ -872,8 +1140,12 @@ func writeEdgeRealtimeForwardError(c *gin.Context, err error, serviceTokenRef st
 	}
 }
 
-func forwardEdgeMetadataRead(c *gin.Context, client *edgecontrol.Client, path string) {
-	resp, err := client.ForwardRead(c.Request.Context(), path, c.Request.URL.RawQuery)
+func forwardEdgeMetadataRead(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery, path string) {
+	client, _, ok := resolveRealtimeEdgeClient(c, registry, stationViewQuery)
+	if !ok {
+		return
+	}
+	resp, err := client.ForwardRead(c.Request.Context(), path, edgeForwardRawQuery(c.Request.URL.Query()))
 	if err != nil {
 		writeEdgeMetadataForwardError(c, err, client.ServiceTokenRef())
 		return
@@ -881,8 +1153,12 @@ func forwardEdgeMetadataRead(c *gin.Context, client *edgecontrol.Client, path st
 	writeForwardResponse(c, resp)
 }
 
-func forwardEdgeRuntimeRead(c *gin.Context, client *edgecontrol.Client, path string) {
-	resp, err := client.ForwardRead(c.Request.Context(), path, c.Request.URL.RawQuery)
+func forwardEdgeRuntimeRead(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery, path string) {
+	client, _, ok := resolveRealtimeEdgeClient(c, registry, stationViewQuery)
+	if !ok {
+		return
+	}
+	resp, err := client.ForwardRead(c.Request.Context(), path, edgeForwardRawQuery(c.Request.URL.Query()))
 	if err != nil {
 		writeEdgeRuntimeForwardError(c, err, client.ServiceTokenRef())
 		return
@@ -962,39 +1238,12 @@ func writeQueryProxyDisabledDiagnostic(c *gin.Context) {
 	})
 }
 
-func mainServerNotificationReadUnsupported(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":       "main server notification read state is read-only",
-		"code":        "main_server_notification_read_unsupported",
-		"path":        c.Request.URL.Path,
-		"next_action": "mark notifications read on the edge backend, or add a main-server-owned notification read-state table before enabling this write",
-	})
-}
-
 func mainServerDetectionNoteWriteUnsupported(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"error":       "main server detection notes are read-only",
 		"code":        "main_server_detection_note_write_unsupported",
 		"path":        c.Request.URL.Path,
 		"next_action": "append detection notes on the edge backend, or add a controlled edge command before enabling main-server note writes",
-	})
-}
-
-func mainServerRuntimeDiagnosticUnsupported(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":       "main server does not own edge runtime diagnostics",
-		"code":        "main_server_runtime_diagnostic_unsupported",
-		"path":        c.Request.URL.Path,
-		"next_action": "query the edge backend runtime diagnostics through an explicit service-token endpoint before showing live queue state on the main server",
-	})
-}
-
-func mainServerRealtimeWSUnsupported(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":       "main server realtime websocket bridge is not available in this stage",
-		"code":        "main_server_realtime_ws_unsupported",
-		"path":        c.Request.URL.Path,
-		"next_action": "use GET /api/v1/realtime/variables for the current main-server realtime mirror, or add a service-token websocket bridge before enabling live websocket subscriptions",
 	})
 }
 
@@ -1108,6 +1357,9 @@ func parseDetectionRunFilter(c *gin.Context) (query.DetectionRunFilter, error) {
 
 func parseVariableFilter(c *gin.Context) (query.VariableFilter, error) {
 	var filter query.VariableFilter
+	if _, exists := c.GetQuery("device_id"); exists {
+		return filter, errors.New("unsupported_query_param: device_id")
+	}
 	if raw := strings.TrimSpace(c.Query("gateway_id")); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil {
@@ -1137,7 +1389,16 @@ func parseVariableFilter(c *gin.Context) (query.VariableFilter, error) {
 		}
 		filter.Discovered = &value
 	}
+	if raw := strings.TrimSpace(c.Query("writable")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, errors.New("invalid writable")
+		}
+		filter.Writable = &value
+	}
 	filter.SourceType = strings.TrimSpace(c.Query("source_type"))
+	filter.ProjectCode = strings.TrimSpace(c.Query("project_code"))
+	filter.VarGroup = strings.TrimSpace(c.Query("var_group"))
 	filter.Keyword = strings.TrimSpace(c.Query("keyword"))
 	return filter, nil
 }
@@ -1441,6 +1702,106 @@ func parseReportTemplateFilter(c *gin.Context) (query.ReportTemplateFilter, erro
 	return filter, nil
 }
 
+func parseReportJobFilter(c *gin.Context, cfg *config.Config) (reports.JobFilter, error) {
+	limit, err := parseOptionalInt(c, "limit", 50)
+	if err != nil {
+		return reports.JobFilter{}, err
+	}
+	if limit <= 0 {
+		return reports.JobFilter{}, errors.New("limit must be positive")
+	}
+	offset, err := parseOptionalInt(c, "offset", 0)
+	if err != nil {
+		return reports.JobFilter{}, err
+	}
+	if offset < 0 {
+		return reports.JobFilter{}, errors.New("offset must be non-negative")
+	}
+	taskID, err := parseOptionalUintPointer(c, "task_id")
+	if err != nil {
+		return reports.JobFilter{}, err
+	}
+	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
+	if err := validateReportJobStatus(status); err != nil {
+		return reports.JobFilter{}, err
+	}
+	edgeInstanceID := strings.TrimSpace(c.Query("edge_instance_id"))
+	if edgeInstanceID == "" {
+		edgeInstanceID = strings.TrimSpace(cfg.Edge.EdgeInstanceID)
+	}
+	return reports.JobFilter{
+		Status:         status,
+		TaskID:         taskID,
+		EdgeInstanceID: edgeInstanceID,
+		Limit:          limit,
+		Offset:         offset,
+	}, nil
+}
+
+func validateReportJobStatus(status string) error {
+	if status == "" {
+		return nil
+	}
+	switch status {
+	case reports.StatusPending, reports.StatusWaiting, reports.StatusRunning, reports.StatusSuccess, reports.StatusFailed:
+		return nil
+	default:
+		return errors.New("invalid report job status")
+	}
+}
+
+func parseReportNotificationFilter(c *gin.Context) (reports.NotificationFilter, error) {
+	limit, err := parseOptionalInt(c, "limit", 50)
+	if err != nil {
+		return reports.NotificationFilter{}, err
+	}
+	if limit <= 0 {
+		return reports.NotificationFilter{}, errors.New("limit must be positive")
+	}
+	offset, err := parseOptionalInt(c, "offset", 0)
+	if err != nil {
+		return reports.NotificationFilter{}, err
+	}
+	if offset < 0 {
+		return reports.NotificationFilter{}, errors.New("offset must be non-negative")
+	}
+	jobID, err := parseOptionalUint64Pointer(c, "job_id")
+	if err != nil {
+		return reports.NotificationFilter{}, err
+	}
+	level := strings.ToLower(strings.TrimSpace(c.Query("level")))
+	if err := validateReportNotificationLevel(level); err != nil {
+		return reports.NotificationFilter{}, err
+	}
+	var unread *bool
+	if raw := strings.TrimSpace(c.Query("unread")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return reports.NotificationFilter{}, errors.New("unread must be a boolean")
+		}
+		unread = &value
+	}
+	return reports.NotificationFilter{
+		JobID:  jobID,
+		Level:  level,
+		Unread: unread,
+		Limit:  limit,
+		Offset: offset,
+	}, nil
+}
+
+func validateReportNotificationLevel(level string) error {
+	if level == "" {
+		return nil
+	}
+	switch level {
+	case "info", "success", "warning", "error":
+		return nil
+	default:
+		return errors.New("invalid report notification level")
+	}
+}
+
 func parseStorageRouteFilter(c *gin.Context) (query.StorageRouteFilter, error) {
 	var filter query.StorageRouteFilter
 	projectID, err := parseOptionalUintPointer(c, "project_id")
@@ -1565,6 +1926,18 @@ func parseOptionalUintPointer(c *gin.Context, key string) (*uint, error) {
 	return &parsed, nil
 }
 
+func parseOptionalUint64Pointer(c *gin.Context, key string) (*uint64, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		return nil, errors.New(key + " must be positive")
+	}
+	return &value, nil
+}
+
 func parseOptionalInt64Pointer(c *gin.Context, key string) (*int64, error) {
 	raw := strings.TrimSpace(c.Query(key))
 	if raw == "" {
@@ -1612,12 +1985,48 @@ func writeSyncedReadError(c *gin.Context, err error, message string) {
 	}
 }
 
-func writeStationViewError(c *gin.Context, err error) {
+func writeReportJobError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found", "code": "not_found"})
+	case errors.Is(err, reports.ErrReportNotRequested):
+		c.JSON(http.StatusConflict, gin.H{"error": "report was not requested for this detection run", "code": "report_not_requested"})
+	case errors.Is(err, reports.ErrJobNotRetryable):
+		c.JSON(http.StatusConflict, gin.H{"error": "report job is not retryable", "code": "report_job_not_retryable"})
+	case errors.Is(err, reports.ErrArtifactNotReady):
+		c.JSON(http.StatusConflict, gin.H{"error": "report artifact is not ready", "code": "report_artifact_not_ready"})
+	case errors.Is(err, reports.ErrArtifactUnavailable):
+		c.JSON(http.StatusNotFound, gin.H{"error": "report artifact is unavailable", "code": "report_artifact_unavailable"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "report job operation failed", "code": "internal_error"})
+	}
+}
+
+func writeReportNotificationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found", "code": "not_found"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "report notification operation failed", "code": "internal_error"})
+	}
+}
+
+func writeStationViewError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, query.ErrEdgeInstanceMismatch):
 		c.JSON(http.StatusNotFound, gin.H{
-			"error": "station view project or edge context not found",
-			"code":  "not_found",
+			"error": "station view project does not belong to requested edge instance",
+			"code":  "station_view_edge_instance_mismatch",
+		})
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "station view project not found",
+			"code":  "station_view_project_not_found",
+		})
+	case errors.Is(err, query.ErrStationViewTemplateConflict):
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "station view template assignment conflict",
+			"code":  "station_view_template_conflict",
 		})
 	case errors.Is(err, query.ErrStationViewSyncNotReady):
 		c.JSON(http.StatusServiceUnavailable, gin.H{

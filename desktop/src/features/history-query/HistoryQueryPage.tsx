@@ -41,7 +41,7 @@ export function HistoryQueryPage() {
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialTaskId = positiveNumber(searchParams.get('task_id'))
-  const initialProjectId = positiveNumber(searchParams.get('project_id') ?? searchParams.get('device_id'))
+  const initialProjectId = positiveNumber(searchParams.get('project_id'))
   const initialTestNo = searchParams.get('test_no') || ''
   const [selectedTaskId, setSelectedTaskId] = useState<number | undefined>(initialTaskId)
   const [projectIdText, setProjectIdText] = useState(initialProjectId ? String(initialProjectId) : '')

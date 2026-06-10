@@ -1,6 +1,6 @@
 # 边缘端 HTTP 主服务器控制通道设计
 
-更新时间：2026-06-02
+更新时间：2026-06-04
 
 ## 结论
 
@@ -32,11 +32,14 @@
 | `POST` | `/api/v1/edge-control/detection/update-limits` | `edge.detection.limit_update` | 已实现。运行中调整检测运行快照限值，并刷新 running runtime map。 |
 | `POST` | `/api/v1/edge-control/detection/refresh-features` | `edge.feature.refresh` | 已实现。刷新 `detection_run_features`，写 `features_updated` 事件。 |
 | `POST` | `/api/v1/edge-control/detection/report-requests` | `edge.report.request` | 已实现。为已有检测任务追加 `detection_run_report_requests` 请求快照。 |
+| `GET` | `/api/v1/edge-control/commands/:command_id` | `service_runtime_read` | 已实现。按当前 service `client_id + command_id` 读取命令生命周期状态，返回状态、结果、错误和时间；不返回 `request_json`。 |
 | `GET` | `/api/v1/edge-control/realtime/variables` | `service_realtime_read` | 已实现。只读 `TagManager` 实时快照，支持与用户侧 `/api/v1/realtime/variables` 相同的查询过滤；不写 `edge_control_commands`。 |
+| `GET` | `/api/v1/edge-control/ws` | `service_realtime_read` | 已实现。供主服务器 WS facade 使用，复用边缘端 WS message 类型、订阅、快照、心跳和 ack/error；主服务器浏览器不得直连。 |
+| `GET` | `/api/v1/edge-control/gateways` | `service_runtime_read` | 已实现。只读边缘端 MQTT/KIO gateway 运行态 `mqtt.Manager.Status()`，供主服务器 `/api/v1/gateways` 镜像在线/离线和 last_error；不读同步库、不写命令生命周期。 |
 | `GET` | `/api/v1/edge-control/task-modules`、`/task-flow-templates` | `service_metadata_read` | 已实现。只读边缘端任务模块和任务模板元数据，供主服务器任务页复用后端真实 schema；不写 `edge_control_commands`。 |
 | `GET` | `/api/v1/edge-control/runtime/channels`、`/runtime/channels/detail`、`/runtime/notifications`、`/runtime/workers`、`/task-flows/runtime` | `service_runtime_read` | 已实现。只读边缘端核心队列、通知 hub、worker 生命周期和任务流队列诊断，供主服务器设置页显示真实边缘运行态；不写 `edge_control_commands`。 |
 
-当前首版已覆盖检测启动、正常停止、异常停止、暂停、恢复、变量写入、运行态报警静音、运行中限值调整、特征值刷新、报表请求独立登记、只读实时镜像、只读任务元数据镜像和只读运行诊断镜像。主服务器最小后端调用链也已实现：`main-server/backend` 提供同名白名单 `POST /api/v1/edge-control/*` 路由，读取 `edge.service_token_ref` 指向的环境变量作为 Bearer service token，透传 `X-Command-ID`、请求体、边缘端状态码和 JSON 响应；同时提供受用户 JWT 保护的 `GET /api/v1/realtime/variables`、`GET /api/v1/task-modules`、`GET /api/v1/task-flow-templates`、`GET /api/v1/runtime/*` 和 `GET /api/v1/task-flows/runtime`，用同一个 service-token client 转发到边缘端对应只读 `/api/v1/edge-control/*` endpoint。为支持一套前端，主服务器还提供 `POST /api/v1/detection-runs`、`POST /api/v1/detection-runs/:id/stop`、`POST /api/v1/detection-runs/:id/abnormal-stop`、`POST /api/v1/detection-runs/:id/pause`、`POST /api/v1/detection-runs/:id/resume` 用户侧同名检测控制别名：这些路由先校验主服务器用户 JWT 和 `start_detection/stop_detection` 权限，再把普通前端 payload 包装成 `{command_id, operator_id, operator_name, operator_username, payload}` 调用边缘端 edge-control；缺 `X-Command-ID` 时生成 `main-*` 命令 ID，任务类路径会把 URL `:id` 写入 `payload.task_id`。现场组合 smoke 仍是后续扩展。
+当前首版已覆盖检测启动、正常停止、异常停止、暂停、恢复、变量写入、运行态报警静音、运行中限值调整、特征值刷新、报表请求独立登记、命令生命周期只读查询、只读实时镜像、只读网关运行态镜像、只读任务元数据镜像、只读运行诊断镜像和主服务器 WS facade 的边缘端 service-token WS 入口。主服务器最小后端调用链也已实现：`main-server/backend` 提供同名白名单 `POST /api/v1/edge-control/*` 路由，先从显式 `edge_instance_id` query/header、HTTP envelope 顶层字段和 nested `payload.project_id/task_id/var_id/project_code/var_name` 解析目标 edge，再读取该 edge 的 `service_token_ref` 指向的环境变量作为 Bearer service token，透传 `X-Command-ID`、请求体、边缘端状态码和 JSON 响应；同时提供受用户 JWT 保护的 `GET /api/v1/realtime/variables`、`GET /api/v1/gateways`、`GET /api/v1/task-modules`、`GET /api/v1/task-flow-templates`、`GET /api/v1/runtime/*` 和 `GET /api/v1/task-flows/runtime`，用同一个 service-token client 转发到边缘端对应只读 `/api/v1/edge-control/*` endpoint。`GET /api/v1/ws` 是主服务器统一 WS facade：它先校验主服务器 JWT/权限，浏览器可用 `access_token` 查询参数建连；实时订阅按 URL 中的 `project_id/task_id/edge_instance_id` 选择边缘并桥接边缘端 `/api/v1/edge-control/ws`，补 `edge_instance_id`。为支持一套前端，主服务器还提供 `POST /api/v1/detection-runs`、`POST /api/v1/detection-runs/:id/stop`、`POST /api/v1/detection-runs/:id/abnormal-stop`、`POST /api/v1/detection-runs/:id/pause`、`POST /api/v1/detection-runs/:id/resume` 用户侧同名检测控制别名：这些路由先校验主服务器用户 JWT 和 `start_detection/stop_detection` 权限，再把普通前端 payload 包装成 `{command_id, operator_id, operator_name, operator_username, payload}` 调用边缘端 edge-control；缺 `X-Command-ID` 时生成 `main-*` 命令 ID，任务类路径会把 URL `:id` 写入 `payload.task_id`。主服务器 WS 中的 `command.detection.start/stop/abnormal_stop/pause/resume` 和 `command.write_variable` 每条消息都会按 command payload 解析目标 edge，再走同一条 edge-control HTTP 命令通道，不在主服务器新增业务执行器。2026-06-04 现场一主二边缘 payload 自动路由 smoke 已通过，覆盖 HTTP payload-only、WS command-only、mismatch、无目标多边缘错误、命令生命周期和 edge-2 停止负向；同日主服务器 gateway runtime mirror smoke 也已通过，证明 edge-1/edge-2 网关运行态按边缘隔离返回。
 
 主服务器 raw write proxy 已禁用。普通未迁移写路径和 `/api/v1/edge-proxy/*path` 写方法返回 `501 edge_control_required`，不再允许绕过边缘端 service token、scope、幂等、操作者映射和审计模型。
 
@@ -75,7 +78,7 @@ X-Command-ID: <uuid>
 X-Request-Time: <iso8601>
 ```
 
-只读实时镜像只要求 `Authorization: Bearer <service_token>`；它不需要 `X-Command-ID`，因为没有幂等写入或现场状态改变。
+只读实时镜像和边缘端 service-token WS 入口只要求 `Authorization: Bearer <service_token>`；它们不需要 `X-Command-ID`，因为订阅本身没有幂等写入或现场状态改变。若主服务器 WS 收到 `command.*`，它必须转成对应 edge-control HTTP 命令，补 `command_id` 后再执行。
 
 如果现场网络不可完全信任，再增加 HMAC 防重放：
 
@@ -213,13 +216,39 @@ HTTP 控制命令必须携带操作者信息：
   "ok": false,
   "command_id": "uuid",
   "status": "failed",
-  "error": {
+ "error": {
     "code": "permission_denied",
     "message": "missing scope edge.variable.write",
     "retryable": false
   }
 }
 ```
+
+写变量等现场命令如果已经形成部分执行结果，失败响应会额外带 `result`，用于区分“未发出”“已被 broker 接收但 KIO 未确认”“KIO 拒绝”等状态。例如 `POST /api/v1/edge-control/variables/write` 在 `wait_ack=true` 超时时可能返回 `504`，同时带：
+
+```json
+{
+  "ok": false,
+  "command_id": "uuid",
+  "status": "failed",
+  "error": {
+    "code": "command_failed",
+    "message": "ack timeout",
+    "retryable": true
+  },
+  "result": {
+    "var_id_text": "9101",
+    "broker_accepted": true,
+    "project_confirmed": false,
+    "kio": {
+      "status": "ack_timeout_or_unmatched",
+      "broker_accepted": true
+    }
+  }
+}
+```
+
+主服务器 WS facade 会把该部分结果透传到错误帧的 `payload.result`，边缘端用户 WS 写命令错误帧也使用同样结构。页面最终 readback 仍应以后续 `realtime.variables` 快照为准。
 
 建议错误码：
 
@@ -286,6 +315,9 @@ HTTP 控制 handler 只做鉴权、幂等、参数校验、审计和响应映射
 | `edge_control_token_missing` | `503` | 未配置 `edge.service_token_ref` 指向的环境变量。 |
 | `edge_control_disabled` | `503` | 主服务器配置禁用了 edge control。 |
 | `edge_backend_unavailable` | `502` | 边缘端后端不可达或网络失败。 |
+| `control_edge_instance_mismatch` | `404` | 显式 `edge_instance_id` 与 payload 解析出的项目、任务或变量归属 edge 不一致。 |
+| `control_edge_instance_unresolved` | `409` | 多边缘配置下，请求既没有显式 edge，也无法从 payload 解析唯一目标 edge。 |
+| `control_target_not_found` | `404` | payload 指向的项目、任务或变量不存在，且不能安全落到单边缘兼容 fallback。 |
 | `edge_control_required` | `501` | 调用了普通写代理路径，必须改用 `/api/v1/edge-control/*`。 |
 | `edge_realtime_token_missing` | `503` | 主服务器实时镜像缺少 `edge.service_token_ref` 指向的 service token。 |
 | `edge_realtime_disabled` | `503` | 主服务器配置禁用了实时镜像访问。 |

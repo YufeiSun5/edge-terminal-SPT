@@ -28,6 +28,11 @@ const (
 	StationViewBindingManual         = "manual"
 )
 
+const (
+	StationViewLayoutAreaCardPool   = "card_pool"
+	StationViewLayoutAreaListLayout = "list_layout"
+)
+
 type StationViewTemplate struct {
 	ID            uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TemplateUID   string    `gorm:"column:template_uid;size:128;uniqueIndex;not null" json:"template_uid"`
@@ -51,8 +56,9 @@ func (StationViewTemplate) TableName() string {
 type StationViewRegion struct {
 	ID          uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TemplateUID string    `gorm:"column:template_uid;size:128;uniqueIndex:uk_station_view_region;index;not null" json:"template_uid"`
-	RegionKey   string    `gorm:"column:region_key;size:64;uniqueIndex:uk_station_view_region;not null" json:"region_key"`
-	RegionType  string    `gorm:"column:region_type;size:64;not null" json:"region_type"`
+	RegionKey   string    `gorm:"column:region_key;size:64;uniqueIndex:uk_station_view_region;not null" json:"-"`
+	LayoutArea  string    `gorm:"column:layout_area;size:64;index;not null" json:"layout_area"`
+	RegionType  string    `gorm:"column:region_type;size:64;not null" json:"layout_type"`
 	LayoutJSON  string    `gorm:"column:layout_json;type:text" json:"layout_json"`
 	SortOrder   int       `gorm:"column:sort_order;default:0;index" json:"sort_order"`
 	Enabled     bool      `gorm:"column:enabled;default:true;index;not null" json:"enabled"`
@@ -67,7 +73,8 @@ func (StationViewRegion) TableName() string {
 type StationViewItem struct {
 	ID          uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TemplateUID string    `gorm:"column:template_uid;size:128;index;not null" json:"template_uid"`
-	RegionKey   string    `gorm:"column:region_key;size:64;index;not null" json:"region_key"`
+	RegionKey   string    `gorm:"column:region_key;size:64;index;not null" json:"-"`
+	LayoutArea  string    `gorm:"column:layout_area;size:64;index;not null" json:"layout_area"`
 	ItemUID     string    `gorm:"column:item_uid;size:128;uniqueIndex;not null" json:"item_uid"`
 	ItemType    string    `gorm:"column:item_type;size:64;not null" json:"item_type"`
 	BindingType string    `gorm:"column:binding_type;size:64;index;not null" json:"binding_type"`
@@ -97,6 +104,54 @@ type StationViewAssignment struct {
 
 func (StationViewAssignment) TableName() string {
 	return "sys_station_view_assignments"
+}
+
+type StationViewTemplateListItem struct {
+	ID            uint                       `json:"id"`
+	TemplateUID   string                     `json:"template_uid"`
+	TemplateCode  string                     `json:"template_code"`
+	Name          string                     `json:"name"`
+	DisplayName   string                     `json:"display_name"`
+	DisplayNameEN string                     `json:"display_name_en"`
+	DisplayNameJA string                     `json:"display_name_ja"`
+	Version       int                        `json:"version"`
+	Status        string                     `json:"status"`
+	OwnerScope    string                     `json:"owner_scope"`
+	LayoutJSON    string                     `json:"layout_json,omitempty"`
+	Assignments   []StationViewAssignmentDTO `json:"assignments,omitempty"`
+	CreatedAt     time.Time                  `json:"created_at"`
+	UpdatedAt     time.Time                  `json:"updated_at"`
+}
+
+type StationViewAssignmentDTO struct {
+	ID          uint      `json:"id"`
+	TemplateUID string    `json:"template_uid"`
+	TargetType  string    `json:"target_type"`
+	TargetKey   string    `json:"target_key"`
+	Priority    int       `json:"priority"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type StationViewDiagnostics struct {
+	Status               string   `json:"status"`
+	TemplateCount        int64    `json:"template_count"`
+	PublishedTemplates   int64    `json:"published_templates"`
+	RegionCount          int64    `json:"region_count"`
+	ItemCount            int64    `json:"item_count"`
+	AssignmentCount      int64    `json:"assignment_count"`
+	EnabledAssignments   int64    `json:"enabled_assignments"`
+	DefaultTemplateReady bool     `json:"default_template_ready"`
+	Warnings             []string `json:"warnings,omitempty"`
+}
+
+type StationViewReloadResponse struct {
+	OK             bool                          `json:"ok"`
+	EdgeInstanceID string                        `json:"edge_instance_id,omitempty"`
+	ReloadMode     string                        `json:"reload_mode"`
+	Diagnostics    StationViewDiagnostics        `json:"diagnostics"`
+	Effective      *StationViewEffectiveResponse `json:"effective,omitempty"`
 }
 
 type StationViewEffectiveResponse struct {
@@ -134,21 +189,22 @@ type StationViewTemplateRef struct {
 }
 
 type StationViewRegionDTO struct {
-	RegionKey  string `json:"region_key"`
-	RegionType string `json:"region_type"`
+	LayoutArea string `json:"layout_area"`
+	LayoutType string `json:"layout_type"`
 	LayoutJSON string `json:"layout_json,omitempty"`
 	SortOrder  int    `json:"sort_order"`
 }
 
 type StationViewItemDTO struct {
 	ItemUID          string                       `json:"item_uid"`
-	RegionKey        string                       `json:"region_key"`
+	LayoutArea       string                       `json:"layout_area"`
 	ItemType         string                       `json:"item_type"`
 	BindingType      string                       `json:"binding_type"`
 	BindingKey       string                       `json:"binding_key"`
 	BindingJSON      string                       `json:"binding_json,omitempty"`
 	DisplayJSON      string                       `json:"display_json,omitempty"`
 	SortOrder        int                          `json:"sort_order"`
+	Visible          bool                         `json:"visible"`
 	ResolvedBindings []StationViewResolvedBinding `json:"resolved_bindings,omitempty"`
 }
 

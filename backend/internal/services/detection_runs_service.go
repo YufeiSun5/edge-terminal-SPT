@@ -532,7 +532,10 @@ func HTTPStatusForError(err error) int {
 	if status, ok := VariableWriteErrorStatus(err); ok {
 		return status
 	}
-	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) {
+	if typed, ok := err.(KIOServiceError); ok && typed.Status > 0 {
+		return typed.Status
+	}
+	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) || errors.Is(err, database.ErrEdgeInstanceMismatch) {
 		return 409
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {

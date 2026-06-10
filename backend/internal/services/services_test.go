@@ -337,6 +337,15 @@ func TestKIOWriteServiceValidationAndAckStatus(t *testing.T) {
 	if err == nil || HTTPStatusForKIOError(err) != 504 || timedOut.Status != "ack_timeout_or_unmatched" || !timedOut.BrokerAccepted {
 		t.Fatalf("expected timeout result, got result=%+v err=%v", timedOut, err)
 	}
+
+	broker.waitErr = nil
+	broker.waitBrokerAccepted = false
+	broker.ack = nil
+	broker.subscribeErr = errors.New("gateway is not connected")
+	offline, err := service.Write(context.Background(), KIOWriteInput{GatewayID: 2, Values: []kio.WriteValue{{Name: "SP", Value: 1.25}}, WaitAck: true})
+	if err == nil || HTTPStatusForKIOError(err) != 502 || offline.Status != "gateway_offline" || offline.BrokerAccepted {
+		t.Fatalf("expected structured gateway offline result, got result=%+v err=%v", offline, err)
+	}
 }
 
 type fakeKIOBroker struct {

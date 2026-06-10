@@ -49,16 +49,16 @@ function sameVarId(left?: VarIdentifier | null, right?: VarIdentifier | null) {
   return varKey(left) === varKey(right)
 }
 
-function standardProjectId(standard: Pick<DetectionStandard, 'project_id' | 'device_id'>) {
-  return standard.project_id ?? standard.device_id
+function standardProjectId(standard: Pick<DetectionStandard, 'project_id'>) {
+  return standard.project_id
 }
 
-function standardProjectCode(standard: Pick<DetectionStandard, 'project_code' | 'device_code'>) {
-  return standard.project_code || standard.device_code
+function standardProjectCode(standard: Pick<DetectionStandard, 'project_code'>) {
+  return standard.project_code
 }
 
-function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
-  return project?.project_code || project?.device_code || ''
+function projectCode(project?: Pick<Project, 'project_code'>) {
+  return project?.project_code || ''
 }
 
 function reportTemplateTitle(template?: Pick<ReportTemplate, 'template_code' | 'display_name' | 'name'>) {
@@ -158,6 +158,11 @@ export function DetectionConfigPage() {
     if (draftStandardId === selectedStandardDetail.id) return standardItems
     return normalizeStandardItems(selectedStandardDetail.items)
   }, [draftStandardId, selectedStandardDetail, standardItems])
+  const checkedItemCount = useMemo(() => selectedStandardItems.filter((item) => item.check_enabled ?? true).length, [selectedStandardItems])
+  const storedItemCount = useMemo(() => selectedStandardItems.filter((item) => item.store_enabled ?? true).length, [selectedStandardItems])
+  const alarmItemCount = useMemo(() => selectedStandardItems.filter((item) => item.alarm_enabled ?? true).length, [selectedStandardItems])
+  const selectedReportTemplateName = reportTemplateTitle(reportTemplates.find((template) => template.id === selectedStandardDetail?.report_template_id))
+  const selectedStandardDirty = Boolean(selectedStandardDetail && draftStandardId === selectedStandardDetail.id)
 
   const displayProjectName = useCallback((project: Project) => {
     const code = projectCode(project)
@@ -481,6 +486,7 @@ export function DetectionConfigPage() {
       <section className="detection-config-workspace glass-panel">
         <header className="detection-config-hero">
           <div className="detection-standard-toolbar">
+            <span className="settings-eyebrow">{t('detectionConfig.title')}</span>
             <Select
               className="detection-standard-select"
               showSearch
@@ -520,66 +526,110 @@ export function DetectionConfigPage() {
         </header>
 
         <div className="detection-config-grid">
-        <main className="detection-config-main">
-          <div className="detection-panel-head">
-            <div>
-              <span className="settings-eyebrow">{selectedStandardDetail ? selectedStandardDetail.standard_code : t('detectionConfig.noSelection')}</span>
-              <h2>{selectedStandardDetail ? displayStandardName(selectedStandardDetail) : t('detectionConfig.selectStandard')}</h2>
+          <aside className="detection-config-sidebar">
+            <div className="detection-sidebar-head">
+              <strong>{t('detectionConfig.standardList')}</strong>
+              <Tag>{standards.length}</Tag>
             </div>
+            <div className="detection-standard-list">
+              {standards.length > 0 ? standards.map((standard) => (
+                <button
+                  className={`detection-standard-card ${standard.id === selectedStandard?.id ? 'active' : ''}`}
+                  key={standard.id}
+                  type="button"
+                  onClick={() => setSelectedStandardId(standard.id)}
+                >
+                  <strong>{displayStandardName(standard)}</strong>
+                  <span>{standard.standard_code} · {standard.mode || 'standard'}</span>
+                  <em>{standardProjectId(standard) ? standardProjectCode(standard) : t('settings.standards.global')}</em>
+                </button>
+              )) : (
+                <div className="detection-empty">{t('detectionConfig.noStandards')}</div>
+              )}
+            </div>
+          </aside>
+
+          <main className="detection-config-main">
+            <div className="detection-panel-head">
+              <div>
+                <span className="settings-eyebrow">{selectedStandardDetail ? selectedStandardDetail.standard_code : t('detectionConfig.noSelection')}</span>
+                <h2>{selectedStandardDetail ? displayStandardName(selectedStandardDetail) : t('detectionConfig.selectStandard')}</h2>
+              </div>
+              {selectedStandardDetail ? (
+                <Space>
+                  {selectedStandardDirty ? <Tag color="processing">{t('settings.standards.save')}</Tag> : null}
+                  <Tag color={selectedStandardDetail.enabled ? 'success' : 'default'}>{selectedStandardDetail.enabled ? t('status.online') : t('status.offline')}</Tag>
+                  <Tag>{selectedStandardDetail.mode || 'standard'}</Tag>
+                </Space>
+              ) : null}
+            </div>
+
             {selectedStandardDetail ? (
-              <Space>
-                <Tag color={selectedStandardDetail.enabled ? 'success' : 'default'}>{selectedStandardDetail.enabled ? t('status.online') : t('status.offline')}</Tag>
-                <Tag>{selectedStandardDetail.mode || 'standard'}</Tag>
-              </Space>
+              <>
+                <div className="detection-summary-strip">
+                  <div className="detection-summary-item">
+                    <span>{t('settings.standards.items')}</span>
+                    <strong>{selectedStandardItems.length}</strong>
+                  </div>
+                  <div className="detection-summary-item">
+                    <span>{t('settings.standards.check')}</span>
+                    <strong>{checkedItemCount}</strong>
+                  </div>
+                  <div className="detection-summary-item">
+                    <span>{t('settings.standards.alarm')}</span>
+                    <strong>{alarmItemCount}</strong>
+                  </div>
+                  <div className="detection-summary-item">
+                    <span>{t('settings.standards.store')}</span>
+                    <strong>{storedItemCount}</strong>
+                  </div>
+                </div>
+
+                <div className="detection-inline-meta">
+                  <Tag>{standardProjectId(selectedStandardDetail) ? standardProjectCode(selectedStandardDetail) : t('settings.standards.global')}</Tag>
+                  <Tag>V{selectedStandardDetail.version}</Tag>
+                  <Tag>{selectedReportTemplateName || t('settings.standards.reportTemplate')}</Tag>
+                  {selectedStandardDetail.remark ? <Tag>{selectedStandardDetail.remark}</Tag> : null}
+                </div>
+              </>
             ) : null}
-          </div>
 
-          {selectedStandardDetail ? (
-            <div className="detection-inline-meta">
-              <Tag>{standardProjectId(selectedStandardDetail) ? standardProjectCode(selectedStandardDetail) : t('settings.standards.global')}</Tag>
-              <Tag>V{selectedStandardDetail.version}</Tag>
-              <Tag>{selectedStandardItems.length} {t('settings.standards.items')}</Tag>
-              <Tag>{reportTemplateTitle(reportTemplates.find((template) => template.id === selectedStandardDetail.report_template_id)) || t('settings.standards.reportTemplate')}</Tag>
-              {selectedStandardDetail.remark ? <Tag>{selectedStandardDetail.remark}</Tag> : null}
+            <div className="detection-table-toolbar">
+              <div className="settings-standard-item-picker">
+                <Select
+                  showSearch
+                  allowClear
+                  value={standardVariableId}
+                  placeholder={t('settings.standards.addVariable')}
+                  optionFilterProp="label"
+                  onChange={setStandardVariableId}
+                  options={standardVariableOptions}
+                />
+                <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId || !selectedStandardDetail}>
+                  {t('settings.standards.add')}
+                </Button>
+              </div>
             </div>
-          ) : null}
 
-          <div className="detection-table-toolbar">
-            <div className="settings-standard-item-picker">
-              <Select
-                showSearch
-                allowClear
-                value={standardVariableId}
-                placeholder={t('settings.standards.addVariable')}
-                optionFilterProp="label"
-                onChange={setStandardVariableId}
-                options={standardVariableOptions}
-              />
-            <Button size="small" icon={<Plus size={14} />} onClick={() => addStandardItem(standardVariableId)} disabled={!standardVariableId || !selectedStandardDetail}>
-                {t('settings.standards.add')}
-              </Button>
-            </div>
-          </div>
-
-          <Table
-            className="detection-config-table settings-standard-items-table"
-            size="small"
-            virtual
-            rowKey={(record) => varKey(record.var_id)}
-            loading={standardsQuery.isFetching || selectedStandardDetailQuery.isFetching}
-            columns={editableItemColumns}
-            dataSource={selectedStandardDetail ? selectedStandardItems : []}
-            scroll={{ x: 1650, y: 520 }}
-            pagination={{
-              defaultPageSize: 30,
-              pageSizeOptions: [20, 30, 50, 100],
-              showSizeChanger: true,
-              showQuickJumper: true,
-              showTotal: (total) => `${total} ${t('settings.standards.items')}`,
-              size: 'small',
-            }}
-          />
-        </main>
+            <Table
+              className="detection-config-table settings-standard-items-table"
+              size="small"
+              virtual
+              rowKey={(record) => varKey(record.var_id)}
+              loading={standardsQuery.isFetching || selectedStandardDetailQuery.isFetching}
+              columns={editableItemColumns}
+              dataSource={selectedStandardDetail ? selectedStandardItems : []}
+              scroll={{ x: 1650, y: 520 }}
+              pagination={{
+                defaultPageSize: 30,
+                pageSizeOptions: [20, 30, 50, 100],
+                showSizeChanger: true,
+                showQuickJumper: true,
+                showTotal: (total) => `${total} ${t('settings.standards.items')}`,
+                size: 'small',
+              }}
+            />
+          </main>
         </div>
       </section>
 

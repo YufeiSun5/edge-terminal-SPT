@@ -112,11 +112,16 @@ func (s *RealtimeWSService) CommandAckMessage(requestID string, commandID string
 }
 
 func (s *RealtimeWSService) ErrorMessage(requestID string, commandID string, code string, message string) WSMessage {
+	return s.ErrorMessageWithPayload(requestID, commandID, code, message, nil)
+}
+
+func (s *RealtimeWSService) ErrorMessageWithPayload(requestID string, commandID string, code string, message string, payload interface{}) WSMessage {
 	return WSMessage{
 		Type:      WSTypeError,
 		RequestID: requestID,
 		CommandID: commandID,
 		At:        s.now(),
+		Payload:   payload,
 		Error: &WSError{
 			Code:    code,
 			Message: message,

@@ -29,6 +29,7 @@ type GatewaysHandler struct {
 
 type gatewayConfigCreateRequest struct {
 	ID               int    `json:"id"`
+	EdgeInstanceID   string `json:"edge_instance_id"`
 	Name             string `json:"name" binding:"required"`
 	Broker           string `json:"broker" binding:"required"`
 	ClientID         string `json:"client_id" binding:"required"`
@@ -48,6 +49,7 @@ type gatewayConfigCreateRequest struct {
 }
 
 type gatewayConfigPatchRequest struct {
+	EdgeInstanceID   *string `json:"edge_instance_id"`
 	Name             *string `json:"name"`
 	Broker           *string `json:"broker"`
 	ClientID         *string `json:"client_id"`
@@ -125,6 +127,7 @@ func (h *GatewaysHandler) Register(group *gin.RouterGroup, authService *auth.Ser
 
 func (h *GatewaysHandler) RegisterServiceRoutes(group *gin.RouterGroup, authService *auth.Service) {
 	control := group.Group("/edge-control")
+	control.GET("/gateways", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.status)
 	control.GET("/runtime/channels", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeChannels)
 	control.GET("/runtime/channels/detail", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeChannelDetails)
 	control.GET("/runtime/notifications", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.runtimeNotifications)
@@ -195,6 +198,7 @@ func (h *GatewaysHandler) createConfig(c *gin.Context) {
 	}
 	gateway := models.GatewayConfig{
 		ID:               req.ID,
+		EdgeInstanceID:   req.EdgeInstanceID,
 		Name:             req.Name,
 		Broker:           req.Broker,
 		ClientID:         req.ClientID,
@@ -397,6 +401,7 @@ func (h *GatewaysHandler) publishKIOQueryAll(c *gin.Context, gatewayID int, req 
 
 func gatewayConfigUpdates(req gatewayConfigPatchRequest) map[string]interface{} {
 	updates := make(map[string]interface{})
+	setStringUpdate(updates, "edge_instance_id", req.EdgeInstanceID)
 	setStringUpdate(updates, "name", req.Name)
 	setStringUpdate(updates, "broker", req.Broker)
 	setStringUpdate(updates, "client_id", req.ClientID)

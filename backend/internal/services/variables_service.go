@@ -12,8 +12,9 @@ import (
 )
 
 type VariablesService struct {
-	repo *database.Repository
-	tags *pipeline.TagManager
+	repo           *database.Repository
+	tags           *pipeline.TagManager
+	edgeInstanceID string
 }
 
 type CreateVariableInput struct {
@@ -102,8 +103,12 @@ type BulkRemapKIOProjectsResultItem struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
-func NewVariablesService(repo *database.Repository, tags *pipeline.TagManager) *VariablesService {
-	return &VariablesService{repo: repo, tags: tags}
+func NewVariablesService(repo *database.Repository, tags *pipeline.TagManager, edgeInstanceID ...string) *VariablesService {
+	service := &VariablesService{repo: repo, tags: tags}
+	if len(edgeInstanceID) > 0 {
+		service.edgeInstanceID = strings.TrimSpace(edgeInstanceID[0])
+	}
+	return service
 }
 
 func (s *VariablesService) Snapshots(filter RealtimeVariableFilter) []models.TagSnapshot {
@@ -337,6 +342,11 @@ func (s *VariablesService) Create(input CreateVariableInput) (models.TagConfig, 
 	if err := s.repo.CreateTag(&tag); err != nil {
 		return models.TagConfig{}, err
 	}
+	if tag.ProjectID != nil {
+		if err := s.repo.EnsureTagProjectGatewayEdge(tag.VarID, *tag.ProjectID); err != nil {
+			return models.TagConfig{}, err
+		}
+	}
 	if err := s.ReloadTags(); err != nil {
 		return models.TagConfig{}, err
 	}
@@ -519,7 +529,7 @@ func (s *VariablesService) Delete(varID int64) error {
 }
 
 func (s *VariablesService) ReloadTags() error {
-	configs, err := s.repo.LoadTags()
+	configs, err := s.repo.LoadTags(s.edgeInstanceID)
 	if err != nil {
 		return err
 	}

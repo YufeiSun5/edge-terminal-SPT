@@ -36,6 +36,8 @@ type Gateway struct {
 	lastError        string
 	subscribedTopics map[string]byte
 	ackHandler       func([]byte)
+	stopCh           chan struct{}
+	stopOnce         sync.Once
 	mu               sync.RWMutex
 }
 
@@ -78,11 +80,7 @@ func (m *Manager) Start(cfg models.GatewayConfig) error {
 		return fmt.Errorf("gateway already exists: %d", cfg.ID)
 	}
 
-	gw := &Gateway{
-		config:           cfg,
-		ackHandler:       m.handleKIOAck,
-		subscribedTopics: make(map[string]byte),
-	}
+	gw := newGateway(cfg, m.handleKIOAck)
 	m.gateways[cfg.ID] = gw
 	go gw.run(m.channels)
 	return nil
@@ -100,14 +98,19 @@ func (m *Manager) ApplyConfig(cfg models.GatewayConfig) error {
 		return nil
 	}
 
-	gw := &Gateway{
-		config:           cfg,
-		ackHandler:       m.handleKIOAck,
-		subscribedTopics: make(map[string]byte),
-	}
+	gw := newGateway(cfg, m.handleKIOAck)
 	m.gateways[cfg.ID] = gw
 	go gw.run(m.channels)
 	return nil
+}
+
+func newGateway(cfg models.GatewayConfig, ackHandler func([]byte)) *Gateway {
+	return &Gateway{
+		config:           cfg,
+		ackHandler:       ackHandler,
+		subscribedTopics: make(map[string]byte),
+		stopCh:           make(chan struct{}),
+	}
 }
 
 func (m *Manager) Stop(gatewayID int) {
@@ -228,51 +231,88 @@ func (m *Manager) handleKIOAck(payload []byte) {
 }
 
 func (gw *Gateway) run(channels *pipeline.Channels) {
-	opts := MQTT.NewClientOptions()
-	opts.AddBroker(gw.config.Broker)
-	opts.SetClientID(fmt.Sprintf("%s_%d_%d", gw.config.ClientID, time.Now().UnixNano(), rand.Intn(10000)))
-	opts.SetUsername(gw.config.Username)
-	opts.SetPassword(gw.config.Password)
-	opts.SetCleanSession(false)
-	opts.SetAutoReconnect(true)
-	opts.SetKeepAlive(60 * time.Second)
-	opts.SetPingTimeout(20 * time.Second)
-	opts.SetConnectTimeout(30 * time.Second)
-	opts.SetMaxReconnectInterval(30 * time.Second)
-
-	opts.OnConnect = func(client MQTT.Client) {
-		gw.markConnected()
-
-		if err := gw.subscribeConfigured(client, channels); err != nil {
-			gw.markError(err)
-			log.Printf("[mqtt-%d] subscribe failed: %v", gw.config.ID, err)
+	gw.ensureStopCh()
+	for {
+		select {
+		case <-gw.stopCh:
 			return
+		default:
 		}
-		log.Printf("[mqtt-%d] connected and subscribed: %v", gw.config.ID, gw.subscribedTopicNames())
-		go gw.publishQueryAll(client)
-	}
 
-	opts.OnConnectionLost = func(_ MQTT.Client, err error) {
-		gw.markDisconnected(err)
-		log.Printf("[mqtt-%d] connection lost: %v", gw.config.ID, err)
-	}
+		opts := MQTT.NewClientOptions()
+		opts.AddBroker(gw.config.Broker)
+		opts.SetClientID(fmt.Sprintf("%s_%d_%d", gw.config.ClientID, time.Now().UnixNano(), rand.Intn(10000)))
+		opts.SetUsername(gw.config.Username)
+		opts.SetPassword(gw.config.Password)
+		opts.SetCleanSession(false)
+		opts.SetAutoReconnect(true)
+		opts.SetKeepAlive(60 * time.Second)
+		opts.SetPingTimeout(20 * time.Second)
+		opts.SetConnectTimeout(30 * time.Second)
+		opts.SetMaxReconnectInterval(30 * time.Second)
 
-	gw.client = MQTT.NewClient(opts)
-	if token := gw.client.Connect(); token.Wait() && token.Error() != nil {
-		gw.markError(token.Error())
-		log.Printf("[mqtt-%d] connect failed: %v", gw.config.ID, token.Error())
+		opts.OnConnect = func(client MQTT.Client) {
+			gw.markConnected()
+
+			if err := gw.subscribeConfigured(client, channels); err != nil {
+				gw.markError(err)
+				log.Printf("[mqtt-%d] subscribe failed: %v", gw.config.ID, err)
+				return
+			}
+			log.Printf("[mqtt-%d] connected and subscribed: %v", gw.config.ID, gw.subscribedTopicNames())
+			go gw.publishQueryAll(client)
+		}
+
+		opts.OnConnectionLost = func(_ MQTT.Client, err error) {
+			gw.markDisconnected(err)
+			log.Printf("[mqtt-%d] connection lost: %v", gw.config.ID, err)
+		}
+
+		client := MQTT.NewClient(opts)
+		gw.setClient(client)
+		if token := client.Connect(); token.Wait() && token.Error() != nil {
+			gw.markConnectFailed(token.Error())
+			log.Printf("[mqtt-%d] connect failed: %v", gw.config.ID, token.Error())
+			select {
+			case <-gw.stopCh:
+				return
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
+
+		<-gw.stopCh
+		client.Disconnect(250)
 		return
 	}
 }
 
 func (gw *Gateway) stop() {
+	gw.ensureStopCh()
 	gw.mu.Lock()
-	defer gw.mu.Unlock()
 	if gw.client != nil && gw.client.IsConnected() {
 		gw.client.Disconnect(250)
 	}
 	gw.active = false
 	gw.lastDisconnected = time.Now()
+	gw.mu.Unlock()
+	gw.stopOnce.Do(func() {
+		close(gw.stopCh)
+	})
+}
+
+func (gw *Gateway) ensureStopCh() {
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if gw.stopCh == nil {
+		gw.stopCh = make(chan struct{})
+	}
+}
+
+func (gw *Gateway) setClient(client MQTT.Client) {
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	gw.client = client
 }
 
 func (gw *Gateway) publish(ctx context.Context, topic string, payload []byte, qos byte, retain bool) error {
@@ -457,6 +497,18 @@ func (gw *Gateway) markError(err error) {
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
 	gw.lastError = err.Error()
+}
+
+func (gw *Gateway) markConnectFailed(err error) {
+	if err == nil {
+		return
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	gw.active = false
+	gw.lastDisconnected = time.Now()
+	gw.lastError = err.Error()
+	gw.reconnects++
 }
 
 func (gw *Gateway) recordSubscription(topic string, qos byte) {

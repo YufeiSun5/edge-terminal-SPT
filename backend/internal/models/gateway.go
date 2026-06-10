@@ -4,6 +4,7 @@ import "time"
 
 type GatewayConfig struct {
 	ID               int       `gorm:"column:id;primaryKey" json:"id"`
+	EdgeInstanceID   string    `gorm:"column:edge_instance_id;size:128;index" json:"edge_instance_id"`
 	Name             string    `gorm:"column:name;size:128;not null" json:"name"`
 	Broker           string    `gorm:"column:broker;size:255;not null" json:"broker"`
 	ClientID         string    `gorm:"column:client_id;size:128;not null" json:"client_id"`

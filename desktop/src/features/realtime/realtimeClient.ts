@@ -38,31 +38,88 @@ type RealtimeWebSocketHandlers = {
   subscription?: RealtimeWebSocketSubscription
 }
 
+type SharedRealtimeWebSocket = {
+  socket: WebSocket
+  handlers: Set<RealtimeWebSocketHandlers>
+}
+
+const sharedRealtimeSockets = new Map<string, SharedRealtimeWebSocket>()
+
+export class RealtimeWebSocketCommandError extends Error {
+  code?: string
+  result?: unknown
+
+  constructor(message: string, code?: string, result?: unknown) {
+    super(message)
+    this.name = 'RealtimeWebSocketCommandError'
+    this.code = code
+    this.result = result
+  }
+}
+
 export function subscribeRealtimeWebSocket({ onMessage, onClose, onError, subscription }: RealtimeWebSocketHandlers) {
   const token = getAccessToken()
   const url = new URL('/api/v1/ws', env.apiBaseUrl)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   if (token) url.searchParams.set('access_token', token)
   subscription?.topics.forEach((topic) => url.searchParams.append('topic', topic))
+  if (subscription?.edge_instance_id) url.searchParams.set('edge_instance_id', subscription.edge_instance_id)
   if (subscription?.project_id !== undefined) url.searchParams.set('project_id', String(subscription.project_id))
   if (subscription?.source_type) url.searchParams.set('source_type', subscription.source_type)
   if (subscription?.gateway_id !== undefined) url.searchParams.set('gateway_id', String(subscription.gateway_id))
   subscription?.var_ids?.forEach((varId) => url.searchParams.append('var_id', String(varId)))
 
+  const key = url.toString()
+  const handler: RealtimeWebSocketHandlers = { onMessage, onClose, onError, subscription }
+  const existing = sharedRealtimeSockets.get(key)
+  if (existing) {
+    existing.handlers.add(handler)
+    return () => {
+      existing.handlers.delete(handler)
+      if (existing.handlers.size === 0 && existing.socket.readyState === WebSocket.OPEN) {
+        sharedRealtimeSockets.delete(key)
+        existing.socket.close()
+      }
+      if (existing.handlers.size === 0 && existing.socket.readyState === WebSocket.CLOSED) {
+        sharedRealtimeSockets.delete(key)
+      }
+    }
+  }
+
   const socket = new WebSocket(url)
-  socket.addEventListener('message', (event) => {
-    try {
-      onMessage(JSON.parse(String(event.data)) as RealtimeWebSocketEnvelope)
-    } catch (error) {
-      onError?.(error instanceof Error ? error : new Error('invalid websocket message'))
+  const shared: SharedRealtimeWebSocket = { socket, handlers: new Set([handler]) }
+  sharedRealtimeSockets.set(key, shared)
+  socket.addEventListener('open', () => {
+    if (shared.handlers.size === 0) {
+      sharedRealtimeSockets.delete(key)
+      socket.close()
     }
   })
-  socket.addEventListener('error', (event) => onError?.(event))
-  socket.addEventListener('close', () => onClose?.())
+  socket.addEventListener('message', (event) => {
+    try {
+      const message = JSON.parse(String(event.data)) as RealtimeWebSocketEnvelope
+      shared.handlers.forEach((item) => item.onMessage(message))
+    } catch (error) {
+      const messageError = error instanceof Error ? error : new Error('invalid websocket message')
+      shared.handlers.forEach((item) => item.onError?.(messageError))
+    }
+  })
+  socket.addEventListener('error', (event) => {
+    shared.handlers.forEach((item) => item.onError?.(event))
+  })
+  socket.addEventListener('close', () => {
+    sharedRealtimeSockets.delete(key)
+    shared.handlers.forEach((item) => item.onClose?.())
+  })
 
   return () => {
-    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+    shared.handlers.delete(handler)
+    if (shared.handlers.size === 0 && socket.readyState === WebSocket.OPEN) {
+      sharedRealtimeSockets.delete(key)
       socket.close()
+    }
+    if (shared.handlers.size === 0 && socket.readyState === WebSocket.CLOSED) {
+      sharedRealtimeSockets.delete(key)
     }
   }
 }
@@ -117,7 +174,12 @@ export function sendRealtimeWebSocketCommand<TPayload = unknown, TResult = unkno
       if (message.type === 'error') {
         settled = true
         cleanup()
-        reject(new Error(message.error?.message || message.error?.code || 'websocket command failed'))
+        const payload = message.payload as { result?: unknown } | undefined
+        reject(new RealtimeWebSocketCommandError(
+          message.error?.message || message.error?.code || 'websocket command failed',
+          message.error?.code,
+          payload?.result,
+        ))
       }
     }
 

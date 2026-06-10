@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -126,18 +127,22 @@ func TestVariablesHandlerRealtimeFilters(t *testing.T) {
 		t.Fatalf("expected ordered multi var snapshots, got %+v", multiItems)
 	}
 
-	resp = callHandler(t, http.MethodGet, "/realtime/variables?device_id=2", nil, handler.realtime)
-	var aliasItems []models.TagSnapshot
-	if err := json.Unmarshal(resp.Body.Bytes(), &aliasItems); err != nil {
+	resp = callHandler(t, http.MethodGet, "/realtime/variables?project_id=2", nil, handler.realtime)
+	var projectTwoItems []models.TagSnapshot
+	if err := json.Unmarshal(resp.Body.Bytes(), &projectTwoItems); err != nil {
 		t.Fatal(err)
 	}
-	if len(aliasItems) != 1 || aliasItems[0].ProjectID == nil || *aliasItems[0].ProjectID != 2 {
-		t.Fatalf("expected device_id alias to filter project, got %+v", aliasItems)
+	if len(projectTwoItems) != 1 || projectTwoItems[0].ProjectID == nil || *projectTwoItems[0].ProjectID != 2 {
+		t.Fatalf("expected project_id to filter project, got %+v", projectTwoItems)
 	}
 
 	resp = callHandler(t, http.MethodGet, "/realtime/variables?var_id=bad", nil, handler.realtime)
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid var_id 400, got %d", resp.Code)
+	}
+	resp = callHandler(t, http.MethodGet, "/realtime/variables?device_id=2", nil, handler.realtime)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), "unsupported_query_param") {
+		t.Fatalf("expected unsupported device_id 400, got %d body=%s", resp.Code, resp.Body.String())
 	}
 }
 
@@ -944,7 +949,7 @@ func TestEdgeControlHandlerWriteVariableAndScope(t *testing.T) {
 	if err := repo.UpsertServiceClient(models.SysServiceClient{
 		ClientID:   "main-server",
 		SecretHash: auth.HashOpaqueToken(serviceToken),
-		Scopes:     auth.NormalizeScopes([]string{auth.ScopeEdgeVariableWrite}),
+		Scopes:     auth.NormalizeScopes([]string{auth.ScopeEdgeVariableWrite, auth.ScopeServiceRuntimeRead}),
 		Enabled:    true,
 	}); err != nil {
 		t.Fatal(err)
@@ -1001,9 +1006,132 @@ func TestEdgeControlHandlerWriteVariableAndScope(t *testing.T) {
 	if !state.Initialized || state.Value != 12.5 {
 		t.Fatalf("unexpected runtime state: %+v", state)
 	}
+	projectNameResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/variables/write", map[string]any{
+		"command_id":        "cmd-write-project-name",
+		"operator_username": "admin",
+		"payload": map[string]any{
+			"project_id": project.ID,
+			"var_name":   "setpoint",
+			"value":      13.5,
+			"trigger":    false,
+		},
+	}, serviceToken)
+	if projectNameResp.Code != http.StatusOK {
+		t.Fatalf("project_id+var_name write status=%d body=%s", projectNameResp.Code, projectNameResp.Body.String())
+	}
+	if state := tag.RuntimeState(); state.Value != 13.5 {
+		t.Fatalf("expected project_id+var_name write to update runtime state: %+v", state)
+	}
+	projectCodeResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/variables/write", map[string]any{
+		"command_id":        "cmd-write-project-code-name",
+		"operator_username": "admin",
+		"payload": map[string]any{
+			"project_code": project.ProjectCode,
+			"var_name":     "setpoint",
+			"value":        14.5,
+			"trigger":      false,
+		},
+	}, serviceToken)
+	if projectCodeResp.Code != http.StatusOK {
+		t.Fatalf("project_code+var_name write status=%d body=%s", projectCodeResp.Code, projectCodeResp.Body.String())
+	}
+	if state := tag.RuntimeState(); state.Value != 14.5 {
+		t.Fatalf("expected project_code+var_name write to update runtime state: %+v", state)
+	}
 	var command models.EdgeControlCommand
 	if err := db.First(&command, "command_id = ?", "cmd-write-1").Error; err != nil || command.Status != "success" || command.Action != "variable.write" {
 		t.Fatalf("unexpected command=%+v err=%v", command, err)
+	}
+
+	statusResp := callRouterWithToken(t, router, http.MethodGet, "/api/v1/edge-control/commands/cmd-write-1", nil, serviceToken)
+	if statusResp.Code != http.StatusOK {
+		t.Fatalf("command status code=%d body=%s", statusResp.Code, statusResp.Body.String())
+	}
+	var status map[string]any
+	mustDecodeHandler(t, statusResp, &status)
+	if status["command_id"] != "cmd-write-1" || status["client_id"] != "main-server" || status["status"] != "success" || status["action"] != "variable.write" {
+		t.Fatalf("unexpected command status: %+v", status)
+	}
+	if _, ok := status["request_json"]; ok {
+		t.Fatalf("command status must not expose request_json: %+v", status)
+	}
+
+	missingStatus := callRouterWithToken(t, router, http.MethodGet, "/api/v1/edge-control/commands/missing-command", nil, serviceToken)
+	if missingStatus.Code != http.StatusNotFound {
+		t.Fatalf("missing command status=%d body=%s", missingStatus.Code, missingStatus.Body.String())
+	}
+}
+
+func TestEdgeControlHandlerWriteVariableErrorIncludesPartialResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newHandlerTestDB(t)
+	repo := database.NewRepository(db)
+	project := createHandlerProject(t, repo)
+	if err := repo.CreateUser(&models.SysUser{Username: "admin", PasswordHash: "hash", Role: auth.RoleAdmin, Enabled: true, PermissionsVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	serviceToken := "edge-write-token"
+	if err := repo.UpsertServiceClient(models.SysServiceClient{
+		ClientID:   "main-server",
+		SecretHash: auth.HashOpaqueToken(serviceToken),
+		Scopes:     auth.NormalizeScopes([]string{auth.ScopeEdgeVariableWrite}),
+		Enabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tags := pipeline.NewTagManager()
+	tags.Load([]models.TagConfig{{
+		VarID:         9101,
+		GatewayID:     1,
+		SourceType:    models.TagSourceMQTT,
+		SourcePath:    "pid_sp",
+		RawName:       "pid_sp",
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		VarName:       "pid_sp",
+		JSONPath:      "pid_sp",
+		DataType:      "FLOAT",
+		ScaleFactor:   1,
+		RWMode:        models.RWModeReadWrite,
+		Writable:      true,
+		WriteSourceID: 1,
+		WritePath:     "pid_sp",
+		WriteDataType: "FLOAT",
+		Enabled:       true,
+		Discovered:    true,
+	}})
+	router := gin.New()
+	group := router.Group("/api/v1")
+	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
+	NewEdgeControlHandler(
+		repo,
+		services.NewDetectionRunsService(repo, pipeline.NewTaskManager()),
+		services.NewVariableWriteService(repo, tags, services.NewKIOWriteService(&partialResultKIOBroker{waitErr: errors.New("ack timeout")}), nil),
+	).Register(group, authService)
+
+	resp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/variables/write", map[string]any{
+		"command_id":        "cmd-write-partial",
+		"operator_username": "admin",
+		"payload": map[string]any{
+			"var_id":          "9101",
+			"value":           12.5,
+			"wait_ack":        true,
+			"ack_timeout_sec": 1,
+			"trigger":         false,
+		},
+	}, serviceToken)
+	if resp.Code != http.StatusGatewayTimeout {
+		t.Fatalf("write partial status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body map[string]any
+	mustDecodeHandler(t, resp, &body)
+	result, ok := body["result"].(map[string]any)
+	if !ok || result["var_id_text"] != "9101" {
+		t.Fatalf("expected partial result with var_id_text: %+v", body)
+	}
+	kioResult, ok := result["kio"].(map[string]any)
+	if !ok || kioResult["status"] != "ack_timeout_or_unmatched" || kioResult["broker_accepted"] != true {
+		t.Fatalf("expected partial kio result: %+v", body)
 	}
 }
 
@@ -1090,6 +1218,7 @@ func TestEdgeServiceReadRoutes(t *testing.T) {
 	}{
 		{"/api/v1/edge-control/task-modules", `"builtin.start_detection_run"`},
 		{"/api/v1/edge-control/task-flow-templates", `"variable-request-start-detection"`},
+		{"/api/v1/edge-control/gateways", `{}`},
 		{"/api/v1/edge-control/runtime/channels/detail", `"pressure_threshold"`},
 		{"/api/v1/edge-control/runtime/notifications", `"published"`},
 		{"/api/v1/edge-control/runtime/workers", `"items"`},
@@ -1564,17 +1693,17 @@ func TestLimitAlarmsHandlerListFilters(t *testing.T) {
 func TestParseTagFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	req := httptest.NewRequest(http.MethodGet, "/variables?gateway_id=2&enabled=true&discovered=false&keyword=temp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/variables?gateway_id=2&project_id=7&project_code=AC-07&var_group=PID&writable=true&enabled=true&discovered=false&keyword=temp", nil)
 	ctx.Request = req
 	filter, err := parseTagFilter(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *filter.GatewayID != 2 || *filter.Enabled != true || *filter.Discovered != false || filter.Keyword != "temp" {
+	if *filter.GatewayID != 2 || *filter.ProjectID != 7 || filter.ProjectCode != "AC-07" || filter.VarGroup != "PID" || *filter.Writable != true || *filter.Enabled != true || *filter.Discovered != false || filter.Keyword != "temp" {
 		t.Fatalf("unexpected filter: %+v", filter)
 	}
 
-	for _, rawURL := range []string{"/variables?gateway_id=bad", "/variables?enabled=bad", "/variables?discovered=bad"} {
+	for _, rawURL := range []string{"/variables?gateway_id=bad", "/variables?project_id=bad", "/variables?enabled=bad", "/variables?discovered=bad", "/variables?writable=bad", "/variables?device_id=8"} {
 		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 		ctx.Request = httptest.NewRequest(http.MethodGet, rawURL, nil)
 		if _, err := parseTagFilter(ctx); err == nil {

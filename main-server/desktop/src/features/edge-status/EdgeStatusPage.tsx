@@ -105,9 +105,9 @@ export function EdgeStatusPage() {
         ),
       },
       {
-        title: t("table.device"),
-        dataIndex: "device_code",
-        key: "device_code",
+        title: t("table.project"),
+        dataIndex: "project_code",
+        key: "project_code",
         render: (value) => value || "-",
       },
       {

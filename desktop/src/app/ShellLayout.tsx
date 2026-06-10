@@ -30,9 +30,9 @@ import {
 import { openExternal, openLogs, restartSidecar } from '@/shared/desktop/desktopBridge'
 import { createSsoTicket, logout } from '@/features/auth/api'
 import { useAuthStore } from '@/features/auth/authStore'
-import { getDevices, getNotificationUnreadCount, getNotifications, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
+import { getNotificationUnreadCount, getNotifications, getProjects, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
 import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
-import type { UserNotification } from '@/shared/api/types'
+import type { Project, UserNotification } from '@/shared/api/types'
 import { languageCode } from '@/shared/i18n/language'
 import { queryClient } from './queryClient'
 
@@ -73,9 +73,9 @@ export function ShellLayout() {
   const user = useAuthStore((state) => state.user)
   const hasAnyPermission = useAuthStore((state) => state.hasAnyPermission)
   const clearSession = useAuthStore((state) => state.clearSession)
-  const devicesQuery = useQuery({
-    queryKey: ['shell', 'devices'],
-    queryFn: getDevices,
+  const projectsQuery = useQuery({
+    queryKey: ['shell', 'projects'],
+    queryFn: getProjects,
     refetchInterval: 10000,
     retry: false,
   })
@@ -99,13 +99,13 @@ export function ShellLayout() {
     retry: false,
   })
 
-  const stationDevices = devicesQuery.data ?? []
+  const stationProjects = projectsQuery.data ?? []
   const visibleNavItems = navItems.filter((item) => hasAnyPermission(item.permissions))
-  const displayDeviceName = (device: { device_code: string; name?: string; display_name?: string; display_name_en?: string; display_name_ja?: string }) => {
+  const displayProjectName = (project: Pick<Project, 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) => {
     const currentLanguage = languageCode(i18n.resolvedLanguage)
-    if (currentLanguage === 'en') return device.display_name_en || device.device_code
-    if (currentLanguage === 'ja') return device.display_name_ja || device.device_code
-    return device.display_name || device.name || device.device_code
+    if (currentLanguage === 'en') return project.display_name_en || project.project_code
+    if (currentLanguage === 'ja') return project.display_name_ja || project.project_code
+    return project.display_name || project.name || project.project_code
   }
 
   const logoutMutation = useMutation({
@@ -274,7 +274,7 @@ export function ShellLayout() {
           placeholder={t('notifications.filters.project')}
           value={notificationProjectFilter}
           onChange={(value) => setNotificationProjectFilter(value)}
-          options={stationDevices.map((project) => ({ value: project.id, label: displayDeviceName(project) }))}
+          options={stationProjects.map((project) => ({ value: project.id, label: displayProjectName(project) }))}
         />
       </div>
       <div className="notification-list">
@@ -329,21 +329,20 @@ export function ShellLayout() {
                 <item.icon size={18} />
                 {!collapsed && <span>{t(`nav.${item.key}`)}</span>}
               </NavLink>
-              {item.key === 'station' && !collapsed && stationDevices.length > 0 ? (
+              {item.key === 'station' && !collapsed && stationProjects.length > 0 ? (
                 <div className="nav-subtree">
-                  {stationDevices.map((device) => {
-                    const search = `?project_id=${device.id}`
-                    const legacySearch = `?device_id=${device.id}`
-                    const active = location.pathname === '/' && (location.search === search || location.search === legacySearch)
-                    const deviceName = displayDeviceName(device)
+                  {stationProjects.map((project) => {
+                    const search = `?project_id=${project.id}`
+                    const active = location.pathname === '/' && location.search === search
+                    const projectName = displayProjectName(project)
                     return (
                       <Link
                         className={active ? 'nav-sublink active' : 'nav-sublink'}
-                        key={device.id}
+                        key={project.id}
                         to={{ pathname: '/', search }}
-                        title={deviceName}
+                        title={projectName}
                       >
-                        <span>{deviceName}</span>
+                        <span>{projectName}</span>
                       </Link>
                     )
                   })}

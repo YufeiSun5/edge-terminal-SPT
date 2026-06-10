@@ -297,8 +297,6 @@ export type VariableConfig = {
   raw_name: string;
   project_id?: number;
   project_code: string;
-  device_id?: number;
-  device_code: string;
   var_group: string;
   var_name: string;
   display_name: string;
@@ -402,8 +400,6 @@ export type VariableCreatePayload = Partial<
     | "raw_name"
     | "project_id"
     | "project_code"
-    | "device_id"
-    | "device_code"
     | "var_group"
     | "display_name"
     | "display_name_en"
@@ -443,8 +439,14 @@ export type VariableCreatePayload = Partial<
 
 export type VariableListParams = {
   gateway_id?: number;
+  edge_instance_id?: string;
+  project_id?: number;
+  project_code?: string;
+  var_group?: string;
+  writable?: boolean;
   enabled?: boolean;
   discovered?: boolean;
+  source_type?: "mqtt" | "virtual" | "manual" | string;
   keyword?: string;
 };
 
@@ -496,7 +498,6 @@ export type CommandAcceptedResponse = {
 export type Project = {
   id: number;
   project_code: string;
-  device_code?: string;
   site_no: string;
   edge_instance_id?: string;
   name: string;
@@ -513,27 +514,10 @@ export type Project = {
   updated_at: string;
 };
 
-export type Device = Project & {
-  device_code: string;
-};
-
 export type ProjectPayload = {
   project_code: string;
   site_no?: string;
   edge_instance_id?: string;
-  name?: string;
-  display_name?: string;
-  display_name_en?: string;
-  display_name_ja?: string;
-  model_name?: string;
-  image_ref?: string;
-  placeholder?: boolean;
-};
-
-export type DevicePayload = {
-  project_code?: string;
-  device_code: string;
-  site_no?: string;
   name?: string;
   display_name?: string;
   display_name_en?: string;
@@ -557,13 +541,9 @@ export type ProjectPatchPayload = Partial<{
   placeholder: boolean;
 }>;
 
-export type DevicePatchPayload = ProjectPatchPayload;
-
 export type VariableAssignmentPayload = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
-  device_code?: string;
   var_group: string;
   enabled: boolean;
 };
@@ -576,8 +556,6 @@ export type TagSnapshot = {
   source_path: string;
   project_id?: number;
   project_code: string;
-  device_id?: number;
-  device_code: string;
   var_group: string;
   var_name: string;
   display_name: string;
@@ -598,8 +576,6 @@ export type ActiveDetectionRun = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   mode: string;
   standard_id?: number;
   standard_code: string;
@@ -634,7 +610,6 @@ export type DetectionRunStorageRoute = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
   var_id: VarIdentifier;
   var_id_text?: string;
   route_id: number;
@@ -660,7 +635,6 @@ export type DetectionRunStorageRoutesResponse = {
 export type StorageRoute = {
   id: number;
   project_id: number;
-  device_id: number;
   var_id: VarIdentifier;
   var_id_text?: string;
   route_code: string;
@@ -683,7 +657,6 @@ export type StorageRoutePayload = Partial<
   Pick<
     StorageRoute,
     | "project_id"
-    | "device_id"
     | "var_id"
     | "route_code"
     | "storage_target"
@@ -702,7 +675,6 @@ export type StorageRoutePayload = Partial<
 
 export type StorageRouteListParams = {
   project_id?: number;
-  device_id?: number;
   var_id?: VarIdentifier;
   enabled?: boolean;
 };
@@ -741,10 +713,24 @@ export type DetectionRunReportRequestVariable = {
   ext_3?: string;
 };
 
-export type DetectionRunReportRequestPayload = {
+export type DetectionRunReportRequestReportPayload = {
+  template_id?: number;
+  template_code?: string;
+  template_version?: number;
+  report_name?: string;
   variables?: DetectionRunReportRequestVariable[];
   var_ids?: VarIdentifier[];
   variable_names?: string[];
+  params?: Record<string, unknown>;
+};
+
+export type DetectionRunReportRequestPayload = {
+  enabled?: boolean;
+  reports?: DetectionRunReportRequestReportPayload[];
+  variables?: DetectionRunReportRequestVariable[];
+  var_ids?: VarIdentifier[];
+  variable_names?: string[];
+  params?: Record<string, unknown>;
   ext_1?: string;
   ext_2?: string;
   ext_3?: string;
@@ -764,6 +750,8 @@ export type DetectionRunReportRequest = {
   display_name_ja: string;
   report_name: string;
   status: string;
+  variables?: DetectionRunReportRequestVariable[];
+  params?: Record<string, unknown>;
   ext_1: string;
   ext_2: string;
   ext_3: string;
@@ -782,8 +770,6 @@ export type DetectionRunEvent = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   event_type: string;
   event_level: string;
   message: string;
@@ -798,8 +784,6 @@ export type DetectionRunSummary = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   result_status: "running" | "ok" | "ng" | "unknown" | string;
   started_at?: string;
   ended_at?: string;
@@ -824,8 +808,6 @@ export type DetectionRun = {
   test_no: string;
   project_id: number;
   project_code: string;
-  device_id: number;
-  device_code: string;
   mode: string;
   status: string;
   standard_id?: number;
@@ -854,7 +836,6 @@ export type DetectionRun = {
 export type DetectionRunListParams = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
   status?: string;
   test_no?: string;
   start?: string;
@@ -871,7 +852,6 @@ export type DetectionRunListResponse = {
 export type DetectionRunStartPayload = {
   project_id: number;
   project_code?: string;
-  device_id?: number;
   test_no: string;
   mode: string;
   standard_id?: number;
@@ -943,8 +923,6 @@ export type DetectionStandard = {
   display_name_ja: string;
   project_id?: number;
   project_code: string;
-  device_id?: number;
-  device_code: string;
   mode: string;
   report_template_id?: number;
   version: number;
@@ -993,8 +971,6 @@ export type DetectionStandardPayload = Partial<
     | "display_name_ja"
     | "project_id"
     | "project_code"
-    | "device_id"
-    | "device_code"
     | "mode"
     | "report_template_id"
     | "version"
@@ -1008,8 +984,6 @@ export type DetectionStandardPayload = Partial<
 export type DetectionStandardListParams = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
-  device_code?: string;
   mode?: string;
   enabled?: boolean;
   keyword?: string;
@@ -1040,19 +1014,19 @@ export type RealtimeWebSocketEnvelope<TPayload = unknown> = {
 
 export type RealtimeWebSocketSubscription = {
   topics: RealtimeWebSocketTopic[];
+  edge_instance_id?: string;
   source_type?: "mqtt" | "virtual" | "manual" | string;
   gateway_id?: number;
   project_id?: number;
-  device_id?: number;
   var_ids?: VarIdentifier[];
   var_id_texts?: string[];
 };
 
 export type RealtimeVariableListParams = {
+  edge_instance_id?: string;
   source_type?: "mqtt" | "virtual" | "manual" | string;
   gateway_id?: number;
   project_id?: number;
-  device_id?: number;
   var_id?: VarIdentifier | VarIdentifier[];
 };
 
@@ -1079,9 +1053,55 @@ export type StationViewTemplateRef = {
   layout_json?: string;
 };
 
+export type StationViewAssignment = {
+  id: number;
+  template_uid: string;
+  target_type: "global" | "edge" | "model" | "project" | string;
+  target_key: string;
+  priority: number;
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type StationViewTemplateListItem = StationViewTemplateRef & {
+  id: number;
+  assignments?: StationViewAssignment[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type StationViewTemplatesResponse = {
+  edge_instance_id?: string;
+  items: StationViewTemplateListItem[];
+  count: number;
+};
+
+export type StationViewDiagnostics = {
+  status: string;
+  template_count: number;
+  published_templates: number;
+  region_count: number;
+  item_count: number;
+  assignment_count: number;
+  enabled_assignments: number;
+  default_template_ready: boolean;
+  warnings?: string[];
+};
+
+export type StationViewReloadResponse = {
+  ok: boolean;
+  edge_instance_id?: string;
+  reload_mode: string;
+  diagnostics: StationViewDiagnostics;
+  effective?: StationViewEffectiveResponse;
+};
+
+export type StationViewLayoutArea = "card_pool" | "list_layout";
+
 export type StationViewRegion = {
-  region_key: string;
-  region_type: string;
+  layout_area: StationViewLayoutArea | string;
+  layout_type: string;
   layout_json?: string;
   sort_order: number;
 };
@@ -1109,14 +1129,39 @@ export type StationViewResolvedBinding = {
 
 export type StationViewItem = {
   item_uid: string;
-  region_key: string;
+  layout_area: StationViewLayoutArea | string;
   item_type: string;
   binding_type: "var_name" | "var_group" | "detection_items" | "alarm_summary" | "run_state" | "manual" | string;
   binding_key: string;
   binding_json?: string;
   display_json?: string;
   sort_order: number;
+  visible: boolean;
   resolved_bindings?: StationViewResolvedBinding[];
+};
+
+export type StationViewItemsResponse = {
+  edge_instance_id?: string;
+  template_uid: string;
+  items: StationViewItem[];
+  count: number;
+};
+
+export type StationViewItemPayload = {
+  item_uid: string;
+  layout_area: StationViewLayoutArea;
+  item_type: string;
+  binding_type: "var_name" | "var_group" | "detection_items" | "alarm_summary" | "run_state" | "manual" | string;
+  binding_key: string;
+  binding_json?: string;
+  display_json?: string;
+  sort_order: number;
+  visible: boolean;
+};
+
+export type StationViewItemsReplacePayload = {
+  template_uid: string;
+  items: StationViewItemPayload[];
 };
 
 export type StationViewEffectiveResponse = {
@@ -1172,6 +1217,20 @@ export type RealtimeWebSocketCommand<TPayload = unknown> = {
   payload: TPayload;
 };
 
+export type KIOWriteResult = {
+  gateway_id: number;
+  topic: string;
+  ack_topic?: string;
+  qid: number;
+  broker_accepted: boolean;
+  project_confirmed?: boolean;
+  Project_confirmed?: boolean;
+  process_step?: number;
+  result?: string;
+  message?: string;
+  status: "published_unconfirmed" | "confirmed" | "rejected" | "ack_timeout_or_unmatched" | string;
+};
+
 export type VariableWriteResult = {
   var_id: VarIdentifier;
   var_id_text: string;
@@ -1191,7 +1250,7 @@ export type VariableWriteResult = {
   request_id?: string;
   broker_accepted?: boolean;
   project_confirmed?: boolean;
-  kio?: unknown;
+  kio?: KIOWriteResult;
 };
 
 export type HistoryDataItem = {
@@ -1199,14 +1258,12 @@ export type HistoryDataItem = {
   gateway_id: number;
   topic: string;
   project_id: number;
-  device_id: number;
   task_id: number;
   test_no: string;
   var_id: VarIdentifier;
   var_id_text?: string;
   var_name: string;
   project_code: string;
-  device_code: string;
   value?: number | null;
   str_value?: string | null;
   quality: number;
@@ -1223,8 +1280,6 @@ export type HistoryDataResponse = {
 export type HistoryDataParams = {
   project_id?: number;
   project_code?: string;
-  device_id?: number;
-  device_code?: string;
   task_id?: number;
   test_no?: string;
   start?: string;
@@ -1240,6 +1295,7 @@ export type ReportTemplate = {
   file_ref: string;
   file_kind: string;
   version: number;
+  params_schema_json?: string;
   enabled: boolean;
   remark: string;
   created_at: string;
@@ -1263,6 +1319,93 @@ export type ReportTemplatePayload = Partial<
 export type ReportTemplateListParams = {
   enabled?: boolean;
   keyword?: string;
+};
+
+export type MainReportJobStatus = "pending" | "waiting" | "running" | "success" | "failed" | string;
+
+export type MainReportJob = {
+  id: number;
+  job_key: string;
+  edge_instance_id: string;
+  task_id: number;
+  request_id: number;
+  test_no: string;
+  project_id: number;
+  project_code: string;
+  template_id?: number;
+  template_code: string;
+  template_version: number;
+  report_name: string;
+  status: MainReportJobStatus;
+  readiness_status: string;
+  attempts: number;
+  max_attempts: number;
+  next_run_at?: string;
+  locked_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  last_checked_at?: string;
+  artifact_ref: string;
+  artifact_name: string;
+  error_message: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MainReportJobListParams = {
+  status?: MainReportJobStatus;
+  task_id?: number;
+  edge_instance_id?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type MainReportJobListResponse = {
+  items: MainReportJob[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type MainReportJobEvent = {
+  id: number;
+  job_id: number;
+  event_type: string;
+  level: string;
+  message: string;
+  payload?: unknown;
+  created_at: string;
+};
+
+export type MainReportJobEventsResponse = {
+  items: MainReportJobEvent[];
+  count: number;
+  limit: number;
+};
+
+export type MainReportReadinessResponse = {
+  role: string;
+  edge_instance_id: string;
+  sync_database: string;
+  readiness: Record<string, unknown>;
+};
+
+export type MainReportEnqueuePayload = {
+  task_id: number;
+  force?: boolean;
+  edge_instance_id?: string;
+};
+
+export type MainReportEnqueueResponse = {
+  jobs: MainReportJob[];
+  readiness: Record<string, unknown>;
+  requests: unknown[];
+};
+
+export type MainReportArtifact = {
+  blob: Blob;
+  filename: string;
+  contentType: string;
 };
 
 export type TaskFlowVarRole = "watch" | "read" | "write" | string;

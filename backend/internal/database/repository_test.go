@@ -494,7 +494,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err := repo.UpsertGatewaySeeds([]models.GatewayConfig{{ID: 1, Name: "gw", Broker: "tcp://127.0.0.1:1883", ClientID: "c", Topic: "topic", Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if gateways, err := repo.LoadGateways(); err != nil || len(gateways) != 1 {
+	if gateways, err := repo.LoadGateways(""); err != nil || len(gateways) != 1 {
 		t.Fatalf("load gateways len=%d err=%v", len(gateways), err)
 	}
 	if configs, err := repo.ListGatewayConfigs(); err != nil || len(configs) != 1 {
@@ -576,7 +576,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err := repo.CreateTag(&tag); err != nil {
 		t.Fatal(err)
 	}
-	if tags, err := repo.LoadTags(); err != nil || len(tags) != 0 {
+	if tags, err := repo.LoadTags(""); err != nil || len(tags) != 0 {
 		t.Fatalf("load tags len=%d err=%v", len(tags), err)
 	}
 	enabled := true
@@ -601,6 +601,14 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if tags, err := repo.ListTags(TagFilter{
+		ProjectID:   &Project.ID,
+		ProjectCode: Project.ProjectCode,
+		VarGroup:    "group",
+		Writable:    &enabled,
+	}); err != nil || len(tags) != 1 || tags[0].VarID != 100 {
+		t.Fatalf("list project writable tags got=%+v err=%v", tags, err)
+	}
 	routes, err := repo.ListStorageRoutesByProject(Project.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -616,7 +624,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if tags, err := repo.LoadTags(); err != nil || len(tags) != 1 || tags[0].VarID != 100 {
+	if tags, err := repo.LoadTags(""); err != nil || len(tags) != 1 || tags[0].VarID != 100 {
 		t.Fatalf("load assigned runtime tags got=%+v err=%v", tags, err)
 	}
 	if err := repo.UpsertDiscoveredTags([]models.TagConfig{{VarID: 101, GatewayID: 1, SourcePath: "pressure", RawName: "pressure", VarName: "pressure", JSONPath: "pressure", DataType: "FLOAT", Enabled: true, ScaleFactor: 1}}); err != nil {
@@ -629,7 +637,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if discoveredTag.Enabled || !discoveredTag.Discovered || discoveredTag.Writable || discoveredTag.RWMode != models.RWModeRead {
 		t.Fatalf("unexpected discovered tag defaults: %+v", discoveredTag)
 	}
-	if tags, err := repo.LoadTags(); err != nil || len(tags) != 1 || tags[0].VarID != 100 {
+	if tags, err := repo.LoadTags(""); err != nil || len(tags) != 1 || tags[0].VarID != 100 {
 		t.Fatalf("discovered candidate should not load into runtime tags got=%+v err=%v", tags, err)
 	}
 	if err := repo.UpsertDiscoveredTags([]models.TagConfig{{VarID: 999, GatewayID: 1, SourceTopic: "topic-updated", SourcePath: "temp", RawName: "temp", VarName: "temp", JSONPath: "temp", DataType: "FLOAT", Enabled: false, ScaleFactor: 1}}); err != nil {
@@ -1064,6 +1072,54 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}
 }
 
+func TestRepositoryEdgeInstanceFiltersGatewaysAndRuntimeTags(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	if err := repo.UpsertGatewaySeeds([]models.GatewayConfig{
+		{ID: 1, EdgeInstanceID: "edge-a", Name: "gw-a", Broker: "tcp://127.0.0.1:1883", ClientID: "a", Topic: "topic-a", Enabled: true},
+		{ID: 2, EdgeInstanceID: "edge-b", Name: "gw-b", Broker: "tcp://127.0.0.1:1883", ClientID: "b", Topic: "topic-b", Enabled: true},
+		{ID: 3, Name: "gw-legacy", Broker: "tcp://127.0.0.1:1883", ClientID: "legacy", Topic: "topic-legacy", Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gateways, err := repo.LoadGateways("edge-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gateways) != 2 || gateways[0].ID != 1 || gateways[1].ID != 3 {
+		t.Fatalf("edge-a should load own and legacy gateways, got %+v", gateways)
+	}
+
+	projectA := &models.Project{ProjectCode: "AC-A", EdgeInstanceID: "edge-a", Name: "Project A", Enabled: true}
+	projectB := &models.Project{ProjectCode: "AC-B", EdgeInstanceID: "edge-b", Name: "Project B", Enabled: true}
+	projectLegacy := &models.Project{ProjectCode: "AC-L", Name: "Legacy", Enabled: true}
+	for _, project := range []*models.Project{projectA, projectB, projectLegacy} {
+		if err := repo.CreateProject(project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tag := range []models.TagConfig{
+		{VarID: 1001, GatewayID: 1, SourcePath: "a", RawName: "a", ProjectID: &projectA.ID, ProjectCode: projectA.ProjectCode, VarName: "a", JSONPath: "a", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+		{VarID: 1002, GatewayID: 2, SourcePath: "b", RawName: "b", ProjectID: &projectB.ID, ProjectCode: projectB.ProjectCode, VarName: "b", JSONPath: "b", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+		{VarID: 1003, GatewayID: 3, SourcePath: "legacy", RawName: "legacy", ProjectID: &projectLegacy.ID, ProjectCode: projectLegacy.ProjectCode, VarName: "legacy", JSONPath: "legacy", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+	} {
+		tag := tag
+		if err := repo.CreateTag(&tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tags, err := repo.LoadTags("edge-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) != 2 || tags[0].VarID != 1001 || tags[1].VarID != 1003 {
+		t.Fatalf("edge-a should load own and legacy runtime tags, got %+v", tags)
+	}
+	if err := repo.AssignTag(1002, &projectA.ID, "", "bad", true); !errors.Is(err, ErrEdgeInstanceMismatch) {
+		t.Fatalf("expected cross-edge assignment mismatch, got %v", err)
+	}
+}
+
 func TestDetectionStandardItemsFreezeVariableDisplaySnapshot(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	repo := NewRepository(db)
@@ -1182,12 +1238,12 @@ func TestRepositoryStationViewEffectiveSelectionAndBindings(t *testing.T) {
 		OwnerScope:   "edge",
 	}
 	customRegions := []models.StationViewRegion{
-		{TemplateUID: customTemplate.TemplateUID, RegionKey: "left", RegionType: "metric_grid", SortOrder: 1, Enabled: true},
-		{TemplateUID: customTemplate.TemplateUID, RegionKey: "right", RegionType: "inspection_table", SortOrder: 2, Enabled: true},
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: models.StationViewLayoutAreaCardPool, LayoutArea: models.StationViewLayoutAreaCardPool, RegionType: "metric_grid", SortOrder: 1, Enabled: true},
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: models.StationViewLayoutAreaListLayout, LayoutArea: models.StationViewLayoutAreaListLayout, RegionType: "inspection_table", SortOrder: 2, Enabled: true},
 	}
 	customItems := []models.StationViewItem{
-		{TemplateUID: customTemplate.TemplateUID, RegionKey: "left", ItemUID: "custom-temp", ItemType: "metric_card", BindingType: models.StationViewBindingVarName, BindingKey: "temp", SortOrder: 10, Visible: true},
-		{TemplateUID: customTemplate.TemplateUID, RegionKey: "right", ItemUID: "custom-run-items", ItemType: "inspection_row", BindingType: models.StationViewBindingDetectionItems, SortOrder: 20, Visible: true},
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: models.StationViewLayoutAreaCardPool, LayoutArea: models.StationViewLayoutAreaCardPool, ItemUID: "custom-temp", ItemType: "metric_card", BindingType: models.StationViewBindingVarName, BindingKey: "temp", SortOrder: 10, Visible: true},
+		{TemplateUID: customTemplate.TemplateUID, RegionKey: models.StationViewLayoutAreaListLayout, LayoutArea: models.StationViewLayoutAreaListLayout, ItemUID: "custom-run-items", ItemType: "inspection_row", BindingType: models.StationViewBindingDetectionItems, SortOrder: 20, Visible: true},
 	}
 	customAssignment := models.StationViewAssignment{
 		TemplateUID: customTemplate.TemplateUID,
@@ -1245,6 +1301,50 @@ func TestRepositoryStationViewEffectiveSelectionAndBindings(t *testing.T) {
 	}
 	if got := strings.Join(effective.WSSubscription.VarIDs, ","); got != "11,33" {
 		t.Fatalf("effective ws var ids should include resolved card and run items, got %s", got)
+	}
+}
+
+func TestRepositoryStationViewItemsReplaceUsesLayoutArea(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	template := models.StationViewTemplate{
+		TemplateUID:  "station-items",
+		TemplateCode: "STATION-ITEMS",
+		Name:         "Station items",
+		Status:       models.StationViewStatusPublished,
+	}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := repo.ReplaceStationViewItems(template.TemplateUID, []models.StationViewItemDTO{
+		{ItemUID: "card-temp", LayoutArea: models.StationViewLayoutAreaCardPool, ItemType: "metric_card", BindingType: models.StationViewBindingVarName, BindingKey: "temp", Visible: true},
+		{ItemUID: "list-run", LayoutArea: models.StationViewLayoutAreaListLayout, ItemType: "inspection_row", BindingType: models.StationViewBindingDetectionItems, SortOrder: 20, Visible: true},
+		{ItemUID: "hidden", LayoutArea: models.StationViewLayoutAreaCardPool, ItemType: "metric_card", BindingType: models.StationViewBindingVarName, BindingKey: "pressure", Visible: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 || items[0].LayoutArea != models.StationViewLayoutAreaCardPool || items[2].LayoutArea != models.StationViewLayoutAreaListLayout || items[1].Visible {
+		t.Fatalf("unexpected replaced items: %+v", items)
+	}
+	var regions []models.StationViewRegion
+	if err := db.Where("template_uid = ?", template.TemplateUID).Order("layout_area ASC").Find(&regions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(regions) != 2 || regions[0].LayoutArea != models.StationViewLayoutAreaCardPool || regions[1].LayoutArea != models.StationViewLayoutAreaListLayout {
+		t.Fatalf("expected layout regions to be ensured, got %+v", regions)
+	}
+	if _, err := repo.ReplaceStationViewItems(template.TemplateUID, []models.StationViewItemDTO{
+		{ItemUID: "bad", LayoutArea: "left", ItemType: "metric_card", BindingType: models.StationViewBindingVarName, Visible: true},
+	}); err == nil || !strings.Contains(err.Error(), "layout_area") {
+		t.Fatalf("expected invalid layout_area error, got %v", err)
+	}
+	if _, err := repo.ReplaceStationViewItems(template.TemplateUID, []models.StationViewItemDTO{
+		{ItemUID: "dup", LayoutArea: models.StationViewLayoutAreaCardPool, ItemType: "metric_card", BindingType: models.StationViewBindingVarName, Visible: true},
+		{ItemUID: "dup", LayoutArea: models.StationViewLayoutAreaListLayout, ItemType: "inspection_row", BindingType: models.StationViewBindingRunState, Visible: true},
+	}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate item_uid error, got %v", err)
 	}
 }
 

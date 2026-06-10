@@ -37,15 +37,15 @@ func TestStationViewEffectiveReadsSyncedTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	regions := []StationViewRegion{
-		{TemplateUID: template.TemplateUID, RegionKey: "left", RegionType: "metric_grid", SortOrder: 10, Enabled: true},
-		{TemplateUID: template.TemplateUID, RegionKey: "right", RegionType: "inspection_table", SortOrder: 20, Enabled: true},
+		{TemplateUID: template.TemplateUID, RegionKey: StationViewLayoutAreaCardPool, LayoutArea: StationViewLayoutAreaCardPool, RegionType: "metric_grid", SortOrder: 10, Enabled: true},
+		{TemplateUID: template.TemplateUID, RegionKey: StationViewLayoutAreaListLayout, LayoutArea: StationViewLayoutAreaListLayout, RegionType: "inspection_table", SortOrder: 20, Enabled: true},
 	}
 	if err := db.Create(&regions).Error; err != nil {
 		t.Fatal(err)
 	}
 	items := []StationViewItem{
-		{TemplateUID: template.TemplateUID, RegionKey: "left", ItemUID: "left-temp", ItemType: "metric_card", BindingType: StationViewBindingVarName, BindingKey: "temp", SortOrder: 10, Visible: true},
-		{TemplateUID: template.TemplateUID, RegionKey: "right", ItemUID: "right-run", ItemType: "inspection_row", BindingType: StationViewBindingRunItems, SortOrder: 20, Visible: true},
+		{TemplateUID: template.TemplateUID, RegionKey: StationViewLayoutAreaCardPool, LayoutArea: StationViewLayoutAreaCardPool, ItemUID: "card-pool-temp", ItemType: "metric_card", BindingType: StationViewBindingVarName, BindingKey: "temp", SortOrder: 10, Visible: true},
+		{TemplateUID: template.TemplateUID, RegionKey: StationViewLayoutAreaListLayout, LayoutArea: StationViewLayoutAreaListLayout, ItemUID: "list-layout-run", ItemType: "inspection_row", BindingType: StationViewBindingRunItems, SortOrder: 20, Visible: true},
 	}
 	if err := db.Create(&items).Error; err != nil {
 		t.Fatal(err)
@@ -76,6 +76,9 @@ func TestStationViewEffectiveReadsSyncedTables(t *testing.T) {
 	}
 	if len(effective.Items) != 2 || effective.Items[0].ResolvedBindings[0].VarID != 11 {
 		t.Fatalf("var_name should resolve inside current project only: %+v", effective.Items)
+	}
+	if effective.Items[0].LayoutArea != StationViewLayoutAreaCardPool || effective.Items[1].LayoutArea != StationViewLayoutAreaListLayout || !effective.Items[0].Visible {
+		t.Fatalf("effective items should expose layout areas and visible flag: %+v", effective.Items)
 	}
 	if runBindings := effective.Items[1].ResolvedBindings; len(runBindings) != 2 || runBindings[0].VarID != 11 || runBindings[1].VarID != 33 {
 		t.Fatalf("run bindings should use current paused task sorted by sort_order: %+v", runBindings)
@@ -114,7 +117,7 @@ func TestSyncedProjectsAndCurrentDetectionRun(t *testing.T) {
 	if projectA.ID == 0 {
 		t.Fatal("project ID was not assigned")
 	}
-	projects, err := query.ListProjects("edge-a")
+	projects, err := query.ListProjects("edge-a", true, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +200,17 @@ func TestSyncedProjectsAndCurrentDetectionRun(t *testing.T) {
 	}
 	if got, limit, err := query.DetectionRunEvents(task.ID, 0); err != nil || limit != 200 || len(got) != 1 || got[0].EventType != "started" {
 		t.Fatalf("events mismatch: limit=%d %+v err=%v", limit, got, err)
+	}
+}
+
+func TestReportReadinessExtractsLargeVarIDTextWithoutPrecisionLoss(t *testing.T) {
+	request := DetectionRunReportRequest{
+		VarID:         9212397624135540856,
+		VariablesJSON: `[{"var_id":9212397624135540856,"var_id_text":"9212397624135540856"}]`,
+	}
+	got := extractReportRequestVarIDs(request)
+	if len(got) != 1 || got[0] != request.VarID {
+		t.Fatalf("large report var_id should keep exact int64 value, got %+v", got)
 	}
 }
 

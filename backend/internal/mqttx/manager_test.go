@@ -112,13 +112,18 @@ func TestManagerPublishAndWaitKIOAckSuccessAndTimeout(t *testing.T) {
 
 func TestGatewayStateHelpers(t *testing.T) {
 	gateway := &Gateway{config: models.GatewayConfig{ClientID: "client", Topic: "topic"}, subscribedTopics: map[string]byte{}}
+	gateway.ensureStopCh()
+	gateway.markConnectFailed(errors.New("connect refused"))
+	if status := gateway.status(); status.Active || status.Reconnects != 1 || status.LastError != "connect refused" || status.LastDisconnected.IsZero() {
+		t.Fatalf("unexpected connect failed status: %+v", status)
+	}
 	gateway.markConnected()
 	gateway.markConnected()
 	gateway.recordSubscription("b", 1)
 	gateway.recordSubscription("a", 1)
 	gateway.markError(errors.New("boom"))
 	status := gateway.status()
-	if !status.Active || status.Reconnects != 1 || status.LastError != "boom" || status.SubscribedTopics[0] != "a" {
+	if !status.Active || status.Reconnects != 2 || status.LastError != "boom" || status.SubscribedTopics[0] != "a" {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	gateway.markDisconnected(errors.New("lost"))
@@ -128,6 +133,12 @@ func TestGatewayStateHelpers(t *testing.T) {
 	gateway.markError(nil)
 	if names := subscribedTopicNames(map[string]byte{"z": 1, "a": 1}); names[0] != "a" || names[1] != "z" {
 		t.Fatalf("unexpected subscribed names: %+v", names)
+	}
+	gateway.stop()
+	select {
+	case <-gateway.stopCh:
+	default:
+		t.Fatal("expected stop channel closed")
 	}
 }
 

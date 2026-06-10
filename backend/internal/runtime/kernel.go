@@ -78,7 +78,7 @@ func (k *Kernel) Start() error {
 		return err
 	}
 
-	tagConfigs, err := k.repo.LoadTags()
+	tagConfigs, err := k.repo.LoadTags(k.cfg.Auth.EdgeInstanceID)
 	if err != nil {
 		return err
 	}
@@ -106,12 +106,12 @@ func (k *Kernel) Start() error {
 	k.flows.Load(taskFlows)
 	log.Printf("loaded task flows: %d", len(taskFlows))
 
-	gateways, err := k.repo.LoadGateways()
+	gateways, err := k.repo.LoadGateways(k.cfg.Auth.EdgeInstanceID)
 	if err != nil {
 		return err
 	}
 
-	discovery.Start(k.channels, k.repo, k.tags)
+	discovery.Start(k.channels, k.repo, k.tags, k.cfg.Auth.EdgeInstanceID)
 	services.NewNotificationDispatcher(k.repo, k.notify).Start(k.channels.Notify)
 	k.flows.Start(1)
 	k.flows.StartScheduleScanner(time.Second)
@@ -142,6 +142,7 @@ func (k *Kernel) seedGateways() error {
 	for _, item := range k.cfg.Gateways {
 		gateways = append(gateways, models.GatewayConfig{
 			ID:               item.ID,
+			EdgeInstanceID:   firstNonEmpty(item.EdgeInstanceID, k.cfg.Auth.EdgeInstanceID),
 			Name:             item.Name,
 			Broker:           item.Broker,
 			ClientID:         item.ClientID,
@@ -226,7 +227,7 @@ func (k *Kernel) mountRoutes() {
 	protected.POST("/auth/logout", k.auth.Logout)
 	protected.POST("/auth/sso-ticket", k.auth.RequirePermission(auth.PermSSOHandoff), k.auth.CreateSSOTicket)
 
-	variablesService := services.NewVariablesService(k.repo, k.tags)
+	variablesService := services.NewVariablesService(k.repo, k.tags, k.cfg.Auth.EdgeInstanceID)
 	detectionRunsService := services.NewDetectionRunsService(k.repo, k.tasks, services.DetectionRunsRuntimeDeps{Tags: k.tags, Channels: k.channels, Flows: k.flows})
 	reportTemplatesService := services.NewReportTemplatesService(k.repo)
 	systemConfigService := services.NewSystemConfigService(k.cfg)
@@ -322,4 +323,13 @@ func isAllowedDesktopOrigin(origin string) bool {
 	return strings.HasPrefix(origin, "http://127.0.0.1:") ||
 		strings.HasPrefix(origin, "http://localhost:") ||
 		strings.HasPrefix(origin, "http://[::1]:")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

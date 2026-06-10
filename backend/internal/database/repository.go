@@ -82,6 +82,7 @@ type StartDetectionOptions struct {
 var (
 	ErrProjectAlreadyRunning = errors.New("project already has a running detection task")
 	ErrReferenced            = errors.New("resource is already referenced")
+	ErrEdgeInstanceMismatch  = errors.New("project and gateway edge_instance_id mismatch")
 )
 
 func NewRepository(db *gorm.DB) *Repository {

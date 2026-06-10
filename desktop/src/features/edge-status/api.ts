@@ -1,4 +1,4 @@
-import { deleteJson, getJson, patchJson, postJson, putJson } from "@/shared/api/http";
+import { apiClient, deleteJson, getJson, patchJson, postJson, putJson, toApiError } from "@/shared/api/http";
 import type {
   ActiveDetectionRun,
   AuditLogListParams,
@@ -7,9 +7,6 @@ import type {
   BulkRemapKioProjectsResult,
   ChannelStats,
   CommandAcceptedResponse,
-  Device,
-  DevicePatchPayload,
-  DevicePayload,
   DetectionRun,
   DetectionRunEventsResponse,
   DetectionRunListParams,
@@ -34,6 +31,14 @@ import type {
   HealthResponse,
   LimitAlarmListParams,
   LimitAlarmListResponse,
+  MainReportArtifact,
+  MainReportEnqueuePayload,
+  MainReportEnqueueResponse,
+  MainReportJob,
+  MainReportJobEventsResponse,
+  MainReportJobListParams,
+  MainReportJobListResponse,
+  MainReportReadinessResponse,
   NotificationListParams,
   NotificationListResponse,
   NotificationUnreadCount,
@@ -44,6 +49,10 @@ import type {
   ProjectMembersResponse,
   RealtimeVariableListParams,
   StationViewEffectiveResponse,
+  StationViewItemsReplacePayload,
+  StationViewItemsResponse,
+  StationViewReloadResponse,
+  StationViewTemplatesResponse,
   TagSnapshot,
   ReportTemplate,
   ReportTemplateListParams,
@@ -220,10 +229,6 @@ export function getProjects() {
   return getJson<Project[]>("/api/v1/projects").then((items) => items.map(withProjectAliases));
 }
 
-export function getDevices() {
-  return getProjects().then((items) => items.map(withDeviceAliases) as Device[]);
-}
-
 export function getProjectMembers(projectId: number) {
   return getJson<ProjectMembersResponse>(`/api/v1/projects/${projectId}/members`);
 }
@@ -239,16 +244,8 @@ export function createProject(payload: ProjectPayload) {
   return postJson<Project, Record<string, unknown>>("/api/v1/projects", withProjectPayload(payload)).then(withProjectAliases);
 }
 
-export function createDevice(payload: DevicePayload) {
-  return postJson<Device, Record<string, unknown>>("/api/v1/projects", withProjectPayload(payload)).then(withDeviceAliases);
-}
-
 export function updateProject(projectId: number, payload: ProjectPatchPayload) {
   return patchJson<Project, ProjectPatchPayload>(`/api/v1/projects/${projectId}`, payload).then(withProjectAliases);
-}
-
-export function updateDevice(deviceId: number, payload: DevicePatchPayload) {
-  return updateProject(deviceId, payload).then(withDeviceAliases);
 }
 
 export function createGatewayConfig(payload: GatewayConfigPayload) {
@@ -281,12 +278,18 @@ export function discoverGatewayVariables(gatewayId: number) {
 
 export function getVariables(params: VariableListParams = {}) {
   const query = new URLSearchParams();
+  if (params.edge_instance_id) query.set("edge_instance_id", params.edge_instance_id);
   if (params.gateway_id !== undefined)
     query.set("gateway_id", String(params.gateway_id));
+  if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+  if (params.project_code) query.set("project_code", params.project_code);
+  if (params.var_group) query.set("var_group", params.var_group);
+  if (params.writable !== undefined) query.set("writable", String(params.writable));
   if (params.enabled !== undefined)
     query.set("enabled", String(params.enabled));
   if (params.discovered !== undefined)
     query.set("discovered", String(params.discovered));
+  if (params.source_type) query.set("source_type", params.source_type);
   if (params.keyword) query.set("keyword", params.keyword);
   const suffix = query.toString();
   return getJson<VariableConfig[]>(
@@ -335,7 +338,6 @@ export function bulkRemapKioProjects(payload: BulkRemapKioProjectsPayload = {}) 
 export function getStorageRoutes(params: StorageRouteListParams = {}) {
   const query = new URLSearchParams();
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.var_id !== undefined) query.set("var_id", String(params.var_id));
   if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
   const suffix = query.toString();
@@ -359,10 +361,10 @@ export function deleteStorageRoute(routeId: number) {
 
 export function getRealtimeVariables(params: RealtimeVariableListParams = {}) {
   const query = new URLSearchParams();
+  if (params.edge_instance_id) query.set("edge_instance_id", params.edge_instance_id);
   if (params.source_type) query.set("source_type", params.source_type);
   if (params.gateway_id !== undefined) query.set("gateway_id", String(params.gateway_id));
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.var_id !== undefined) {
     const varIds = Array.isArray(params.var_id) ? params.var_id : [params.var_id];
     for (const varId of varIds) query.append("var_id", String(varId));
@@ -371,9 +373,38 @@ export function getRealtimeVariables(params: RealtimeVariableListParams = {}) {
   return getJson<TagSnapshot[]>(`/api/v1/realtime/variables${suffix ? `?${suffix}` : ""}`).then((items) => items.map(withTagSnapshotAliases));
 }
 
-export function getStationViewEffective(projectId: number) {
+export function getStationViewEffective(projectId: number, edgeInstanceId?: string) {
   const query = new URLSearchParams({ project_id: String(projectId) });
+  if (edgeInstanceId) query.set("edge_instance_id", edgeInstanceId);
   return getJson<StationViewEffectiveResponse>(`/api/v1/station-view/effective?${query.toString()}`);
+}
+
+export function getStationViewTemplates(params: { status?: string; owner_scope?: string; keyword?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.owner_scope) query.set("owner_scope", params.owner_scope);
+  if (params.keyword) query.set("keyword", params.keyword);
+  const suffix = query.toString();
+  return getJson<StationViewTemplatesResponse>(`/api/v1/station-view/templates${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getStationViewItems(params: { template_uid?: string; project_id?: number }) {
+  const query = new URLSearchParams();
+  if (params.template_uid) query.set("template_uid", params.template_uid);
+  if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+  const suffix = query.toString();
+  return getJson<StationViewItemsResponse>(`/api/v1/station-view/items${suffix ? `?${suffix}` : ""}`);
+}
+
+export function replaceStationViewItems(payload: StationViewItemsReplacePayload) {
+  return putJson<StationViewItemsResponse, StationViewItemsReplacePayload>("/api/v1/station-view/items", payload);
+}
+
+export function reloadStationView(projectId?: number) {
+  return postJson<StationViewReloadResponse, { project_id?: number }>(
+    "/api/v1/station-view/reload",
+    projectId ? { project_id: projectId } : {},
+  );
 }
 
 export function getActiveDetectionRuns() {
@@ -383,7 +414,6 @@ export function getActiveDetectionRuns() {
 export function getDetectionRuns(params: DetectionRunListParams = {}) {
   const query = new URLSearchParams();
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.project_code) query.set("project_code", params.project_code);
   if (params.status) query.set("status", params.status);
   if (params.test_no) query.set("test_no", params.test_no);
@@ -446,9 +476,7 @@ export function addDetectionRunNote(runId: number, payload: DetectionRunNotePayl
 export function getDetectionStandards(params: DetectionStandardListParams = {}) {
   const query = new URLSearchParams();
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
-  else if (params.device_id !== undefined) query.set("project_id", String(params.device_id));
   if (params.project_code) query.set("project_code", params.project_code);
-  else if (params.device_code) query.set("project_code", params.device_code);
   if (params.mode) query.set("mode", params.mode);
   if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
   if (params.keyword) query.set("keyword", params.keyword);
@@ -493,6 +521,66 @@ export function getReportTemplates(params: ReportTemplateListParams = {}) {
   if (params.keyword) query.set("keyword", params.keyword);
   const suffix = query.toString();
   return getJson<ReportTemplate[]>(`/api/v1/report-templates${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getMainReportReadiness(taskId: number, edgeInstanceId?: string) {
+  const query = new URLSearchParams({ task_id: String(taskId) });
+  if (edgeInstanceId) query.set("edge_instance_id", edgeInstanceId);
+  return getJson<MainReportReadinessResponse>(`/api/v1/main-server/report-readiness?${query.toString()}`);
+}
+
+export function enqueueMainReportJob(payload: MainReportEnqueuePayload) {
+  return postJson<MainReportEnqueueResponse, MainReportEnqueuePayload>("/api/v1/main-server/report-jobs/enqueue", payload);
+}
+
+export function getMainReportJobs(params: MainReportJobListParams = {}) {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.task_id !== undefined) query.set("task_id", String(params.task_id));
+  if (params.edge_instance_id) query.set("edge_instance_id", params.edge_instance_id);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString();
+  return getJson<MainReportJobListResponse>(`/api/v1/main-server/report-jobs${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getMainReportJob(jobId: number) {
+  return getJson<MainReportJob>(`/api/v1/main-server/report-jobs/${jobId}`);
+}
+
+export function getMainReportJobEvents(jobId: number, limit = 100) {
+  return getJson<MainReportJobEventsResponse>(`/api/v1/main-server/report-jobs/${jobId}/events?limit=${limit}`);
+}
+
+export function retryMainReportJob(jobId: number) {
+  return postJson<MainReportJob, Record<string, never>>(`/api/v1/main-server/report-jobs/${jobId}/retry`, {});
+}
+
+function filenameFromContentDisposition(value: string | undefined, fallback: string) {
+  if (!value) return fallback;
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1]);
+  const plainMatch = value.match(/filename="?([^"]+)"?/i);
+  return plainMatch?.[1] ? plainMatch[1] : fallback;
+}
+
+function headerString(value: unknown) {
+  return typeof value === "string" ? value : undefined;
+}
+
+export async function downloadMainReportArtifact(jobId: number): Promise<MainReportArtifact> {
+  try {
+    const response = await apiClient.get<Blob>(`/api/v1/main-server/report-jobs/${jobId}/artifact`, {
+      responseType: "blob",
+    });
+    return {
+      blob: response.data,
+      filename: filenameFromContentDisposition(headerString(response.headers["content-disposition"]), `report-job-${jobId}.xlsx`),
+      contentType: headerString(response.headers["content-type"]) ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
+  } catch (error) {
+    throw toApiError(error);
+  }
 }
 
 export function createReportTemplate(payload: ReportTemplatePayload) {
@@ -561,74 +649,44 @@ export function getTaskFlowSqlLogs(flowRunId: number, limit = 100) {
   return getJson<TaskFlowSqlLog[]>(`/api/v1/task-flow-runs/${flowRunId}/sql-logs?${query.toString()}`);
 }
 
-function withProjectAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
+function withProjectAliases<T extends { project_code?: string }>(item: T): T {
   return {
     ...item,
-    project_code: item.project_code || item.device_code || "",
-  };
-}
-
-function withDeviceAliases<T extends { project_code?: string; device_code?: string }>(item: T): T {
-  return {
-    ...withProjectAliases(item),
-    device_code: item.device_code || item.project_code || "",
+    project_code: item.project_code || "",
   };
 }
 
 function withVariableAliases<T extends VariableConfig>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-  };
+  return item;
 }
 
 function withTagSnapshotAliases<T extends TagSnapshot>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-  };
+  return item;
 }
 
-function withStorageRouteAliases<T extends { project_id?: number; device_id?: number }>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-  };
+function withStorageRouteAliases<T>(item: T): T {
+  return item;
 }
 
-function withRunAliases<T extends { project_id?: number; project_code?: string; device_id?: number; device_code?: string; storage_routes?: Array<{ project_id?: number; device_id?: number }> }>(item: T): T {
+function withRunAliases<T>(item: T): T {
+  const run = item as T & { storage_routes?: unknown[] };
+  if (!Array.isArray(run.storage_routes)) return item;
   return {
     ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-    storage_routes: item.storage_routes?.map(withStorageRouteAliases),
+    storage_routes: run.storage_routes.map(withStorageRouteAliases),
   };
 }
 
 function withStandardAliases<T extends DetectionStandard>(item: T): T {
-  return {
-    ...item,
-    device_id: item.device_id ?? item.project_id,
-    device_code: item.device_code || item.project_code || "",
-  };
+  return item;
 }
 
 function withProjectPayload<T extends Record<string, unknown>>(payload: T): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...payload };
-  if (next.device_id !== undefined && next.project_id === undefined) next.project_id = next.device_id;
-  if (next.device_code !== undefined && next.project_code === undefined) next.project_code = next.device_code;
-  if (next.device_code !== undefined) delete next.device_code;
-  if (next.device_id !== undefined) delete next.device_id;
-  return next;
+  return { ...payload };
 }
 
 function withoutProjectAliases<T extends Record<string, unknown>>(payload: T): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...payload };
-  delete next.device_id;
-  delete next.device_code;
-  return next;
+  return { ...payload };
 }
 
 function withoutVariableStoragePayload(payload: Record<string, unknown>): Record<string, unknown> {

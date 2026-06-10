@@ -6,6 +6,9 @@ backend/*.exe
 backend/*.exe~
 *.exe
 *.exe~
+.ai/tmp/
+.playwright-cli/
+desktop/.playwright-cli/
 backend/*coverage*
 backend/all-coverage.out
 backend/backend_pid_*.txt
@@ -21,6 +24,7 @@ desktop/dist/
 desktop/output/
 desktop/release*/
 desktop/tmp-*.log
+main-server/backend/data/
 .env
 .env.local
 *.log

@@ -599,7 +599,7 @@ export function SettingsPage() {
     onSuccess: async () => {
       setProjectModalOpen(false)
       projectForm.resetFields()
-      messageApi.success(t('settings.messages.deviceCreated'))
+      messageApi.success(t('settings.messages.projectCreated'))
       await queryClient.invalidateQueries({ queryKey: ['settings', 'projects'] })
     },
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),

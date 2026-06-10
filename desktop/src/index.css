@@ -772,6 +772,7 @@ body {
   padding: 20px 24px 10px;
   display: flex;
   flex-direction: column;
+  gap: 6px;
   box-sizing: border-box;
   overflow: hidden;
   background: #a6c0df;
@@ -1005,7 +1006,7 @@ body {
   min-height: 0;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 20px;
+  gap: 14px;
 }
 
 .station-status-card {
@@ -1192,6 +1193,29 @@ body {
   box-shadow: 0 8px 20px rgba(31, 122, 112, 0.28);
 }
 
+.station-template-footnote {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 14px;
+  overflow: hidden;
+  color: rgba(30, 41, 59, 0.36);
+  font-size: 10px;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.station-template-footnote strong {
+  max-width: 180px;
+  overflow: hidden;
+  color: rgba(30, 41, 59, 0.44);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
 .station-ok.running {
   font-size: 48px;
   color: #1f7a70;
@@ -1209,21 +1233,130 @@ body {
   -webkit-backdrop-filter: blur(24px) saturate(170%);
 }
 
+.station-run-modal .ant-modal-body {
+  padding-top: 12px;
+}
+
+.station-run-layout {
+  display: grid;
+  gap: 12px;
+  max-height: calc(100vh - 210px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.station-run-section {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(71, 85, 105, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.56);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
+}
+
+.station-run-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .station-run-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 14px;
 }
 
+.station-run-form-grid-compact {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.station-run-form-grid .ant-form-item,
+.station-run-section > .ant-form-item {
+  margin-bottom: 0;
+}
+
 .station-run-form-wide {
   grid-column: 1 / -1;
+}
+
+.station-run-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.station-run-report-head strong {
+  display: block;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.station-run-report-head span {
+  color: rgba(30, 41, 59, 0.62);
+  font-size: 12px;
+}
+
+.station-run-report-list {
+  display: grid;
+  gap: 10px;
+}
+
+.station-run-report-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(71, 85, 105, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.64);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.station-run-report-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 26px;
+}
+
+.station-run-report-row-head span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.station-run-report-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.station-run-report-field-wide {
+  grid-column: 1 / -1;
+}
+
+.station-run-report-row .ant-form-item {
+  margin-bottom: 0;
+}
+
+.station-run-add-report {
+  justify-self: flex-start;
 }
 
 .station-run-modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(71, 85, 105, 0.08);
 }
 
 .station-alarm-modal .ant-modal-content {
@@ -1269,6 +1402,136 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.station-pid-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.station-pid-project > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.station-pid-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  max-height: 58vh;
+  overflow: hidden;
+}
+
+.station-pid-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(30, 27, 24, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.station-pid-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  background: #334155;
+}
+
+.station-pid-card-body {
+  display: grid;
+  gap: 10px;
+  max-height: 48vh;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.station-pid-setting {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(30, 27, 24, 0.08);
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.station-pid-setting-head,
+.station-pid-setting-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.station-pid-setting-head > span:first-child {
+  color: #475569;
+  font-weight: 650;
+}
+
+.station-pid-variable-name,
+.station-pid-setting-foot span {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(30, 27, 24, 0.56);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.station-pid-current-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: rgba(30, 27, 24, 0.58);
+  font-size: 12px;
+}
+
+.station-pid-current-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #1e293b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.station-pid-control {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  gap: 6px;
+}
+
+.station-pid-control .ant-input {
+  text-align: center;
+}
+
+.station-pid-setting-foot {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.station-pid-disconnected {
+  display: grid;
+  min-height: 32px;
+  place-items: center;
+  color: #b91c1c;
+  font-size: 12px;
 }
 
 .station-alarm-variable {
@@ -1713,4 +1976,57 @@ body {
   font-size: 11px;
   font-weight: 650;
   cursor: pointer;
+}
+
+.station-config-body {
+  display: grid;
+  gap: 14px;
+}
+
+.station-config-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.76);
+}
+
+.station-config-context span {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.station-config-section {
+  display: grid;
+  gap: 8px;
+}
+
+.station-config-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.station-config-section-head strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.station-config-section-head span {
+  color: #64748b;
+  font-size: 12px;
+  text-align: right;
+}
+
+.station-config-section .ant-select {
+  width: 100%;
 }

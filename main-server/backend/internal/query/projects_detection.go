@@ -2,6 +2,7 @@ package query
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"gorm.io/gorm"
 )
+
+var ErrEdgeInstanceMismatch = errors.New("edge_instance_id mismatch")
 
 type DetectionRunStorageRoute struct {
 	ID            uint64    `gorm:"column:id;primaryKey" json:"id"`
@@ -209,15 +212,59 @@ func (i DetectionRunStandardItem) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (q *StationViewQuery) ListProjects(edgeInstanceID string) ([]Project, error) {
+func (q *StationViewQuery) ListProjects(edgeInstanceID string, includeLegacy bool, limit int, offset int) ([]Project, error) {
 	var projects []Project
 	stmt := q.db.Model(&Project{})
 	edgeInstanceID = strings.TrimSpace(edgeInstanceID)
 	if edgeInstanceID != "" {
-		stmt = stmt.Where("(edge_instance_id = ? OR edge_instance_id = '' OR edge_instance_id IS NULL)", edgeInstanceID)
+		if includeLegacy {
+			stmt = stmt.Where("(edge_instance_id = ? OR edge_instance_id = '' OR edge_instance_id IS NULL)", edgeInstanceID)
+		} else {
+			stmt = stmt.Where("edge_instance_id = ?", edgeInstanceID)
+		}
+	}
+	if limit > 0 {
+		stmt = stmt.Limit(limit)
+	}
+	if offset > 0 {
+		stmt = stmt.Offset(offset)
 	}
 	err := stmt.Order("id asc").Find(&projects).Error
 	return projects, err
+}
+
+func (q *StationViewQuery) ProjectEdgeInstanceID(projectID uint, requestedEdgeInstanceID string) (string, error) {
+	project, err := q.projectForEdge(projectID, requestedEdgeInstanceID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(project.EdgeInstanceID), nil
+}
+
+func (q *StationViewQuery) ProjectCodeEdgeInstanceID(projectCode string, requestedEdgeInstanceID string) (string, error) {
+	projectCode = strings.TrimSpace(projectCode)
+	if projectCode == "" {
+		return "", gorm.ErrRecordNotFound
+	}
+	var project Project
+	if err := q.db.First(&project, "project_code = ?", projectCode).Error; err != nil {
+		return "", err
+	}
+	return q.ProjectEdgeInstanceID(project.ID, requestedEdgeInstanceID)
+}
+
+func (q *StationViewQuery) VariableEdgeInstanceID(varID int64, requestedEdgeInstanceID string) (string, error) {
+	if varID == 0 {
+		return "", gorm.ErrRecordNotFound
+	}
+	var tag TagConfig
+	if err := q.db.First(&tag, "var_id = ?", varID).Error; err != nil {
+		return "", err
+	}
+	if tag.ProjectID == nil || *tag.ProjectID == 0 {
+		return "", gorm.ErrRecordNotFound
+	}
+	return q.ProjectEdgeInstanceID(*tag.ProjectID, requestedEdgeInstanceID)
 }
 
 func (q *StationViewQuery) CurrentDetectionRun(projectID uint, edgeInstanceID string) (DetectionTask, error) {
@@ -232,6 +279,17 @@ func (q *StationViewQuery) CurrentDetectionRun(projectID uint, edgeInstanceID st
 		return task, err
 	}
 	return q.GetDetectionRun(task.ID)
+}
+
+func (q *StationViewQuery) DetectionRunEdgeInstanceID(taskID uint, requestedEdgeInstanceID string) (string, error) {
+	if taskID == 0 {
+		return "", gorm.ErrRecordNotFound
+	}
+	var task DetectionTask
+	if err := q.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return "", err
+	}
+	return q.ProjectEdgeInstanceID(task.ProjectID, requestedEdgeInstanceID)
 }
 
 func (q *StationViewQuery) ActiveDetectionRuns(edgeInstanceID string) ([]DetectionTask, error) {
@@ -402,7 +460,7 @@ func (q *StationViewQuery) projectForEdge(projectID uint, requestedEdgeInstanceI
 	projectEdge := strings.TrimSpace(project.EdgeInstanceID)
 	requestedEdgeInstanceID = strings.TrimSpace(requestedEdgeInstanceID)
 	if projectEdge != "" && requestedEdgeInstanceID != "" && projectEdge != requestedEdgeInstanceID {
-		return Project{}, gorm.ErrRecordNotFound
+		return Project{}, fmt.Errorf("%w: %w", ErrEdgeInstanceMismatch, gorm.ErrRecordNotFound)
 	}
 	return project, nil
 }

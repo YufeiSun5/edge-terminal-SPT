@@ -7,15 +7,15 @@ import (
 
 type ReportTemplate struct {
 	ID               uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TemplateCode     string    `gorm:"column:template_code" json:"template_code"`
-	Name             string    `gorm:"column:name" json:"name"`
-	DisplayName      string    `gorm:"column:display_name" json:"display_name"`
-	FileRef          string    `gorm:"column:file_ref" json:"file_ref"`
-	FileKind         string    `gorm:"column:file_kind" json:"file_kind"`
-	Version          int       `gorm:"column:version" json:"version"`
-	ParamsSchemaJSON string    `gorm:"column:params_schema_json" json:"params_schema_json,omitempty"`
-	Enabled          bool      `gorm:"column:enabled" json:"enabled"`
-	Remark           string    `gorm:"column:remark" json:"remark"`
+	TemplateCode     string    `gorm:"column:template_code;size:64;uniqueIndex;not null" json:"template_code"`
+	Name             string    `gorm:"column:name;size:128;not null" json:"name"`
+	DisplayName      string    `gorm:"column:display_name;size:128" json:"display_name"`
+	FileRef          string    `gorm:"column:file_ref;size:512;not null" json:"file_ref"`
+	FileKind         string    `gorm:"column:file_kind;size:32;not null;default:xlsx" json:"file_kind"`
+	Version          int       `gorm:"column:version;default:1;not null" json:"version"`
+	ParamsSchemaJSON string    `gorm:"column:params_schema_json;type:text" json:"params_schema_json,omitempty"`
+	Enabled          bool      `gorm:"column:enabled;default:true;index" json:"enabled"`
+	Remark           string    `gorm:"column:remark;size:255" json:"remark"`
 	CreatedAt        time.Time `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt        time.Time `gorm:"column:updated_at" json:"updated_at"`
 }

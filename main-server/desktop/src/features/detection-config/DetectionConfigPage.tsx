@@ -68,16 +68,16 @@ function sameVarId(left?: VarIdentifier | null, right?: VarIdentifier | null) {
   return varKey(left) === varKey(right)
 }
 
-function standardProjectId(standard: Pick<DetectionStandard, 'project_id' | 'device_id'>) {
-  return standard.project_id ?? standard.device_id
+function standardProjectId(standard: Pick<DetectionStandard, 'project_id'>) {
+  return standard.project_id
 }
 
-function standardProjectCode(standard: Pick<DetectionStandard, 'project_code' | 'device_code'>) {
-  return standard.project_code || standard.device_code
+function standardProjectCode(standard: Pick<DetectionStandard, 'project_code'>) {
+  return standard.project_code
 }
 
-function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
-  return project?.project_code || project?.device_code || ''
+function projectCode(project?: Pick<Project, 'project_code'>) {
+  return project?.project_code || ''
 }
 
 function reportTemplateTitle(template?: Pick<ReportTemplate, 'template_code' | 'display_name' | 'name'>) {

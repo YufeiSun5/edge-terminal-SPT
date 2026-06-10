@@ -46,6 +46,7 @@ func NewEdgeControlHandler(repo *database.Repository, detection *services.Detect
 
 func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.Service) {
 	control := group.Group("/edge-control")
+	control.GET("/commands/:command_id", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.commandStatus)
 	control.POST("/detection/start", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("detection.start", "project", h.startDetection))
 	control.POST("/detection/stop", authService.RequireServiceScope(auth.ScopeEdgeDetectionStop), h.handle("detection.stop", "task", h.stopDetection(false)))
 	control.POST("/detection/abnormal-stop", authService.RequireServiceScope(auth.ScopeEdgeDetectionStop), h.handle("detection.abnormal_stop", "task", h.stopDetection(true)))
@@ -56,6 +57,29 @@ func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.
 	control.POST("/detection/refresh-features", authService.RequireServiceScope(auth.ScopeEdgeFeatureRefresh), h.handle("detection.refresh_features", "task", h.refreshDetectionFeatures))
 	control.POST("/detection/report-requests", authService.RequireServiceScope(auth.ScopeEdgeReportRequest), h.handle("detection.report_request", "task", h.createReportRequests))
 	control.POST("/variables/write", authService.RequireServiceScope(auth.ScopeEdgeVariableWrite), h.handle("variable.write", "variable", h.writeVariable))
+}
+
+func (h *EdgeControlHandler) commandStatus(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c)
+	if !ok || principal.AuthType != "service" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "service token required", "code": "unauthorized"})
+		return
+	}
+	commandID := strings.TrimSpace(c.Param("command_id"))
+	if commandID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "command_id is required", "code": "invalid_command_id"})
+		return
+	}
+	command, err := h.repo.FindEdgeControlCommand(principal.ClientID, commandID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "command not found", "code": "not_found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "command status query failed", "code": "internal_error"})
+		return
+	}
+	c.JSON(http.StatusOK, edgeControlCommandStatusResponse(command))
 }
 
 func (h *EdgeControlHandler) handle(action string, targetType string, execute func(*gin.Context, edgeControlEnvelope) (any, string, error)) gin.HandlerFunc {
@@ -117,10 +141,10 @@ func (h *EdgeControlHandler) handle(action string, targetType string, execute fu
 		if err != nil {
 			code, retryable, status := edgeControlErrorMeta(err)
 			message := err.Error()
-			resultJSON := marshalJSON(map[string]any{"error": message})
+			resultJSON := marshalJSON(map[string]any{"error": message, "result": result})
 			_ = h.repo.CompleteEdgeControlCommand(command.ID, "failed", targetID, resultJSON, code, message)
 			h.audit(principal, edgeUser, command, "failed", message, started)
-			h.writeError(c, status, envelope.CommandID, "failed", code, message, retryable)
+			h.writeErrorWithResult(c, status, envelope.CommandID, "failed", code, message, retryable, result)
 			return
 		}
 
@@ -455,8 +479,34 @@ func (h *EdgeControlHandler) writeExisting(c *gin.Context, command models.EdgeCo
 	h.writeError(c, http.StatusConflict, command.CommandID, command.Status, "command_running", "command is still running", true)
 }
 
+func edgeControlCommandStatusResponse(command models.EdgeControlCommand) gin.H {
+	return gin.H{
+		"command_id":        command.CommandID,
+		"client_id":         command.ClientID,
+		"operator_id":       command.OperatorID,
+		"operator_name":     command.OperatorName,
+		"operator_username": command.OperatorUsername,
+		"edge_user_id":      command.EdgeUserID,
+		"action":            command.Action,
+		"target_type":       command.TargetType,
+		"target_id":         command.TargetID,
+		"status":            command.Status,
+		"result":            rawPayloadObject(json.RawMessage(command.ResultJSON)),
+		"error_code":        command.ErrorCode,
+		"error_message":     command.ErrorMessage,
+		"received_at":       command.ReceivedAt,
+		"completed_at":      command.CompletedAt,
+		"created_at":        command.CreatedAt,
+		"updated_at":        command.UpdatedAt,
+	}
+}
+
 func (h *EdgeControlHandler) writeError(c *gin.Context, status int, commandID string, commandStatus string, code string, message string, retryable bool) {
-	c.JSON(status, gin.H{
+	h.writeErrorWithResult(c, status, commandID, commandStatus, code, message, retryable, nil)
+}
+
+func (h *EdgeControlHandler) writeErrorWithResult(c *gin.Context, status int, commandID string, commandStatus string, code string, message string, retryable bool, result any) {
+	body := gin.H{
 		"ok":         false,
 		"command_id": commandID,
 		"status":     commandStatus,
@@ -465,7 +515,11 @@ func (h *EdgeControlHandler) writeError(c *gin.Context, status int, commandID st
 			Message:   message,
 			Retryable: retryable,
 		},
-	})
+	}
+	if result != nil {
+		body["result"] = result
+	}
+	c.JSON(status, body)
 }
 
 func (h *EdgeControlHandler) audit(principal auth.Principal, edgeUser models.SysUser, command models.EdgeControlCommand, result string, errText string, started time.Time) {

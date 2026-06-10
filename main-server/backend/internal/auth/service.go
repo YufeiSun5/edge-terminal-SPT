@@ -170,6 +170,27 @@ func (s *Service) RequireUser() gin.HandlerFunc {
 	}
 }
 
+func (s *Service) RequireUserFromBearerOrQuery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, ok := bearerToken(c)
+		if !ok {
+			token = strings.TrimSpace(c.Query("access_token"))
+			ok = token != ""
+		}
+		if !ok {
+			writeUnauthorized(c, "bearer token required")
+			return
+		}
+		principal, message, ok := s.authenticateUserToken(token)
+		if !ok {
+			writeUnauthorized(c, message)
+			return
+		}
+		c.Set(principalContextKey, principal)
+		c.Next()
+	}
+}
+
 func (s *Service) RequirePermission(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, ok := PrincipalFromContext(c)

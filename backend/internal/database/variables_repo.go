@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -10,18 +11,28 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func (r *Repository) LoadTags() ([]models.TagConfig, error) {
+func (r *Repository) LoadTags(edgeInstanceID string) ([]models.TagConfig, error) {
 	var tags []models.TagConfig
-	err := r.db.Where("enabled = ? AND project_id IS NOT NULL", true).Order("var_id asc").Find(&tags).Error
+	query := r.db.Model(&models.TagConfig{}).
+		Joins("JOIN sys_projects p ON p.id = sys_tags.project_id").
+		Where("sys_tags.enabled = ? AND sys_tags.project_id IS NOT NULL", true)
+	if edgeInstanceID != "" {
+		query = query.Where("(p.edge_instance_id = ? OR p.edge_instance_id = '' OR p.edge_instance_id IS NULL)", edgeInstanceID)
+	}
+	err := query.Order("sys_tags.var_id asc").Find(&tags).Error
 	return tags, err
 }
 
 type TagFilter struct {
-	GatewayID  *int
-	Enabled    *bool
-	Discovered *bool
-	SourceType string
-	Keyword    string
+	GatewayID   *int
+	ProjectID   *uint
+	Enabled     *bool
+	Discovered  *bool
+	Writable    *bool
+	SourceType  string
+	ProjectCode string
+	VarGroup    string
+	Keyword     string
 }
 
 func (r *Repository) ListTags(filter TagFilter) ([]models.TagConfig, error) {
@@ -30,14 +41,26 @@ func (r *Repository) ListTags(filter TagFilter) ([]models.TagConfig, error) {
 	if filter.GatewayID != nil {
 		query = query.Where("gateway_id = ?", *filter.GatewayID)
 	}
+	if filter.ProjectID != nil {
+		query = query.Where("project_id = ?", *filter.ProjectID)
+	}
 	if filter.Enabled != nil {
 		query = query.Where("enabled = ?", *filter.Enabled)
 	}
 	if filter.Discovered != nil {
 		query = query.Where("discovered = ?", *filter.Discovered)
 	}
+	if filter.Writable != nil {
+		query = query.Where("writable = ?", *filter.Writable)
+	}
 	if filter.SourceType != "" {
 		query = query.Where("source_type = ?", filter.SourceType)
+	}
+	if filter.ProjectCode != "" {
+		query = query.Where("project_code = ?", strings.TrimSpace(filter.ProjectCode))
+	}
+	if filter.VarGroup != "" {
+		query = query.Where("var_group = ?", strings.TrimSpace(filter.VarGroup))
 	}
 	if filter.Keyword != "" {
 		keyword := "%" + strings.TrimSpace(filter.Keyword) + "%"
@@ -122,6 +145,9 @@ func (r *Repository) AssignTag(varID int64, ProjectID *uint, ProjectCode string,
 		if err := r.db.First(&Project, "id = ?", *ProjectID).Error; err != nil {
 			return err
 		}
+		if err := r.ensureTagProjectGatewayEdge(varID, Project); err != nil {
+			return err
+		}
 		resolvedProjectCode = Project.ProjectCode
 	} else {
 		resolvedProjectCode = ProjectCode
@@ -150,6 +176,37 @@ func (r *Repository) AssignTag(varID int64, ProjectID *uint, ProjectCode string,
 	}
 	_, err = r.EnsureDefaultStorageRouteForTag(tag)
 	return err
+}
+
+func (r *Repository) EnsureTagProjectGatewayEdge(varID int64, projectID uint) error {
+	var project models.Project
+	if err := r.db.First(&project, "id = ?", projectID).Error; err != nil {
+		return err
+	}
+	return r.ensureTagProjectGatewayEdge(varID, project)
+}
+
+func (r *Repository) ensureTagProjectGatewayEdge(varID int64, project models.Project) error {
+	var tag models.TagConfig
+	if err := r.db.First(&tag, "var_id = ?", varID).Error; err != nil {
+		return err
+	}
+	if tag.GatewayID <= 0 {
+		return nil
+	}
+	var gateway models.GatewayConfig
+	if err := r.db.First(&gateway, "id = ?", tag.GatewayID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	projectEdge := strings.TrimSpace(project.EdgeInstanceID)
+	gatewayEdge := strings.TrimSpace(gateway.EdgeInstanceID)
+	if projectEdge != "" && gatewayEdge != "" && projectEdge != gatewayEdge {
+		return ErrEdgeInstanceMismatch
+	}
+	return nil
 }
 
 func (r *Repository) DeleteTag(varID int64) error {

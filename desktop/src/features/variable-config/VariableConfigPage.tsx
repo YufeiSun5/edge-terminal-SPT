@@ -92,8 +92,8 @@ function variableProjectCode(variable: Pick<VariableConfig, 'project_code'>) {
   return variable.project_code
 }
 
-function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
-  return project?.project_code || project?.device_code || ''
+function projectCode(project?: Pick<Project, 'project_code'>) {
+  return project?.project_code || ''
 }
 
 function normalizeVariableWritePayload<T extends VariableEditFormValues | VirtualVariableFormValues>(values: T) {
@@ -737,7 +737,7 @@ function VariableEditorModal({
             </Form>
           ) : (
             <Form form={variableAssignForm} layout="vertical" onFinish={onAssign}>
-              <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.unassignedReadonly')} />
+              <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.unassignedReadonly')} />
               <div className="settings-form-grid modal-grid">
                 <Form.Item name="project_id" label={t('settings.variables.selectProject')} rules={[{ required: true }]}><Select options={projectOptions} /></Form.Item>
                 <Form.Item name="var_group" label={t('settings.variables.group')}><Input /></Form.Item>
@@ -812,7 +812,7 @@ function VariableDefaultAlarmFields({ includeApplyToRunning = false }: { include
   const { t } = useTranslation()
   return (
     <VariableFormSection title={t('settings.variables.defaultAlarmSection')} description={t('settings.variables.defaultAlarmSectionHint')}>
-      <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.defaultAlarmHint')} />
+      <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.defaultAlarmHint')} />
       <div className="settings-form-grid modal-grid">
         <Form.Item name="default_alarm_enabled" label={t('settings.variables.defaultAlarmEnabled')} valuePropName="checked"><Switch /></Form.Item>
         <Form.Item name="default_limit_ll" label={t('settings.variables.defaultLimitLL')}><InputNumber step={0.1} /></Form.Item>
@@ -851,7 +851,7 @@ function VirtualVariableModal({
   return (
     <Modal title={t('settings.variables.createVirtual')} open={open} width={900} onCancel={onCancel} footer={null}>
       <Form form={form} layout="vertical" onFinish={onCreate}>
-        <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.virtualHint')} />
+        <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.virtualHint')} />
         <div className="settings-form-grid modal-grid">
           <Form.Item name="project_id" label={t('settings.variables.selectProject')} rules={[{ required: true }]}><Select options={projectOptions} /></Form.Item>
           <Form.Item name="var_name" label={t('settings.variables.varName')} rules={[{ required: true }]}><Input /></Form.Item>
@@ -893,7 +893,7 @@ function BatchAssignModal({
   return (
     <Modal title={t('settings.variables.batchAssignTitle', { count })} open={open} width={640} onCancel={onCancel} footer={null}>
       <Form form={form} layout="vertical" onFinish={onAssign}>
-        <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.batchAssignHint', { count })} />
+        <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.batchAssignHint', { count })} />
         <div className="settings-form-grid modal-grid">
           <Form.Item name="project_id" label={t('settings.variables.selectProject')} rules={[{ required: true }]}><Select options={projectOptions} /></Form.Item>
           <Form.Item name="var_group" label={t('settings.variables.group')}><Input /></Form.Item>
@@ -925,7 +925,7 @@ function KioRemapModal({
   const { t } = useTranslation()
   return (
     <Modal title={t('settings.variables.kioRemapTitle')} open={open} width={920} onCancel={onCancel} footer={null}>
-      <Alert className="settings-modal-alert" showIcon type="info" message={t('settings.variables.kioRemapHint')} />
+      <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.kioRemapHint')} />
       <Form form={form} layout="vertical">
         <div className="settings-form-grid modal-grid">
           <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}><InputNumber min={1} max={99} /></Form.Item>

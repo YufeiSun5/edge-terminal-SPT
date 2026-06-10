@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AuditLogFilter struct {
@@ -81,6 +82,17 @@ type SysNotificationRecipient struct {
 }
 
 func (SysNotificationRecipient) TableName() string { return "sys_notification_recipients" }
+
+type MainNotificationRead struct {
+	ID             uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	NotificationID uint64    `gorm:"column:notification_id;uniqueIndex:uk_main_notification_read" json:"notification_id"`
+	UserID         uint      `gorm:"column:user_id;uniqueIndex:uk_main_notification_read;index" json:"user_id"`
+	ReadAt         time.Time `gorm:"column:read_at" json:"read_at"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
+}
+
+func (MainNotificationRead) TableName() string { return "main_notification_reads" }
 
 type UserNotification struct {
 	ID          uint64     `gorm:"column:id" json:"id"`
@@ -208,7 +220,7 @@ func (q *StationViewQuery) ListUserNotifications(filter NotificationFilter, edge
 		return nil, 0, 0, 0, err
 	}
 	var items []UserNotification
-	err := stmt.Select("n.id, n.event_uid, n.type, n.level, n.target_type, n.target_id, n.project_id, n.project_code, n.task_id, n.test_no, n.var_id, n.var_name, n.display_name, n.message, n.payload, n.occurred_at, n.expires_at, n.created_at, r.read_at").
+	err := stmt.Select("n.id, n.event_uid, n.type, n.level, n.target_type, n.target_id, n.project_id, n.project_code, n.task_id, n.test_no, n.var_id, n.var_name, n.display_name, n.message, n.payload, n.occurred_at, n.expires_at, n.created_at, COALESCE(mr.read_at, r.read_at) AS read_at").
 		Order("n.occurred_at desc, n.id desc").
 		Limit(limit).
 		Offset(offset).
@@ -232,9 +244,75 @@ func (q *StationViewQuery) CountUnreadNotifications(filter NotificationFilter, e
 	return count, err
 }
 
+func (q *StationViewQuery) MarkNotificationRead(userID uint, notificationID uint64, edgeInstanceID string) error {
+	if userID == 0 || notificationID == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	now := time.Now()
+	visible := notificationBaseQuery(q.db, NotificationFilter{UserID: userID}, edgeInstanceID).
+		Where("n.id = ?", notificationID).
+		Select("n.id")
+	var existing struct {
+		ID uint64
+	}
+	if err := visible.Take(&existing).Error; err != nil {
+		return err
+	}
+	read := MainNotificationRead{
+		NotificationID: notificationID,
+		UserID:         userID,
+		ReadAt:         now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	return q.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "notification_id"}, {Name: "user_id"}},
+		DoUpdates: clause.Assignments(map[string]any{"read_at": now, "updated_at": now}),
+	}).Create(&read).Error
+}
+
+func (q *StationViewQuery) MarkUserNotificationsRead(filter NotificationFilter, edgeInstanceID string) (int64, error) {
+	if filter.UserID == 0 {
+		return 0, gorm.ErrRecordNotFound
+	}
+	if filter.Unread != nil && !*filter.Unread {
+		return 0, nil
+	}
+	now := time.Now()
+	filter.Unread = nil
+	var ids []uint64
+	if err := notificationBaseQuery(q.db, filter, edgeInstanceID).
+		Where("COALESCE(mr.read_at, r.read_at) IS NULL").
+		Select("n.id").
+		Pluck("n.id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	reads := make([]MainNotificationRead, 0, len(ids))
+	for _, id := range ids {
+		reads = append(reads, MainNotificationRead{
+			NotificationID: id,
+			UserID:         filter.UserID,
+			ReadAt:         now,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		})
+	}
+	if err := q.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "notification_id"}, {Name: "user_id"}},
+		DoUpdates: clause.Assignments(map[string]any{"read_at": now, "updated_at": now}),
+	}).Create(&reads).Error; err != nil {
+		return 0, err
+	}
+	return int64(len(reads)), nil
+}
+
 func notificationBaseQuery(db *gorm.DB, filter NotificationFilter, edgeInstanceID string) *gorm.DB {
 	stmt := db.Table("sys_notifications AS n").
 		Joins("JOIN sys_notification_recipients AS r ON r.notification_id = n.id").
+		Joins("LEFT JOIN main_notification_reads AS mr ON mr.notification_id = n.id AND mr.user_id = r.user_id").
 		Joins("LEFT JOIN sys_projects p ON p.id = n.project_id").
 		Where("r.user_id = ?", filter.UserID).
 		Where("(n.expires_at IS NULL OR n.expires_at > ?)", time.Now())
@@ -245,9 +323,9 @@ func notificationBaseQuery(db *gorm.DB, filter NotificationFilter, edgeInstanceI
 	}
 	if filter.Unread != nil {
 		if *filter.Unread {
-			stmt = stmt.Where("r.read_at IS NULL")
+			stmt = stmt.Where("COALESCE(mr.read_at, r.read_at) IS NULL")
 		} else {
-			stmt = stmt.Where("r.read_at IS NOT NULL")
+			stmt = stmt.Where("COALESCE(mr.read_at, r.read_at) IS NOT NULL")
 		}
 	}
 	if strings.TrimSpace(filter.Type) != "" {

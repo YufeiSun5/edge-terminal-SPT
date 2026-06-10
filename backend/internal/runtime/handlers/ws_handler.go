@@ -76,6 +76,8 @@ func (h *RealtimeWSHandler) WithNotificationHub(hub *services.NotificationHub) *
 
 func (h *RealtimeWSHandler) Register(group *gin.RouterGroup, authService *auth.Service) {
 	group.GET("/ws", authService.RequireUserFromBearerOrQuery(), authService.RequirePermission(auth.PermViewRealtime), h.connect)
+	control := group.Group("/edge-control")
+	control.GET("/ws", authService.RequireServiceScope(auth.ScopeServiceRealtimeRead), h.connect)
 }
 
 func (h *RealtimeWSHandler) connect(c *gin.Context) {
@@ -283,13 +285,28 @@ func (h *RealtimeWSHandler) handleCommand(msg wsClientMessage, principal auth.Pr
 		}
 		code := wsErrorCode(err)
 		h.auditWSCommand(principal, msg, "failed", err.Error(), started, map[string]interface{}{"status": status, "code": code})
-		return h.service.ErrorMessage(msg.RequestID, msg.CommandID, code, err.Error())
+		return h.service.ErrorMessageWithPayload(msg.RequestID, msg.CommandID, code, err.Error(), wsCommandErrorPayload(payload))
 	}
 	h.auditWSCommand(principal, msg, "success", "", started, map[string]interface{}{"status": status})
 	return h.service.CommandAckMessage(msg.RequestID, msg.CommandID, map[string]interface{}{
 		"command": msg.Type,
 		"result":  payload,
 	})
+}
+
+func wsCommandErrorPayload(result interface{}) interface{} {
+	if result == nil {
+		return nil
+	}
+	switch typed := result.(type) {
+	case services.VariableWriteResult:
+		if typed.VarID == 0 && typed.VarIDText == "" && typed.VarName == "" && typed.KIO == nil {
+			return nil
+		}
+		return map[string]interface{}{"result": typed}
+	default:
+		return map[string]interface{}{"result": result}
+	}
 }
 
 func (h *RealtimeWSHandler) startDetectionFromWS(msg wsClientMessage) (*models.DetectionTask, error) {
@@ -429,6 +446,9 @@ func (h *RealtimeWSHandler) auditWSCommand(principal auth.Principal, msg wsClien
 func wsAuditActor(principal auth.Principal) (string, string) {
 	if principal.AuthType == "user" {
 		return "user", strconv.FormatUint(uint64(principal.UserID), 10)
+	}
+	if principal.AuthType == "service" {
+		return "service", principal.ClientID
 	}
 	return "unknown", ""
 }

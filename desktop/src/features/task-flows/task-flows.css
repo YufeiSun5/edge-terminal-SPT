@@ -309,6 +309,10 @@
   grid-template-columns: minmax(160px, 1fr) 130px minmax(180px, 1fr) auto;
 }
 
+.task-flow-request-row.report {
+  grid-template-columns: minmax(170px, 0.9fr) minmax(150px, 0.8fr) minmax(220px, 1.2fr) minmax(220px, 1fr) auto;
+}
+
 .task-flow-request-row.plc {
   grid-template-columns: minmax(210px, 1.4fr) minmax(190px, 1fr) 110px minmax(140px, 0.8fr) 74px 86px 94px auto;
 }

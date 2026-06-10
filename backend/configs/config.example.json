@@ -26,6 +26,7 @@
   "gateways": [
     {
       "id": 1,
+      "edge_instance_id": "edge-local",
       "name": "default-kingiot-kio",
       "broker": "tcp://127.0.0.1:1883",
       "client_id": "edge-local-kio",

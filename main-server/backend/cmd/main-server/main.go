@@ -12,6 +12,8 @@ import (
 
 	"spindle-main-server/backend/internal/config"
 	"spindle-main-server/backend/internal/database"
+	"spindle-main-server/backend/internal/query"
+	"spindle-main-server/backend/internal/reports"
 	"spindle-main-server/backend/internal/server"
 )
 
@@ -30,12 +32,29 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect database failed: %v", err)
 	}
+	if err := query.EnsureMainServerSchema(db); err != nil {
+		log.Fatalf("ensure main server query schema failed: %v", err)
+	}
+	reportService := reports.NewService(db, query.NewStationViewQuery(db), reports.Options{
+		ArtifactDir:            cfg.Reports.ArtifactDir,
+		DefaultTemplateCode:    cfg.Reports.DefaultTemplateCode,
+		DefaultTemplateVersion: cfg.Reports.DefaultTemplateVersion,
+		DefaultTemplateFileRef: cfg.Reports.DefaultTemplateFileRef,
+		MaxAttempts:            cfg.Reports.MaxAttempts,
+	})
+	if err := reportService.EnsureSchema(); err != nil {
+		log.Fatalf("ensure main report job schema failed: %v", err)
+	}
 
 	router := server.NewRouter(cfg, db)
 	httpServer := &http.Server{
 		Addr:              cfg.App.HTTPAddr,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if cfg.Reports.IsWorkerEnabled() {
+		reports.StartWorker(ctx, reportService, time.Duration(cfg.Reports.WorkerIntervalSeconds)*time.Second)
 	}
 
 	go func() {
@@ -48,11 +67,12 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	cancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
-	if err := httpServer.Shutdown(ctx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("http shutdown failed: %v", err)
 	}
 	log.Println("main server backend stopped")

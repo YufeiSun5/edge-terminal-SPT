@@ -180,7 +180,7 @@ export function StationOperationPage() {
   const hasPermission = useAuthStore((state) => state.hasPermission)
   const canStartDetection = hasPermission('start_detection')
   const canStopDetection = hasPermission('stop_detection')
-  const selectedProjectId = Number(searchParams.get('project_id') ?? searchParams.get('device_id'))
+  const selectedProjectId = Number(searchParams.get('project_id'))
   const validSelectedProjectId = Number.isFinite(selectedProjectId) && selectedProjectId > 0 ? selectedProjectId : undefined
   const variablesQuery = useQuery({
     queryKey: ['edge', 'realtime-variables', validSelectedProjectId],
@@ -233,12 +233,12 @@ export function StationOperationPage() {
   const stationVariables = useMemo(
     () =>
       validSelectedProjectId
-        ? variables.filter((variable) => variable.project_id === validSelectedProjectId || variable.device_id === validSelectedProjectId)
+        ? variables.filter((variable) => variable.project_id === validSelectedProjectId)
         : variables,
     [validSelectedProjectId, variables],
   )
   const activeRun =
-    activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId || run.device_id === validSelectedProjectId) ?? activeRunsQuery.data?.[0]
+    activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId) ?? activeRunsQuery.data?.[0]
   const storageSnapshotQuery = useQuery({
     queryKey: ['station', 'run-storage-routes', activeRun?.id],
     queryFn: () => getDetectionRunStorageRoutes(activeRun!.id),
@@ -260,13 +260,13 @@ export function StationOperationPage() {
     refetchInterval: runSnapshotOpen ? 10000 : false,
     retry: false,
   })
-  const selectedRunProjectId = activeRun?.project_id ?? activeRun?.device_id ?? validSelectedProjectId
+  const selectedRunProjectId = activeRun?.project_id ?? validSelectedProjectId
   const standards = useMemo(() => standardsQuery.data ?? [], [standardsQuery.data])
   const reportTemplates = useMemo(() => reportTemplatesQuery.data ?? [], [reportTemplatesQuery.data])
   const availableStandards = useMemo(
     () =>
       standards.filter(
-        (standard) => !selectedRunProjectId || !standard.project_id || standard.project_id === selectedRunProjectId || standard.device_id === selectedRunProjectId,
+        (standard) => !selectedRunProjectId || !standard.project_id || standard.project_id === selectedRunProjectId,
       ),
     [selectedRunProjectId, standards],
   )
@@ -419,13 +419,13 @@ export function StationOperationPage() {
     if (!activeRun) return
     const params = new URLSearchParams({
       task_id: String(activeRun.id),
-      project_id: String(activeRun.project_id ?? activeRun.device_id),
+      project_id: String(activeRun.project_id),
       test_no: activeRun.test_no,
     })
     navigate(`/history?${params.toString()}`)
   }
 
-  const statusProjectCode = selectedProject?.project_code ?? activeRun?.project_code ?? activeRun?.device_code ?? 'SN-20230912'
+  const statusProjectCode = selectedProject?.project_code ?? activeRun?.project_code ?? 'SN-20230912'
   const statusProject = selectedProjectName ?? activeRun?.test_no ?? t('station.status.mockProject')
   const statusConfig = selectedProject?.model_name || activeRun?.mode || 'A'
   const statusTask = activeRun?.test_no ?? t('station.run.idle')
@@ -712,7 +712,7 @@ export function StationOperationPage() {
                 <div className="station-status-top">
                   <div className="station-status-main">
                     <div>
-                      <span className="eyebrow">{t('station.status.device')}</span>
+                      <span className="eyebrow">{t('station.status.projectCode')}</span>
                       <strong>{statusProjectCode}</strong>
                     </div>
                     <div>
@@ -859,7 +859,7 @@ export function StationOperationPage() {
       >
         <Form form={startForm} layout="vertical" onFinish={(values) => startRunMutation.mutate(values)}>
           <div className="station-run-form-grid">
-            <Form.Item name="project_id" label={t('station.run.device')} rules={[{ required: true }]}>
+            <Form.Item name="project_id" label={t('station.run.project')} rules={[{ required: true }]}>
               <Select
                 options={projects.map((project) => ({
                   label: `${project.display_name || project.name || project.project_code} / ${project.project_code}`,

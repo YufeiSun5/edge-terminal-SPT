@@ -168,12 +168,12 @@ function taskFlowVarKey(variable: Pick<NonNullable<TaskFlow['vars']>[number], 'v
   return variable.var_id_text ?? String(variable.var_id)
 }
 
-function variableProjectId(variable: Pick<VariableConfig, 'project_id' | 'device_id'>) {
-  return variable.project_id ?? variable.device_id
+function variableProjectId(variable: Pick<VariableConfig, 'project_id'>) {
+  return variable.project_id
 }
 
-function projectCode(project?: Pick<Project, 'project_code' | 'device_code'>) {
-  return project?.project_code || project?.device_code || ''
+function projectCode(project?: Pick<Project, 'project_code'>) {
+  return project?.project_code || ''
 }
 
 export function TaskFlowsPage() {

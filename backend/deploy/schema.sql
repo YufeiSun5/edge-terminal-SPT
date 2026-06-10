@@ -3,6 +3,7 @@ USE spindle_edge;
 
 CREATE TABLE IF NOT EXISTS sys_gateways (
   id INT PRIMARY KEY,
+  edge_instance_id VARCHAR(128) DEFAULT '',
   name VARCHAR(128) NOT NULL,
   broker VARCHAR(255) NOT NULL,
   client_id VARCHAR(128) NOT NULL,
@@ -20,7 +21,8 @@ CREATE TABLE IF NOT EXISTS sys_gateways (
   query_all_topic VARCHAR(255) DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   created_at DATETIME(3) NULL,
-  updated_at DATETIME(3) NULL
+  updated_at DATETIME(3) NULL,
+  INDEX idx_gateways_edge_instance_id (edge_instance_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_projects (
@@ -85,6 +87,7 @@ CREATE TABLE IF NOT EXISTS sys_station_view_regions (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   template_uid VARCHAR(128) NOT NULL,
   region_key VARCHAR(64) NOT NULL,
+  layout_area VARCHAR(64) NOT NULL DEFAULT 'card_pool',
   region_type VARCHAR(64) NOT NULL,
   layout_json TEXT NULL,
   sort_order INT NOT NULL DEFAULT 0,
@@ -93,6 +96,7 @@ CREATE TABLE IF NOT EXISTS sys_station_view_regions (
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_station_view_region (template_uid, region_key),
   INDEX idx_station_view_regions_template_uid (template_uid),
+  INDEX idx_station_view_regions_layout_area (layout_area),
   INDEX idx_station_view_regions_sort_order (sort_order),
   INDEX idx_station_view_regions_enabled (enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -101,6 +105,7 @@ CREATE TABLE IF NOT EXISTS sys_station_view_items (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   template_uid VARCHAR(128) NOT NULL,
   region_key VARCHAR(64) NOT NULL,
+  layout_area VARCHAR(64) NOT NULL DEFAULT 'card_pool',
   item_uid VARCHAR(128) NOT NULL,
   item_type VARCHAR(64) NOT NULL,
   binding_type VARCHAR(64) NOT NULL,
@@ -114,6 +119,7 @@ CREATE TABLE IF NOT EXISTS sys_station_view_items (
   UNIQUE KEY uk_station_view_items_uid (item_uid),
   INDEX idx_station_view_items_template_uid (template_uid),
   INDEX idx_station_view_items_region_key (region_key),
+  INDEX idx_station_view_items_layout_area (layout_area),
   INDEX idx_station_view_items_binding_type (binding_type),
   INDEX idx_station_view_items_binding_key (binding_key),
   INDEX idx_station_view_items_sort_order (sort_order),
@@ -894,9 +900,10 @@ CREATE TABLE IF NOT EXISTS sys_notification_recipients (
   INDEX idx_notification_recipients_read_at (read_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-INSERT INTO sys_gateways (id, name, broker, client_id, username, password, topic, qos, parser_type, kio_client_id, kio_writer, kio_write_username, kio_write_password, setdata_topic, write_result_topic, query_all_topic, enabled, created_at, updated_at)
+INSERT INTO sys_gateways (id, edge_instance_id, name, broker, client_id, username, password, topic, qos, parser_type, kio_client_id, kio_writer, kio_write_username, kio_write_password, setdata_topic, write_result_topic, query_all_topic, enabled, created_at, updated_at)
 VALUES (
   1,
+  'edge-local',
   'default-kingiot-kio',
   'tcp://127.0.0.1:1883',
   'edge-local-kio',
@@ -917,6 +924,7 @@ VALUES (
   NOW(3)
 )
 ON DUPLICATE KEY UPDATE
+  edge_instance_id = VALUES(edge_instance_id),
   name = VALUES(name),
   broker = VALUES(broker),
   client_id = VALUES(client_id),
