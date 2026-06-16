@@ -619,7 +619,7 @@ export function DetectionConfigPage() {
               loading={standardsQuery.isFetching || selectedStandardDetailQuery.isFetching}
               columns={editableItemColumns}
               dataSource={selectedStandardDetail ? selectedStandardItems : []}
-              scroll={{ x: 1650, y: 520 }}
+              scroll={{ x: 1850, y: 520 }}
               pagination={{
                 defaultPageSize: 30,
                 pageSizeOptions: [20, 30, 50, 100],
@@ -705,7 +705,7 @@ export function DetectionConfigPage() {
             rowKey={(record) => varKey(record.var_id)}
             columns={editableItemColumns}
             dataSource={standardItems}
-            scroll={{ x: 1650, y: 320 }}
+            scroll={{ x: 1850, y: 320 }}
             pagination={{
               defaultPageSize: 20,
               pageSizeOptions: [20, 30, 50, 100],

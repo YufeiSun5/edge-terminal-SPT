@@ -1930,7 +1930,7 @@ export function SettingsPage() {
       render: (_, record) => (
         <div className="settings-user-actions">
           <Button size="small" icon={<Edit3 size={13} />} onClick={() => void openStandardModal(record)}>
-            {t('settings.users.edit')}
+            {t('settings.standards.edit')}
           </Button>
           <Popconfirm
             title={t('settings.standards.deleteConfirm', { code: record.standard_code })}
@@ -2012,7 +2012,7 @@ export function SettingsPage() {
       render: (_, record) => (
         <div className="settings-user-actions">
           <Button size="small" icon={<Edit3 size={13} />} onClick={() => openStorageRouteModal(record)}>
-            {t('settings.users.edit')}
+            {t('settings.storage.edit')}
           </Button>
           <Popconfirm
             title={t('settings.storage.deleteConfirm', { code: record.route_code })}
@@ -2053,6 +2053,27 @@ export function SettingsPage() {
       key: 'store_enabled',
       width: 90,
       render: (_, record) => <Switch size="small" checked={record.store_enabled ?? true} onChange={(checked) => patchStandardItem(record.var_id, { store_enabled: checked })} />,
+    },
+    {
+      title: t('settings.standards.alarm'),
+      dataIndex: 'alarm_enabled',
+      key: 'alarm_enabled',
+      width: 90,
+      render: (_, record) => <Switch size="small" checked={record.alarm_enabled ?? true} onChange={(checked) => patchStandardItem(record.var_id, { alarm_enabled: checked })} />,
+    },
+    {
+      title: t('settings.standards.checkOnStart'),
+      dataIndex: 'check_on_start',
+      key: 'check_on_start',
+      width: 120,
+      render: (_, record) => <Switch size="small" checked={record.check_on_start ?? true} onChange={(checked) => patchStandardItem(record.var_id, { check_on_start: checked })} />,
+    },
+    {
+      title: t('settings.standards.checkCycle'),
+      dataIndex: 'check_cycle_ms',
+      key: 'check_cycle_ms',
+      width: 140,
+      render: (_, record) => <InputNumber size="small" min={0} precision={0} value={record.check_cycle_ms ?? 0} onChange={(value) => patchStandardItem(record.var_id, { check_cycle_ms: value ?? 0 })} />,
     },
     {
       title: t('settings.standards.checkMethod'),
@@ -3670,7 +3691,7 @@ export function SettingsPage() {
             rowKey="var_id"
             columns={standardItemColumns}
             dataSource={standardItems}
-            scroll={{ x: 980, y: 320 }}
+            scroll={{ x: 1320, y: 320 }}
             pagination={false}
           />
           <div className="settings-form-actions">

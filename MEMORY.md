@@ -1,8 +1,10 @@
 # MEMORY
 
-Last updated: 2026-06-16 15:20 Asia/Shanghai
+Last updated: 2026-06-16 15:38 Asia/Shanghai
 
 ## 当前阶段
+
+2026-06-16 15:38 `frontend-ai` 按用户要求把检测标准中 OK/NG 判定参数显示出来并修正文案。`desktop/src/features/settings/SettingsPage.tsx` 的检测标准项表补充 `alarm_enabled/check_on_start/check_cycle_ms` 可编辑列，标准项弹窗横向滚动加宽；`desktop/src/features/detection-config/DetectionConfigPage.tsx` 的标准项表滚动宽度同步加宽，避免“判定间隔/超限确认时长/恢复确认时长”等列被挤压；`desktop/src/shared/i18n/resources.ts` 将偏口语的“判断周期/保持”等文案收敛为“判定间隔、超限确认时长、恢复确认时长、存储周期”，并补齐中英日。顺手修正设置页检测标准和存储路由列表编辑按钮误用“编辑用户”的显示问题。验证通过：`desktop npm run lint`（仅剩既有 `EdgeStatusPage` hooks warning）、`desktop npx tsc -b --pretty false`；Browser 登录 `http://127.0.0.1:5173/#/detection-config` 与 `/#/settings`，确认检测配置页出现判定间隔/超限确认时长/恢复确认时长，设置页检测标准弹窗出现报警、首帧判断、判定间隔、超限确认时长、恢复确认时长。
 
 2026-06-16 15:20 `review-ai` 按用户意见修正报表公式边界并更新 `backend/docs/报表设置计划导入与历史报表展示设计.md` 与 `AI_BOARD.md`。系统不认可 Excel 原生公式作为正式计算来源。Excel 模板里已有公式可以作为客户模板内容被保留，但后端不新增、不解析、不校验、不依赖 Excel/WPS/Luckysheet 的公式执行结果作为正式报表指标；所有正式值由后端业务公式、冻结参数、检测规则快照、上下限快照和历史数据计算后写入。此前 15:17 关于“三类公式”的说法被本条收敛为“后端业务公式 + 冻结参数是唯一正式计算模型，Excel 原生公式仅兼容保留”。
 
