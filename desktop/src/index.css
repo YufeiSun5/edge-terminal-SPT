@@ -146,8 +146,23 @@ body {
     transform 0.2s ease;
 }
 
+.nav-button {
+  appearance: none;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
 .nav-link svg {
   flex: 0 0 auto;
+}
+
+.nav-expand-icon {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.66;
 }
 
 .nav-link span {

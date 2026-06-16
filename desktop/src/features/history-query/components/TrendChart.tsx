@@ -5,16 +5,24 @@ type TrendChartProps = {
   data: HistorySeriesRow[]
   metrics: HistoryMetricColumn[]
   selectedMetrics: string[]
+  yAxisMode?: 'auto' | 'manual'
+  yMin?: number | null
+  yMax?: number | null
 }
 
 const colors = ['#1677ff', '#13c2c2', '#ff4d4f', '#722ed1', '#fa8c16', '#52c41a']
 
-export function TrendChart({ data, metrics, selectedMetrics }: TrendChartProps) {
+export function TrendChart({ data, metrics, selectedMetrics, yAxisMode = 'auto', yMin, yMax }: TrendChartProps) {
   const selected = metrics.filter((metric) => metric.isNumeric && selectedMetrics.includes(metric.key))
+  const yAxisDomain: [number | 'auto', number | 'auto'] =
+    yAxisMode === 'manual' ? [typeof yMin === 'number' ? yMin : 'auto', typeof yMax === 'number' ? yMax : 'auto'] : ['auto', 'auto']
 
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+      <AreaChart
+        data={data}
+        margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+      >
         <defs>
           {selected.map((metric, index) => (
             <linearGradient id={`historyMetric${index}`} key={metric.key} x1="0" y1="0" x2="0" y2="1">
@@ -31,7 +39,13 @@ export function TrendChart({ data, metrics, selectedMetrics }: TrendChartProps) 
           axisLine={{ stroke: '#e8e8e8' }}
           tickLine={false}
         />
-        <YAxis stroke="#8c8c8c" tick={{ fill: '#666', fontSize: 12 }} axisLine={false} tickLine={false} />
+        <YAxis
+          stroke="#8c8c8c"
+          tick={{ fill: '#666', fontSize: 12 }}
+          axisLine={false}
+          tickLine={false}
+          domain={yAxisDomain}
+        />
         <Tooltip
           contentStyle={{
             backgroundColor: 'rgba(255, 255, 255, 0.95)',

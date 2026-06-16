@@ -253,6 +253,7 @@ func TestKernelAuthAndBusinessRoutes(t *testing.T) {
 
 	runResp := performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs", token, map[string]any{
 		"project_id":    Project.ID,
+		"factory_no":    "F-T-1",
 		"test_no":       "T-1",
 		"mode":          "standard",
 		"standard_id":   standard.ID,
@@ -268,7 +269,7 @@ func TestKernelAuthAndBusinessRoutes(t *testing.T) {
 	if run.OperatorNote != "startup memo" || run.DurationSec != 3600 || run.ExpectedEndAt == nil || run.ReportTemplateID == nil || *run.ReportTemplateID != reportTemplate.ID || run.ReportTemplateVersion != 2 {
 		t.Fatalf("expected task metadata/template snapshot: %+v", run)
 	}
-	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs", token, map[string]any{"project_id": Project.ID, "test_no": "T-duplicate", "mode": "standard"}), http.StatusConflict)
+	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs", token, map[string]any{"project_id": Project.ID, "factory_no": "F-T-duplicate", "test_no": "T-duplicate", "mode": "standard"}), http.StatusConflict)
 	assertStatus(t, performKernelRequest(kernel, http.MethodGet, "/api/v1/detection-runs/active", token, nil), http.StatusOK)
 	assertStatus(t, performKernelRequest(kernel, http.MethodGet, "/api/v1/detection-runs?project_id="+itoa(uint64(Project.ID))+"&status=running", token, nil), http.StatusOK)
 	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs/"+itoa(uint64(run.ID))+"/notes", token, map[string]any{"content": "memo 1"}), http.StatusOK)
@@ -281,7 +282,7 @@ func TestKernelAuthAndBusinessRoutes(t *testing.T) {
 		t.Fatalf("expected recent notes on task detail: %+v", detail)
 	}
 	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs/"+itoa(uint64(run.ID))+"/stop", token, map[string]any{"reason": "done"}), http.StatusOK)
-	runResp = performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs", token, map[string]any{"project_id": Project.ID, "test_no": "T-2", "mode": "standard", "standard_id": standard.ID, "report_template_id": reportTemplate.ID})
+	runResp = performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs", token, map[string]any{"project_id": Project.ID, "factory_no": "F-T-2", "test_no": "T-2", "mode": "standard", "standard_id": standard.ID, "report_template_id": reportTemplate.ID})
 	assertStatus(t, runResp, http.StatusOK)
 	mustDecodeKernel(t, runResp, &run)
 	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs/"+itoa(uint64(run.ID))+"/abnormal-stop", token, map[string]any{"reason": "alarm"}), http.StatusOK)
@@ -312,6 +313,23 @@ func TestKernelRouteValidationFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := loginKernel(t, kernel, "admin", "Admin@12345")
+
+	validationProject := models.Project{
+		ProjectCode: "UNIT-VALID",
+		Name:        "Unit Validation Project",
+		Enabled:     true,
+	}
+	if err := db.Create(&validationProject).Error; err != nil {
+		t.Fatal(err)
+	}
+	existingRunResp := performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs", token, map[string]any{"project_id": validationProject.ID, "factory_no": "F-UNIT-VALID"})
+	assertStatus(t, existingRunResp, http.StatusOK)
+	var existingRun models.DetectionTask
+	mustDecodeKernel(t, existingRunResp, &existingRun)
+	if existingRun.ProjectID != validationProject.ID {
+		t.Fatalf("expected run project_id=%d, got %+v", validationProject.ID, existingRun)
+	}
+	assertStatus(t, performKernelRequest(kernel, http.MethodPost, "/api/v1/detection-runs/"+itoa(uint64(existingRun.ID))+"/stop", token, map[string]any{"reason": "validation smoke"}), http.StatusOK)
 
 	cases := []struct {
 		method string
@@ -378,7 +396,7 @@ func TestKernelRouteValidationFailures(t *testing.T) {
 		{http.MethodPatch, "/api/v1/variables/404/assignment", map[string]any{"project_id": 1, "enabled": true}, http.StatusNotFound},
 		{http.MethodDelete, "/api/v1/variables/bad", nil, http.StatusBadRequest},
 		{http.MethodDelete, "/api/v1/variables/404", nil, http.StatusNotFound},
-		{http.MethodPost, "/api/v1/detection-runs", map[string]any{"project_id": 1}, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/detection-runs", map[string]any{"project_id": 0}, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/detection-runs/bad/stop", map[string]any{}, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/detection-runs/404/stop", map[string]any{}, http.StatusNotFound},
 	}
@@ -480,6 +498,7 @@ func TestKernelRealtimeWebSocketDetectionCommandsAndAudit(t *testing.T) {
 		"command_id": "cmd-start",
 		"payload": map[string]any{
 			"project_id": Project.ID,
+			"factory_no": "F-WS-CMD-1",
 			"test_no":    "WS-CMD-1",
 			"mode":       "standard",
 		},
@@ -723,6 +742,7 @@ func TestKernelStartRecoversRunningDetectionTask(t *testing.T) {
 	task, err := repo.StartDetectionTaskWithOptions(database.StartDetectionOptions{
 		ProjectID:  project.ID,
 		TestNo:     "RECOVER-RUNNING",
+		FactoryNo:  "F-RECOVER-RUNNING",
 		Mode:       "standard",
 		StandardID: &standard.ID,
 	})

@@ -217,6 +217,9 @@ func (r *Repository) QueryHistoryData(filter HistoryFilter) ([]models.HistoryDat
 	if filter.TestNo != "" {
 		query = query.Where("test_no = ?", filter.TestNo)
 	}
+	if filter.FactoryNo != "" {
+		query = query.Where("task_id IN (?)", r.db.Model(&models.DetectionTask{}).Select("id").Where("factory_no = ?", filter.FactoryNo))
+	}
 	if filter.Start != nil {
 		query = query.Where("source_time >= ?", *filter.Start)
 	}
@@ -324,6 +327,9 @@ func (r *Repository) queryWideHistoryTable(filter HistoryFilter, tableName strin
 	if filter.TestNo != "" {
 		query = query.Where("test_no = ?", filter.TestNo)
 	}
+	if filter.FactoryNo != "" {
+		query = query.Where("task_id IN (?)", r.db.Model(&models.DetectionTask{}).Select("id").Where("factory_no = ?", filter.FactoryNo))
+	}
 	if filter.ProjectCode != "" && hasProjectCode {
 		query = query.Where("project_code = ?", filter.ProjectCode)
 	}
@@ -364,7 +370,10 @@ func (r *Repository) historyStorageRoutes(filter HistoryFilter) ([]models.Detect
 	if filter.TestNo != "" {
 		query = query.Where("test_no = ?", filter.TestNo)
 	}
-	if filter.TaskID == nil && filter.ProjectID == nil && filter.TestNo == "" {
+	if filter.FactoryNo != "" {
+		query = query.Where("task_id IN (?)", r.db.Model(&models.DetectionTask{}).Select("id").Where("factory_no = ?", filter.FactoryNo))
+	}
+	if filter.TaskID == nil && filter.ProjectID == nil && filter.TestNo == "" && filter.FactoryNo == "" {
 		return nil, nil
 	}
 	var routes []models.DetectionRunStorageRoute

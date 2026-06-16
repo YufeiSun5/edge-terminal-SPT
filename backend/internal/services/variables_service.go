@@ -17,6 +17,8 @@ type VariablesService struct {
 	edgeInstanceID string
 }
 
+const maxKIOTestProjectCount = 12
+
 type CreateVariableInput struct {
 	VarID                  int64
 	SourceType             string
@@ -116,12 +118,53 @@ func (s *VariablesService) Snapshots(filter RealtimeVariableFilter) []models.Tag
 }
 
 func (s *VariablesService) List(filter database.TagFilter) ([]models.TagConfig, error) {
+	filter = s.normalizeVariableListFilter(filter)
+	if filter.EdgeInstanceID == "__edge_mismatch__" {
+		return []models.TagConfig{}, nil
+	}
 	return s.repo.ListTags(filter)
+}
+
+func (s *VariablesService) ListPage(filter database.TagFilter) ([]models.TagConfig, int64, int, int, error) {
+	filter = s.normalizeVariableListFilter(filter)
+	if filter.EdgeInstanceID == "__edge_mismatch__" {
+		limit := filter.Limit
+		if limit <= 0 {
+			limit = 100
+		}
+		if limit > 500 {
+			limit = 500
+		}
+		offset := filter.Offset
+		if offset < 0 {
+			offset = 0
+		}
+		return []models.TagConfig{}, 0, limit, offset, nil
+	}
+	return s.repo.ListTagsPage(filter)
+}
+
+func (s *VariablesService) normalizeVariableListFilter(filter database.TagFilter) database.TagFilter {
+	localEdgeInstanceID := strings.TrimSpace(s.edgeInstanceID)
+	requestedEdgeInstanceID := strings.TrimSpace(filter.EdgeInstanceID)
+	if localEdgeInstanceID != "" {
+		if requestedEdgeInstanceID != "" && requestedEdgeInstanceID != localEdgeInstanceID {
+			filter.EdgeInstanceID = "__edge_mismatch__"
+			return filter
+		}
+		filter.EdgeInstanceID = localEdgeInstanceID
+	} else {
+		filter.EdgeInstanceID = requestedEdgeInstanceID
+	}
+	return filter
 }
 
 func (s *VariablesService) BulkRemapKIOProjects(input BulkRemapKIOProjectsInput) (BulkRemapKIOProjectsResult, error) {
 	input = normalizeBulkRemapKIOInput(input)
 	result := BulkRemapKIOProjectsResult{DryRun: input.DryRun, ProjectCount: input.ProjectCount}
+	if input.ProjectCount > maxKIOTestProjectCount {
+		return result, fmt.Errorf("project_count must be between 1 and %d; KIO field tests are constrained to AC-01..AC-12", maxKIOTestProjectCount)
+	}
 	projects := make(map[int]models.Project, input.ProjectCount)
 	for projectNo := 1; projectNo <= input.ProjectCount; projectNo++ {
 		project := models.Project{
@@ -150,7 +193,7 @@ func (s *VariablesService) BulkRemapKIOProjects(input BulkRemapKIOProjectsInput)
 		projects[projectNo] = ensured
 	}
 
-	tags, err := s.repo.ListTags(database.TagFilter{SourceType: models.TagSourceMQTT})
+	tags, err := s.List(database.TagFilter{SourceType: models.TagSourceMQTT})
 	if err != nil {
 		return result, err
 	}

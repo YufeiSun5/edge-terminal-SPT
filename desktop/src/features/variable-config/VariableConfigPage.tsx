@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message } from 'antd'
+import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Switch, Table, Tag, message } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { Edit3, Plus, RotateCcw, Save } from 'lucide-react'
@@ -12,7 +12,7 @@ import {
   bulkRemapKioProjects,
   createVariable,
   getProjects,
-  getVariables,
+  getVariablesPage,
   updateVariable,
 } from '@/features/edge-status/api'
 import type {
@@ -115,6 +115,8 @@ export function VariableConfigPage() {
   const [viewportHeight, setViewportHeight] = useState(() => window.innerHeight)
   const [variableFilter, setVariableFilter] = useState<VariableFilter>('all')
   const [variableKeyword, setVariableKeyword] = useState('')
+  const [variablePage, setVariablePage] = useState(1)
+  const [variablePageSize, setVariablePageSize] = useState(100)
   const [selectedVariable, setSelectedVariable] = useState<VariableConfig | undefined>()
   const [selectedUnassignedIds, setSelectedUnassignedIds] = useState<VarIdentifier[]>([])
   const [variableModalOpen, setVariableModalOpen] = useState(false)
@@ -128,9 +130,21 @@ export function VariableConfigPage() {
   const [virtualVariableForm] = Form.useForm<VirtualVariableFormValues>()
   const [kioRemapForm] = Form.useForm<KioProjectRemapFormValues>()
 
+  const variableListParams = useMemo(() => {
+    const params = {
+      keyword: variableKeyword || undefined,
+      limit: variablePageSize,
+      offset: (variablePage - 1) * variablePageSize,
+    }
+    if (variableFilter === 'known') return { ...params, assigned: true }
+    if (variableFilter === 'unknown') return { ...params, assigned: false }
+    if (typeof variableFilter === 'number') return { ...params, project_id: variableFilter }
+    return params
+  }, [variableFilter, variableKeyword, variablePage, variablePageSize])
+
   const variablesQuery = useQuery({
-    queryKey: ['variable-config', 'variables', variableKeyword],
-    queryFn: () => getVariables({ keyword: variableKeyword || undefined }),
+    queryKey: ['variable-config', 'variables', variableListParams],
+    queryFn: () => getVariablesPage(variableListParams),
     retry: false,
   })
   const projectsQuery = useQuery({
@@ -139,21 +153,15 @@ export function VariableConfigPage() {
     retry: false,
   })
 
-  const variables = useMemo(() => variablesQuery.data ?? [], [variablesQuery.data])
+  const variables = useMemo(() => variablesQuery.data?.items ?? [], [variablesQuery.data])
+  const variableTotal = variablesQuery.data?.total ?? 0
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
   useEffect(() => {
     const handleResize = () => setViewportHeight(window.innerHeight)
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
-  const filteredVariables = useMemo(() => {
-    return variables.filter((variable) => {
-      if (variableFilter === 'known') return Boolean(variableProjectId(variable))
-      if (variableFilter === 'unknown') return !variableProjectId(variable)
-      if (typeof variableFilter === 'number') return variableProjectId(variable) === variableFilter
-      return true
-    })
-  }, [variableFilter, variables])
+  const filteredVariables = variables
   const unassignedVariables = useMemo(() => filteredVariables.filter((variable) => !variableProjectId(variable)), [filteredVariables])
   const selectedUnassignedVariables = useMemo(
     () => unassignedVariables.filter((variable) => selectedUnassignedIds.some((id) => sameVarId(id, variableWireId(variable)))),
@@ -535,13 +543,19 @@ export function VariableConfigPage() {
               showSearch
               value={variableFilter}
               optionFilterProp="label"
-              onChange={(value) => setVariableFilter(value)}
+              onChange={(value) => {
+                setVariableFilter(value)
+                setVariablePage(1)
+                setSelectedUnassignedIds([])
+              }}
               options={[
-                { label: `${t('settings.groups.allVariables')} · ${variables.length}`, value: 'all' },
-                { label: `${t('settings.variables.known')} · ${variables.filter((item) => variableProjectId(item)).length}`, value: 'known' },
-                { label: `${t('settings.variables.unknown')} · ${variables.filter((item) => !variableProjectId(item)).length}`, value: 'unknown' },
+                { label: variableFilter === 'all' ? `${t('settings.groups.allVariables')} · ${variableTotal}` : t('settings.groups.allVariables'), value: 'all' },
+                { label: variableFilter === 'known' ? `${t('settings.variables.known')} · ${variableTotal}` : t('settings.variables.known'), value: 'known' },
+                { label: variableFilter === 'unknown' ? `${t('settings.variables.unknown')} · ${variableTotal}` : t('settings.variables.unknown'), value: 'unknown' },
                 ...projects.map((project) => ({
-                  label: `${displayProjectName(project, i18n.resolvedLanguage)} · ${variables.filter((item) => variableProjectId(item) === project.id).length}`,
+                  label: variableFilter === project.id
+                    ? `${displayProjectName(project, i18n.resolvedLanguage)} · ${variableTotal}`
+                    : `${displayProjectName(project, i18n.resolvedLanguage)} · ${projectCode(project)}`,
                   value: project.id,
                 })),
               ]}
@@ -551,7 +565,11 @@ export function VariableConfigPage() {
               className="variable-config-search"
               placeholder={t('settings.variables.search')}
               value={variableKeyword}
-              onChange={(event) => setVariableKeyword(event.target.value)}
+              onChange={(event) => {
+                setVariableKeyword(event.target.value)
+                setVariablePage(1)
+                setSelectedUnassignedIds([])
+              }}
             />
           </div>
           <div className="detection-config-actions">
@@ -574,7 +592,7 @@ export function VariableConfigPage() {
                 <h2>{selectedLabel}</h2>
               </div>
               <Space>
-                <Tag>{filteredVariables.length} {t('settings.groups.allVariables')}</Tag>
+                <Tag>{variableTotal} {t('settings.groups.allVariables')}</Tag>
                 <Tag color={unassignedVariables.length ? 'warning' : 'success'}>
                   {unassignedVariables.length} {t('settings.variables.unassigned')}
                 </Tag>
@@ -619,15 +637,25 @@ export function VariableConfigPage() {
               columns={variableColumns}
               dataSource={projectGroupedRows}
               scroll={{ x: 1720, y: tableScrollY }}
-              pagination={{
-                defaultPageSize: 100,
-                pageSizeOptions: [20, 30, 50, 100],
-                showSizeChanger: true,
-                showQuickJumper: true,
-                showTotal: () => `${filteredVariables.length} ${t('settings.groups.allVariables')}`,
-                size: 'small',
-              }}
+              pagination={false}
             />
+            <div className="variable-config-pagination">
+              <Pagination
+                size="small"
+                current={variablePage}
+                pageSize={variablePageSize}
+                total={variableTotal}
+                showSizeChanger
+                showQuickJumper
+                pageSizeOptions={[20, 30, 50, 100]}
+                showTotal={(total) => `${total} ${t('settings.groups.allVariables')}`}
+                onChange={(page, pageSize) => {
+                  setVariablePage(page)
+                  setVariablePageSize(pageSize)
+                  setSelectedUnassignedIds([])
+                }}
+              />
+            </div>
           </main>
         </div>
       </section>
@@ -928,7 +956,7 @@ function KioRemapModal({
       <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.kioRemapHint')} />
       <Form form={form} layout="vertical">
         <div className="settings-form-grid modal-grid">
-          <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}><InputNumber min={1} max={99} /></Form.Item>
+          <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}><InputNumber min={1} max={12} /></Form.Item>
           <Form.Item name="project_code_prefix" label={t('settings.variables.kioProjectCodePrefix')}><Input /></Form.Item>
           <Form.Item name="project_display_prefix" label={t('settings.variables.kioProjectDisplayPrefix')}><Input /></Form.Item>
           <Form.Item name="raw_project_prefix" label={t('settings.variables.kioRawProjectPrefix')}><Input /></Form.Item>

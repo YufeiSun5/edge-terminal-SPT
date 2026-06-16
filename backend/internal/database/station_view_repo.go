@@ -34,7 +34,7 @@ func (r *Repository) EnsureDefaultStationViewTemplate() error {
 		return err
 	}
 	if count > 0 {
-		return nil
+		return r.cleanupLegacyStationViewLayout()
 	}
 
 	template := models.StationViewTemplate{
@@ -47,7 +47,7 @@ func (r *Repository) EnsureDefaultStationViewTemplate() error {
 		Version:       1,
 		Status:        models.StationViewStatusPublished,
 		OwnerScope:    "edge",
-		LayoutJSON:    `{"auto_expand":true}`,
+		LayoutJSON:    `{}`,
 	}
 	regions := []models.StationViewRegion{
 		{
@@ -55,7 +55,7 @@ func (r *Repository) EnsureDefaultStationViewTemplate() error {
 			RegionKey:   models.StationViewLayoutAreaCardPool,
 			LayoutArea:  models.StationViewLayoutAreaCardPool,
 			RegionType:  "metric_grid",
-			LayoutJSON:  `{"columns":"auto","auto_expand":true}`,
+			LayoutJSON:  `{"columns":"auto"}`,
 			SortOrder:   10,
 			Enabled:     true,
 		},
@@ -64,47 +64,9 @@ func (r *Repository) EnsureDefaultStationViewTemplate() error {
 			RegionKey:   models.StationViewLayoutAreaListLayout,
 			LayoutArea:  models.StationViewLayoutAreaListLayout,
 			RegionType:  "inspection_table",
-			LayoutJSON:  `{"auto_expand":true}`,
+			LayoutJSON:  `{}`,
 			SortOrder:   20,
 			Enabled:     true,
-		},
-	}
-	items := []models.StationViewItem{
-		{
-			TemplateUID: defaultStationViewTemplateUID,
-			RegionKey:   models.StationViewLayoutAreaCardPool,
-			LayoutArea:  models.StationViewLayoutAreaCardPool,
-			ItemUID:     "station-default-card-pool-project-vars",
-			ItemType:    "metric_card",
-			BindingType: models.StationViewBindingVarGroup,
-			BindingKey:  "",
-			DisplayJSON: `{"source":"project_variables","auto_expand":true}`,
-			SortOrder:   10,
-			Visible:     true,
-		},
-		{
-			TemplateUID: defaultStationViewTemplateUID,
-			RegionKey:   models.StationViewLayoutAreaListLayout,
-			LayoutArea:  models.StationViewLayoutAreaListLayout,
-			ItemUID:     "station-default-list-layout-detection-items",
-			ItemType:    "inspection_row",
-			BindingType: models.StationViewBindingDetectionItems,
-			BindingKey:  "",
-			DisplayJSON: `{"source":"current_detection_run","auto_expand":true}`,
-			SortOrder:   10,
-			Visible:     true,
-		},
-		{
-			TemplateUID: defaultStationViewTemplateUID,
-			RegionKey:   models.StationViewLayoutAreaListLayout,
-			LayoutArea:  models.StationViewLayoutAreaListLayout,
-			ItemUID:     "station-default-list-layout-run-state",
-			ItemType:    "run_state",
-			BindingType: models.StationViewBindingRunState,
-			BindingKey:  "",
-			DisplayJSON: `{"source":"current_detection_run"}`,
-			SortOrder:   20,
-			Visible:     true,
 		},
 	}
 	assignment := models.StationViewAssignment{
@@ -116,13 +78,32 @@ func (r *Repository) EnsureDefaultStationViewTemplate() error {
 	}
 
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if id, err := r.nextID(tx, template.TableName()); err != nil {
+			return err
+		} else if id > 0 {
+			template.ID = uintID(id)
+		}
+		regionIDs, err := r.nextIDs(tx, (models.StationViewRegion{}).TableName(), len(regions))
+		if err != nil {
+			return err
+		}
+		for i := range regions {
+			if len(regionIDs) > 0 {
+				regions[i].ID = uintID(regionIDs[i])
+			}
+			regions[i].SyncScope = "global"
+		}
+		if id, err := r.nextID(tx, assignment.TableName()); err != nil {
+			return err
+		} else if id > 0 {
+			assignment.ID = uintID(id)
+		}
+		template.SyncScope = "global"
+		assignment.SyncScope = "global"
 		if err := tx.Create(&template).Error; err != nil {
 			return err
 		}
 		if err := tx.Create(&regions).Error; err != nil {
-			return err
-		}
-		if err := tx.Create(&items).Error; err != nil {
 			return err
 		}
 		var assignmentCount int64
@@ -136,6 +117,51 @@ func (r *Repository) EnsureDefaultStationViewTemplate() error {
 		}
 		return tx.Create(&assignment).Error
 	})
+}
+
+func (r *Repository) cleanupLegacyStationViewLayout() error {
+	now := time.Now()
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.StationViewRegion{}).
+			Where("region_key = ? AND (layout_area = ? OR layout_area IS NULL)", "left", "").
+			Updates(map[string]interface{}{"layout_area": models.StationViewLayoutAreaCardPool, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.StationViewRegion{}).
+			Where("region_key = ? AND (layout_area = ? OR layout_area IS NULL)", "right", "").
+			Updates(map[string]interface{}{"layout_area": models.StationViewLayoutAreaListLayout, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		if err := deleteLegacyStationViewRegion(tx, "left", models.StationViewLayoutAreaCardPool); err != nil {
+			return err
+		}
+		if err := deleteLegacyStationViewRegion(tx, "right", models.StationViewLayoutAreaListLayout); err != nil {
+			return err
+		}
+		return tx.Delete(&models.StationViewItem{}, "template_uid = ? AND binding_key LIKE ?", defaultStationViewTemplateUID, "stcfg\\_%").Error
+	})
+}
+
+func deleteLegacyStationViewRegion(tx *gorm.DB, legacyKey string, layoutArea string) error {
+	var legacyRegions []models.StationViewRegion
+	if err := tx.Where("region_key = ? AND layout_area = ?", legacyKey, layoutArea).Find(&legacyRegions).Error; err != nil {
+		return err
+	}
+	for _, legacyRegion := range legacyRegions {
+		var canonicalCount int64
+		if err := tx.Model(&models.StationViewRegion{}).
+			Where("template_uid = ? AND layout_area = ? AND region_key = ? AND id <> ?", legacyRegion.TemplateUID, layoutArea, layoutArea, legacyRegion.ID).
+			Count(&canonicalCount).Error; err != nil {
+			return err
+		}
+		if canonicalCount == 0 {
+			continue
+		}
+		if err := tx.Delete(&models.StationViewRegion{}, "id = ?", legacyRegion.ID).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ListStationViewTemplates(filter StationViewTemplateFilter) ([]models.StationViewTemplateListItem, error) {
@@ -276,7 +302,7 @@ func (r *Repository) ListStationViewItems(templateUID string) ([]models.StationV
 	}
 	var items []models.StationViewItem
 	if err := r.db.Where("template_uid = ?", templateUID).
-		Order("layout_area ASC, sort_order ASC, id ASC").
+		Order("layout_area ASC, pinned DESC, sort_order ASC, id ASC").
 		Find(&items).Error; err != nil {
 		return nil, err
 	}
@@ -317,18 +343,29 @@ func (r *Repository) ReplaceStationViewItems(templateUID string, items []models.
 			return err
 		}
 		for area := range areas {
-			if err := ensureStationViewAreaRegion(tx, templateUID, area, now); err != nil {
+			if err := r.ensureStationViewAreaRegion(tx, templateUID, area, now); err != nil {
 				return err
 			}
 		}
 		if err := tx.Delete(&models.StationViewItem{}, "template_uid = ?", templateUID).Error; err != nil {
 			return err
 		}
-		if len(cleaned) == 0 {
-			return nil
-		}
-		if err := tx.Select("*").Create(&cleaned).Error; err != nil {
+		itemIDs, err := r.nextIDs(tx, (models.StationViewItem{}).TableName(), len(cleaned))
+		if err != nil {
 			return err
+		}
+		for i := range cleaned {
+			if len(itemIDs) > 0 {
+				cleaned[i].ID = uintID(itemIDs[i])
+			}
+			if strings.TrimSpace(cleaned[i].SyncScope) == "" {
+				cleaned[i].SyncScope = "global"
+			}
+		}
+		if len(cleaned) > 0 {
+			if err := tx.Select("*").Create(&cleaned).Error; err != nil {
+				return err
+			}
 		}
 		for _, itemUID := range hiddenItemUIDs {
 			if err := tx.Model(&models.StationViewItem{}).
@@ -337,7 +374,9 @@ func (r *Repository) ReplaceStationViewItems(templateUID string, items []models.
 				return err
 			}
 		}
-		return nil
+		return tx.Model(&models.StationViewTemplate{}).
+			Where("template_uid = ?", templateUID).
+			Updates(map[string]interface{}{"version": gorm.Expr("version + ?", 1), "updated_at": now}).Error
 	})
 	if err != nil {
 		return nil, err
@@ -374,7 +413,7 @@ func (r *Repository) GetEffectiveStationView(projectID uint, edgeInstanceID stri
 	}
 	var items []models.StationViewItem
 	if err := r.db.Where("template_uid = ? AND visible = ?", template.TemplateUID, true).
-		Order("layout_area ASC, sort_order ASC, id ASC").
+		Order("layout_area ASC, pinned DESC, sort_order ASC, id ASC").
 		Find(&items).Error; err != nil {
 		return models.StationViewEffectiveResponse{}, err
 	}
@@ -402,6 +441,7 @@ func (r *Repository) GetEffectiveStationView(projectID uint, edgeInstanceID stri
 			BindingJSON: item.BindingJSON,
 			DisplayJSON: item.DisplayJSON,
 			SortOrder:   item.SortOrder,
+			Pinned:      item.Pinned,
 			Visible:     item.Visible,
 		}
 		bindings, itemWarnings := resolveStationViewItemBindings(item, tags, currentRun, hasCurrentRun)
@@ -482,7 +522,16 @@ func stationViewTemplateListItem(template models.StationViewTemplate, assignment
 }
 
 func stationViewAssignmentDTO(assignment models.StationViewAssignment) models.StationViewAssignmentDTO {
-	return models.StationViewAssignmentDTO(assignment)
+	return models.StationViewAssignmentDTO{
+		ID:          assignment.ID,
+		TemplateUID: assignment.TemplateUID,
+		TargetType:  assignment.TargetType,
+		TargetKey:   assignment.TargetKey,
+		Priority:    assignment.Priority,
+		Enabled:     assignment.Enabled,
+		CreatedAt:   assignment.CreatedAt,
+		UpdatedAt:   assignment.UpdatedAt,
+	}
 }
 
 func stationViewUpdateWithTime(updates map[string]interface{}) map[string]interface{} {
@@ -505,6 +554,7 @@ func stationViewItemDTOs(items []models.StationViewItem) []models.StationViewIte
 			BindingJSON: item.BindingJSON,
 			DisplayJSON: item.DisplayJSON,
 			SortOrder:   item.SortOrder,
+			Pinned:      item.Pinned,
 			Visible:     item.Visible,
 		})
 	}
@@ -544,6 +594,7 @@ func stationViewItemFromDTO(templateUID string, item models.StationViewItemDTO, 
 		BindingJSON: strings.TrimSpace(item.BindingJSON),
 		DisplayJSON: strings.TrimSpace(item.DisplayJSON),
 		SortOrder:   sortOrder,
+		Pinned:      item.Pinned,
 		Visible:     item.Visible,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -577,31 +628,17 @@ func stationViewItemLayoutArea(item models.StationViewItem) string {
 	if layoutArea := strings.TrimSpace(item.LayoutArea); layoutArea != "" {
 		return layoutArea
 	}
-	switch item.RegionKey {
-	case "left":
-		return models.StationViewLayoutAreaCardPool
-	case "right":
-		return models.StationViewLayoutAreaListLayout
-	default:
-		return strings.TrimSpace(item.RegionKey)
-	}
+	return strings.TrimSpace(item.RegionKey)
 }
 
 func stationViewRegionLayoutArea(region models.StationViewRegion) string {
 	if layoutArea := strings.TrimSpace(region.LayoutArea); layoutArea != "" {
 		return layoutArea
 	}
-	switch region.RegionKey {
-	case "left":
-		return models.StationViewLayoutAreaCardPool
-	case "right":
-		return models.StationViewLayoutAreaListLayout
-	default:
-		return strings.TrimSpace(region.RegionKey)
-	}
+	return strings.TrimSpace(region.RegionKey)
 }
 
-func ensureStationViewAreaRegion(tx *gorm.DB, templateUID string, layoutArea string, now time.Time) error {
+func (r *Repository) ensureStationViewAreaRegion(tx *gorm.DB, templateUID string, layoutArea string, now time.Time) error {
 	if err := validateStationViewLayoutArea(layoutArea); err != nil {
 		return err
 	}
@@ -628,16 +665,23 @@ func ensureStationViewAreaRegion(tx *gorm.DB, templateUID string, layoutArea str
 		regionType = "metric_grid"
 		sortOrder = 10
 	}
-	return tx.Create(&models.StationViewRegion{
+	region := models.StationViewRegion{
 		TemplateUID: templateUID,
 		RegionKey:   regionKey,
 		LayoutArea:  layoutArea,
 		RegionType:  regionType,
 		SortOrder:   sortOrder,
 		Enabled:     true,
+		SyncScope:   "global",
 		CreatedAt:   now,
 		UpdatedAt:   now,
-	}).Error
+	}
+	if id, err := r.nextID(tx, region.TableName()); err != nil {
+		return err
+	} else if id > 0 {
+		region.ID = uintID(id)
+	}
+	return tx.Create(&region).Error
 }
 
 func (r *Repository) resolveStationViewTemplate(project models.Project, edgeInstanceID string) (models.StationViewTemplate, error) {

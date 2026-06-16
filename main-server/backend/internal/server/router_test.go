@@ -744,6 +744,23 @@ func TestVariablesAndHistoryRoutesReadSyncedTables(t *testing.T) {
 	if !strings.Contains(variablesRec.Body.String(), `"var_id_text":"1001"`) {
 		t.Fatalf("variables response should include var_id_text: %s", variablesRec.Body.String())
 	}
+	pagedVariablesRec := httptest.NewRecorder()
+	router.ServeHTTP(pagedVariablesRec, authedRequest(http.MethodGet, "/api/v1/variables?assigned=true&limit=1&offset=0", token, nil))
+	if pagedVariablesRec.Code != http.StatusOK {
+		t.Fatalf("paged variables status=%d body=%s", pagedVariablesRec.Code, pagedVariablesRec.Body.String())
+	}
+	var pagedVariables struct {
+		Items  []query.TagConfig `json:"items"`
+		Total  int64             `json:"total"`
+		Limit  int               `json:"limit"`
+		Offset int               `json:"offset"`
+	}
+	if err := json.Unmarshal(pagedVariablesRec.Body.Bytes(), &pagedVariables); err != nil {
+		t.Fatal(err)
+	}
+	if pagedVariables.Total != 1 || pagedVariables.Limit != 1 || pagedVariables.Offset != 0 || len(pagedVariables.Items) != 1 {
+		t.Fatalf("unexpected paged variables: %+v", pagedVariables)
+	}
 	legacyDeviceRec := httptest.NewRecorder()
 	router.ServeHTTP(legacyDeviceRec, authedRequest(http.MethodGet, "/api/v1/variables?device_id=1", token, nil))
 	if legacyDeviceRec.Code != http.StatusBadRequest || !strings.Contains(legacyDeviceRec.Body.String(), "unsupported_query_param") {
@@ -765,6 +782,16 @@ func TestVariablesAndHistoryRoutesReadSyncedTables(t *testing.T) {
 	router.ServeHTTP(badWritableRec, authedRequest(http.MethodGet, "/api/v1/variables?writable=bad", token, nil))
 	if badWritableRec.Code != http.StatusBadRequest {
 		t.Fatalf("bad writable status=%d body=%s", badWritableRec.Code, badWritableRec.Body.String())
+	}
+	badAssignedRec := httptest.NewRecorder()
+	router.ServeHTTP(badAssignedRec, authedRequest(http.MethodGet, "/api/v1/variables?assigned=bad", token, nil))
+	if badAssignedRec.Code != http.StatusBadRequest {
+		t.Fatalf("bad assigned status=%d body=%s", badAssignedRec.Code, badAssignedRec.Body.String())
+	}
+	badLimitRec := httptest.NewRecorder()
+	router.ServeHTTP(badLimitRec, authedRequest(http.MethodGet, "/api/v1/variables?limit=-1", token, nil))
+	if badLimitRec.Code != http.StatusBadRequest {
+		t.Fatalf("bad limit status=%d body=%s", badLimitRec.Code, badLimitRec.Body.String())
 	}
 
 	historyRec := httptest.NewRecorder()
@@ -1417,12 +1444,12 @@ func TestTaskFlowsReadSyncedTables(t *testing.T) {
 	}
 
 	writeRec := httptest.NewRecorder()
-	writeReq := httptest.NewRequest(http.MethodPost, "/api/v1/task-flows", strings.NewReader(`{"project_id":1}`))
+	writeReq := httptest.NewRequest(http.MethodPost, "/api/v1/task-flows", strings.NewReader(`{"project_id":1,"flow_code":"flow.main.write","name":"Main Write Flow","enabled":true,"trigger_type":"manual","action_type":"javascript"}`))
 	writeReq.Header.Set("Authorization", "Bearer "+token)
 	writeReq.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(writeRec, writeReq)
-	if writeRec.Code != http.StatusNotImplemented || !strings.Contains(writeRec.Body.String(), `"code":"edge_control_required"`) {
-		t.Fatalf("task flow write should be blocked on main server status=%d body=%s", writeRec.Code, writeRec.Body.String())
+	if writeRec.Code != http.StatusCreated || !strings.Contains(writeRec.Body.String(), `"updated_by_node":"main-server"`) {
+		t.Fatalf("task flow write should update synced config table status=%d body=%s", writeRec.Code, writeRec.Body.String())
 	}
 }
 

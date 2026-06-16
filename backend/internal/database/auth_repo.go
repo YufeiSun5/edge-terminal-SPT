@@ -190,6 +190,25 @@ func (r *Repository) MarkEdgeControlCommandRunning(id uint64) error {
 		}).Error
 }
 
+func (r *Repository) UpdateEdgeControlCommandResult(id uint64, status string, targetID string, resultJSON string, errorCode string, errorMessage string) error {
+	if resultJSON == "" {
+		resultJSON = "{}"
+	}
+	updates := map[string]interface{}{
+		"result_json":   resultJSON,
+		"error_code":    errorCode,
+		"error_message": errorMessage,
+		"updated_at":    time.Now(),
+	}
+	if status != "" {
+		updates["status"] = status
+	}
+	if targetID != "" {
+		updates["target_id"] = targetID
+	}
+	return r.db.Model(&models.EdgeControlCommand{}).Where("id = ?", id).Updates(updates).Error
+}
+
 func (r *Repository) CompleteEdgeControlCommand(id uint64, status string, targetID string, resultJSON string, errorCode string, errorMessage string) error {
 	now := time.Now()
 	if resultJSON == "" {

@@ -17,6 +17,13 @@ type VariablesHandler struct {
 	service *services.VariablesService
 }
 
+type variableListResponse struct {
+	Items  interface{} `json:"items"`
+	Total  int64       `json:"total"`
+	Limit  int         `json:"limit"`
+	Offset int         `json:"offset"`
+}
+
 type createVariableRequest struct {
 	VarID                  flexibleInt64 `json:"var_id"`
 	SourceType             string        `json:"source_type"`
@@ -145,6 +152,24 @@ func (h *VariablesHandler) list(c *gin.Context) {
 	filter, err := parseTagFilter(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, hasLimit := c.GetQuery("limit"); hasLimit {
+		tags, total, limit, offset, err := h.service.ListPage(filter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, variableListResponse{Items: tags, Total: total, Limit: limit, Offset: offset})
+		return
+	}
+	if _, hasOffset := c.GetQuery("offset"); hasOffset {
+		tags, total, limit, offset, err := h.service.ListPage(filter)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, variableListResponse{Items: tags, Total: total, Limit: limit, Offset: offset})
 		return
 	}
 	tags, err := h.service.List(filter)
@@ -407,10 +432,32 @@ func parseTagFilter(c *gin.Context) (database.TagFilter, error) {
 		}
 		filter.Writable = &value
 	}
+	if raw := c.Query("assigned"); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, fmt.Errorf("invalid assigned")
+		}
+		filter.Assigned = &value
+	}
+	if raw := c.Query("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return filter, fmt.Errorf("invalid limit")
+		}
+		filter.Limit = value
+	}
+	if raw := c.Query("offset"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return filter, fmt.Errorf("invalid offset")
+		}
+		filter.Offset = value
+	}
 	filter.SourceType = c.Query("source_type")
 	filter.ProjectCode = c.Query("project_code")
 	filter.VarGroup = c.Query("var_group")
 	filter.Keyword = c.Query("keyword")
+	filter.EdgeInstanceID = strings.TrimSpace(c.Query("edge_instance_id"))
 	return filter, nil
 }
 

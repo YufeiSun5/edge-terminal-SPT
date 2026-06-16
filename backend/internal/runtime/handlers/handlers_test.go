@@ -909,6 +909,7 @@ func TestEdgeControlHandlerStartAndIdempotency(t *testing.T) {
 		"reason":            "smoke start",
 		"payload": map[string]any{
 			"project_id": project.ID,
+			"factory_no": "F-EC-001",
 			"test_no":    "EC-001",
 			"mode":       "standard",
 		},
@@ -1324,6 +1325,7 @@ func TestEdgeControlHandlerDetectionOperations(t *testing.T) {
 	task, err := detection.Start(database.StartDetectionOptions{
 		ProjectID:  project.ID,
 		TestNo:     "EC-OPS-001",
+		FactoryNo:  "F-EC-OPS-001",
 		Mode:       "standard",
 		StandardID: &standard.ID,
 	})
@@ -1693,17 +1695,17 @@ func TestLimitAlarmsHandlerListFilters(t *testing.T) {
 func TestParseTagFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	req := httptest.NewRequest(http.MethodGet, "/variables?gateway_id=2&project_id=7&project_code=AC-07&var_group=PID&writable=true&enabled=true&discovered=false&keyword=temp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/variables?gateway_id=2&project_id=7&project_code=AC-07&var_group=PID&writable=true&enabled=true&discovered=false&assigned=true&keyword=temp&edge_instance_id=edge-local&limit=50&offset=100", nil)
 	ctx.Request = req
 	filter, err := parseTagFilter(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *filter.GatewayID != 2 || *filter.ProjectID != 7 || filter.ProjectCode != "AC-07" || filter.VarGroup != "PID" || *filter.Writable != true || *filter.Enabled != true || *filter.Discovered != false || filter.Keyword != "temp" {
+	if *filter.GatewayID != 2 || *filter.ProjectID != 7 || filter.ProjectCode != "AC-07" || filter.VarGroup != "PID" || *filter.Writable != true || *filter.Enabled != true || *filter.Discovered != false || *filter.Assigned != true || filter.Keyword != "temp" || filter.EdgeInstanceID != "edge-local" || filter.Limit != 50 || filter.Offset != 100 {
 		t.Fatalf("unexpected filter: %+v", filter)
 	}
 
-	for _, rawURL := range []string{"/variables?gateway_id=bad", "/variables?project_id=bad", "/variables?enabled=bad", "/variables?discovered=bad", "/variables?writable=bad", "/variables?device_id=8"} {
+	for _, rawURL := range []string{"/variables?gateway_id=bad", "/variables?project_id=bad", "/variables?enabled=bad", "/variables?discovered=bad", "/variables?writable=bad", "/variables?assigned=bad", "/variables?limit=bad", "/variables?offset=-1", "/variables?device_id=8"} {
 		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 		ctx.Request = httptest.NewRequest(http.MethodGet, rawURL, nil)
 		if _, err := parseTagFilter(ctx); err == nil {
@@ -2097,6 +2099,7 @@ func TestDetectionRunsHandlerLifecycle(t *testing.T) {
 
 	resp := callHandler(t, http.MethodPost, "/detection-runs", map[string]any{
 		"project_id":    Project.ID,
+		"factory_no":    "F-T-H-1",
 		"test_no":       "T-H-1",
 		"mode":          "standard",
 		"duration_sec":  30,
@@ -2192,7 +2195,7 @@ func TestDetectionRunsHandlerLifecycle(t *testing.T) {
 	if !strings.Contains(resp.Body.String(), `"var_id_text":"9212397624135540843"`) {
 		t.Fatalf("expected exact feature var_id_text, body=%s", resp.Body.String())
 	}
-	resp = callHandler(t, http.MethodPost, "/detection-runs", map[string]any{"project_id": Project.ID, "test_no": "T-H-2", "mode": "standard"}, handler.start)
+	resp = callHandler(t, http.MethodPost, "/detection-runs", map[string]any{"project_id": Project.ID, "factory_no": "F-T-H-2", "test_no": "T-H-2", "mode": "standard"}, handler.start)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("second start status=%d body=%s", resp.Code, resp.Body.String())
 	}

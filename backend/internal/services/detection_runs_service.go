@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -58,6 +59,23 @@ type UpdateDetectionLimitsResult struct {
 	Count     int                               `json:"count"`
 }
 
+type ApplyDetectionConfigInput struct {
+	TaskID        uint
+	ConfigCode    string
+	ConfigVersion int
+	ConfigHash    string
+}
+
+type ApplyDetectionConfigResult struct {
+	TaskID         uint   `json:"task_id"`
+	ProjectID      uint   `json:"project_id"`
+	ConfigCode     string `json:"config_code"`
+	ConfigName     string `json:"config_name"`
+	ConfigVersion  int    `json:"config_version"`
+	ConfigHash     string `json:"config_hash"`
+	ConfigRevision int    `json:"config_revision"`
+}
+
 type DetectionRunsRuntimeDeps struct {
 	Tags     *pipeline.TagManager
 	Channels *pipeline.Channels
@@ -75,6 +93,9 @@ func NewDetectionRunsService(repo *database.Repository, tasks *pipeline.TaskMana
 }
 
 func (s *DetectionRunsService) Start(opts database.StartDetectionOptions) (*models.DetectionTask, error) {
+	if strings.TrimSpace(opts.FactoryNo) == "" {
+		return nil, fmt.Errorf("factory_no is required")
+	}
 	task, err := s.repo.StartDetectionTaskWithOptions(opts)
 	if err != nil {
 		return nil, err
@@ -313,6 +334,50 @@ func (s *DetectionRunsService) UpdateDetectionLimits(input UpdateDetectionLimits
 	}, nil
 }
 
+func (s *DetectionRunsService) ApplyDetectionConfig(input ApplyDetectionConfigInput) (ApplyDetectionConfigResult, error) {
+	task, err := s.repo.ApplyDetectionConfigToTask(database.ApplyDetectionConfigOptions{
+		TaskID:        input.TaskID,
+		ConfigCode:    input.ConfigCode,
+		ConfigVersion: input.ConfigVersion,
+		ConfigHash:    input.ConfigHash,
+	})
+	if err != nil {
+		if input.TaskID != 0 {
+			if current, getErr := s.repo.GetDetectionTask(input.TaskID); getErr == nil {
+				s.recordRunEventWithDetail(current, models.DetectionEventConfigApplyFail, models.NotificationLevelWarning, "detection config apply failed", map[string]any{
+					"config_code":    input.ConfigCode,
+					"config_version": input.ConfigVersion,
+					"config_hash":    input.ConfigHash,
+					"error":          err.Error(),
+				})
+			}
+		}
+		return ApplyDetectionConfigResult{}, err
+	}
+	if task.Status == models.DetectionStatusRunning {
+		s.tasks.UpdateActive(task)
+	}
+	s.recordRunEventWithDetail(task, models.DetectionEventConfigApplied, models.NotificationLevelInfo, "detection config applied", map[string]any{
+		"config_code":      task.ConfigCode,
+		"config_name":      task.ConfigName,
+		"config_version":   task.ConfigVersion,
+		"config_hash":      task.ConfigHash,
+		"config_revision":  task.CurrentConfigRevision,
+		"standard_id":      task.StandardID,
+		"standard_code":    task.StandardCode,
+		"standard_version": task.StandardVer,
+	})
+	return ApplyDetectionConfigResult{
+		TaskID:         task.ID,
+		ProjectID:      task.ProjectID,
+		ConfigCode:     task.ConfigCode,
+		ConfigName:     task.ConfigName,
+		ConfigVersion:  task.ConfigVersion,
+		ConfigHash:     task.ConfigHash,
+		ConfigRevision: task.CurrentConfigRevision,
+	}, nil
+}
+
 func (s *DetectionRunsService) CreateReportRequests(taskID uint, raw any) ([]models.DetectionRunReportRequest, error) {
 	if taskID == 0 {
 		return nil, fmt.Errorf("task_id is required")
@@ -401,6 +466,16 @@ func detectionLimitUpdates(item UpdateDetectionLimitItemInput) map[string]interf
 }
 
 func (s *DetectionRunsService) recordRunEvent(task models.DetectionTask, eventType string, level string, message string) {
+	s.recordRunEventWithDetail(task, eventType, level, message, nil)
+}
+
+func (s *DetectionRunsService) recordRunEventWithDetail(task models.DetectionTask, eventType string, level string, message string, detail map[string]any) {
+	detailJSON := ""
+	if detail != nil {
+		if raw, err := json.Marshal(detail); err == nil {
+			detailJSON = string(raw)
+		}
+	}
 	event := &models.DetectionRunEvent{
 		TaskID:      task.ID,
 		TestNo:      task.TestNo,
@@ -409,6 +484,7 @@ func (s *DetectionRunsService) recordRunEvent(task models.DetectionTask, eventTy
 		EventType:   eventType,
 		EventLevel:  level,
 		Message:     message,
+		Detail:      detailJSON,
 	}
 	if err := s.repo.CreateDetectionRunEvent(event); err != nil {
 		log.Printf("create detection run event failed task_id=%d event_type=%s err=%v", task.ID, eventType, err)
@@ -523,6 +599,10 @@ func detectionEventNotificationType(eventType string) string {
 		return models.NotificationDetectionRunResumed
 	case models.DetectionEventFeaturesUpdated:
 		return models.NotificationDetectionFeatures
+	case models.DetectionEventConfigApplied:
+		return models.NotificationDetectionConfigApplied
+	case models.DetectionEventConfigApplyFail:
+		return models.NotificationDetectionConfigApplyFailed
 	default:
 		return ""
 	}

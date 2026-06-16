@@ -21,7 +21,12 @@ type DetectionStandard struct {
 	Mode             string                  `gorm:"column:mode" json:"mode"`
 	ReportTemplateID *uint                   `gorm:"column:report_template_id" json:"report_template_id,omitempty"`
 	Version          int                     `gorm:"column:version" json:"version"`
+	ConfigHash       string                  `gorm:"column:config_hash" json:"config_hash"`
 	Enabled          bool                    `gorm:"column:enabled" json:"enabled"`
+	SyncScope        string                  `gorm:"column:sync_scope" json:"sync_scope"`
+	EdgeInstanceID   string                  `gorm:"column:edge_instance_id" json:"edge_instance_id"`
+	UpdatedByNode    string                  `gorm:"column:updated_by_node" json:"updated_by_node"`
+	UpdatedByUser    string                  `gorm:"column:updated_by_user" json:"updated_by_user"`
 	Remark           string                  `gorm:"column:remark" json:"remark"`
 	CreatedAt        time.Time               `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt        time.Time               `gorm:"column:updated_at" json:"updated_at"`
@@ -57,6 +62,10 @@ type DetectionStandardItem struct {
 	Unit            string    `gorm:"column:unit" json:"unit"`
 	DecimalPlaces   int       `gorm:"column:decimal_places" json:"decimal_places"`
 	SortOrder       int       `gorm:"column:sort_order" json:"sort_order"`
+	SyncScope       string    `gorm:"column:sync_scope" json:"sync_scope"`
+	EdgeInstanceID  string    `gorm:"column:edge_instance_id" json:"edge_instance_id"`
+	UpdatedByNode   string    `gorm:"column:updated_by_node" json:"updated_by_node"`
+	UpdatedByUser   string    `gorm:"column:updated_by_user" json:"updated_by_user"`
 	CreatedAt       time.Time `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt       time.Time `gorm:"column:updated_at" json:"updated_at"`
 }

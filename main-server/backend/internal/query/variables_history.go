@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const StorageTargetWideTable = "wide_table"
@@ -15,6 +17,7 @@ const StorageTargetWideTable = "wide_table"
 type VariableFilter struct {
 	GatewayID   *int
 	ProjectID   *uint
+	Assigned    *bool
 	Enabled     *bool
 	Discovered  *bool
 	Writable    *bool
@@ -22,6 +25,8 @@ type VariableFilter struct {
 	ProjectCode string
 	VarGroup    string
 	Keyword     string
+	Limit       int
+	Offset      int
 }
 
 type HistoryFilter struct {
@@ -30,6 +35,7 @@ type HistoryFilter struct {
 	VarID       *int64
 	ProjectCode string
 	TestNo      string
+	FactoryNo   string
 	Start       *time.Time
 	End         *time.Time
 	Limit       int
@@ -66,6 +72,32 @@ func (h HistoryData) MarshalJSON() ([]byte, error) {
 }
 
 func (q *StationViewQuery) ListVariables(filter VariableFilter, edgeInstanceID string) ([]TagConfig, error) {
+	stmt, err := q.variablesQuery(filter, edgeInstanceID)
+	if err != nil {
+		return nil, err
+	}
+	var tags []TagConfig
+	err = stmt.Order("sys_tags.project_id asc, sys_tags.var_group asc, sys_tags.var_name asc, sys_tags.var_id asc").Find(&tags).Error
+	return tags, err
+}
+
+func (q *StationViewQuery) ListVariablesPage(filter VariableFilter, edgeInstanceID string) ([]TagConfig, int64, int, int, error) {
+	stmt, err := q.variablesQuery(filter, edgeInstanceID)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	limit := normalizedLimit(filter.Limit, 100, 500)
+	offset := normalizedOffset(filter.Offset)
+	var total int64
+	if err := stmt.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, limit, offset, err
+	}
+	var tags []TagConfig
+	err = stmt.Order("sys_tags.project_id asc, sys_tags.var_group asc, sys_tags.var_name asc, sys_tags.var_id asc").Limit(limit).Offset(offset).Find(&tags).Error
+	return tags, total, limit, offset, err
+}
+
+func (q *StationViewQuery) variablesQuery(filter VariableFilter, edgeInstanceID string) (*gorm.DB, error) {
 	if filter.ProjectID != nil {
 		if _, err := q.projectForEdge(*filter.ProjectID, edgeInstanceID); err != nil {
 			return nil, err
@@ -82,6 +114,13 @@ func (q *StationViewQuery) ListVariables(filter VariableFilter, edgeInstanceID s
 	}
 	if filter.ProjectID != nil {
 		stmt = stmt.Where("sys_tags.project_id = ?", *filter.ProjectID)
+	}
+	if filter.Assigned != nil {
+		if *filter.Assigned {
+			stmt = stmt.Where("sys_tags.project_id IS NOT NULL")
+		} else {
+			stmt = stmt.Where("sys_tags.project_id IS NULL")
+		}
 	}
 	if filter.Enabled != nil {
 		stmt = stmt.Where("sys_tags.enabled = ?", *filter.Enabled)
@@ -108,9 +147,7 @@ func (q *StationViewQuery) ListVariables(filter VariableFilter, edgeInstanceID s
 			like, like, like, like, like,
 		)
 	}
-	var tags []TagConfig
-	err := stmt.Order("sys_tags.project_id asc, sys_tags.var_group asc, sys_tags.var_name asc, sys_tags.var_id asc").Find(&tags).Error
-	return tags, err
+	return stmt, nil
 }
 
 func (q *StationViewQuery) QueryHistoryData(filter HistoryFilter, edgeInstanceID string) ([]HistoryData, int, error) {
@@ -146,6 +183,9 @@ func (q *StationViewQuery) QueryHistoryData(filter HistoryFilter, edgeInstanceID
 	}
 	if strings.TrimSpace(filter.TestNo) != "" {
 		stmt = stmt.Where("rt_history_data.test_no = ?", strings.TrimSpace(filter.TestNo))
+	}
+	if strings.TrimSpace(filter.FactoryNo) != "" {
+		stmt = stmt.Where("rt_history_data.task_id IN (?)", q.db.Model(&DetectionTask{}).Select("id").Where("factory_no = ?", strings.TrimSpace(filter.FactoryNo)))
 	}
 	if filter.Start != nil {
 		stmt = stmt.Where("rt_history_data.source_time >= ?", *filter.Start)
@@ -231,7 +271,10 @@ func (q *StationViewQuery) historyStorageRoutes(filter HistoryFilter, edgeInstan
 	if strings.TrimSpace(filter.TestNo) != "" {
 		stmt = stmt.Where("detection_run_storage_routes.test_no = ?", strings.TrimSpace(filter.TestNo))
 	}
-	if filter.TaskID == nil && filter.ProjectID == nil && strings.TrimSpace(filter.TestNo) == "" {
+	if strings.TrimSpace(filter.FactoryNo) != "" {
+		stmt = stmt.Where("detection_run_storage_routes.task_id IN (?)", q.db.Model(&DetectionTask{}).Select("id").Where("factory_no = ?", strings.TrimSpace(filter.FactoryNo)))
+	}
+	if filter.TaskID == nil && filter.ProjectID == nil && strings.TrimSpace(filter.TestNo) == "" && strings.TrimSpace(filter.FactoryNo) == "" {
 		return nil, nil
 	}
 	var routes []DetectionRunStorageRoute
@@ -280,6 +323,9 @@ func (q *StationViewQuery) queryWideHistoryTable(filter HistoryFilter, tableName
 	}
 	if strings.TrimSpace(filter.TestNo) != "" {
 		stmt = stmt.Where("test_no = ?", strings.TrimSpace(filter.TestNo))
+	}
+	if strings.TrimSpace(filter.FactoryNo) != "" {
+		stmt = stmt.Where("task_id IN (?)", q.db.Model(&DetectionTask{}).Select("id").Where("factory_no = ?", strings.TrimSpace(filter.FactoryNo)))
 	}
 	if strings.TrimSpace(filter.ProjectCode) != "" && hasProjectCode {
 		stmt = stmt.Where("project_code = ?", strings.TrimSpace(filter.ProjectCode))

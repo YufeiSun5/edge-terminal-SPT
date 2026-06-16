@@ -51,6 +51,7 @@ type stationViewItemWriteRequest struct {
 	BindingJSON string `json:"binding_json"`
 	DisplayJSON string `json:"display_json"`
 	SortOrder   int    `json:"sort_order"`
+	Pinned      bool   `json:"pinned"`
 	Visible     bool   `json:"visible"`
 }
 
@@ -164,6 +165,7 @@ func (h *StationViewHandler) replaceItems(c *gin.Context) {
 			BindingJSON: item.BindingJSON,
 			DisplayJSON: item.DisplayJSON,
 			SortOrder:   item.SortOrder,
+			Pinned:      item.Pinned,
 			Visible:     item.Visible,
 		})
 	}

@@ -314,14 +314,22 @@ func (h *RealtimeWSHandler) startDetectionFromWS(msg wsClientMessage) (*models.D
 	if err := decodeWSPayload(msg.Payload, &req); err != nil {
 		return nil, err
 	}
-	if req.ProjectID == 0 || strings.TrimSpace(req.TestNo) == "" || strings.TrimSpace(req.Mode) == "" {
-		return nil, wsCommandError{code: "invalid_payload", message: "project_id, test_no, and mode are required"}
+	if req.ProjectID == 0 {
+		return nil, wsCommandError{code: "invalid_payload", message: "project_id is required"}
 	}
 	return h.detection.Start(database.StartDetectionOptions{
 		ProjectID:        req.ProjectID,
 		TestNo:           req.TestNo,
+		FactoryNo:        req.FactoryNo,
+		CustomerName:     req.CustomerName,
+		DeviceModel:      req.DeviceModel,
 		Mode:             req.Mode,
 		StandardID:       req.StandardID,
+		ConfigEnabled:    req.ConfigEnabled,
+		ConfigCode:       req.ConfigCode,
+		ConfigName:       req.ConfigName,
+		ConfigVersion:    req.ConfigVersion,
+		ConfigHash:       req.ConfigHash,
 		DurationSec:      req.DurationSec,
 		OperatorNote:     req.OperatorNote,
 		ReportTemplateID: req.ReportTemplateID,

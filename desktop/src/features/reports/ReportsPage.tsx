@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Descriptions, Empty, Input, InputNumber, Select, Space, Table, Tag, Timeline, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Descriptions, Empty, Input, InputNumber, Select, Space, Spin, Table, Tag, Timeline, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Download, FileSpreadsheet, RefreshCw, RotateCcw, Search, Send } from 'lucide-react'
 import { saveAs } from 'file-saver'
@@ -16,6 +16,8 @@ import {
   getReportTemplates,
   retryMainReportJob,
 } from '@/features/edge-status/api'
+import { createLuckysheetAdapter } from '@/features/spreadsheet/luckysheetAdapter'
+import { env } from '@/shared/config/env'
 import type { DetectionRunReportRequest, MainReportJob, MainReportJobEvent, MainReportJobStatus, ReportTemplate } from '@/shared/api/types'
 import './reports.css'
 
@@ -55,6 +57,74 @@ function templateTitle(template: ReportTemplate) {
   return template.display_name || template.name || template.template_code
 }
 
+function templatePreviewWorkbook(template?: ReportTemplate) {
+  const rows = [
+    ['Template', template?.template_code ?? ''],
+    ['Name', template ? templateTitle(template) : ''],
+    ['Version', template?.version ? `v${template.version}` : ''],
+    ['File ref', template?.file_ref ?? ''],
+  ]
+
+  return [
+    {
+      name: template ? templateTitle(template) : 'Report Template',
+      index: '0',
+      status: 1,
+      order: 0,
+      celldata: rows.flatMap((row, r) =>
+        row.map((value, c) => ({
+          r,
+          c,
+          v: {
+            v: value,
+            m: value,
+            ct: { fa: 'General', t: 'g' },
+            bl: c === 0 ? 1 : 0,
+          },
+        })),
+      ),
+      config: {
+        columnlen: { 0: 120, 1: 360 },
+      },
+    },
+  ]
+}
+
+function ReportTemplateLuckysheet({ template }: { template?: ReportTemplate }) {
+  const adapterRef = useRef<ReturnType<typeof createLuckysheetAdapter> | null>(null)
+
+  useEffect(() => {
+    const adapter = createLuckysheetAdapter()
+    adapterRef.current = adapter
+    let disposed = false
+
+    adapter
+      .mount({
+        containerId: 'report-luckysheet-preview',
+        data: templatePreviewWorkbook(template),
+        readonly: true,
+        toolbar: true,
+        sheetbar: true,
+      })
+      .catch((error) => {
+        if (!disposed) console.error(error)
+      })
+
+    return () => {
+      disposed = true
+      adapter.unmount()
+      adapterRef.current = null
+    }
+  }, [template])
+
+  return (
+    <section className="report-luckysheet-panel">
+      <div className="report-subtitle">{template ? templateTitle(template) : 'Luckysheet'}</div>
+      <div id="report-luckysheet-preview" className="report-luckysheet-host" />
+    </section>
+  )
+}
+
 export function ReportsPage() {
   const { t } = useTranslation()
   const [messageApi, contextHolder] = message.useMessage()
@@ -63,8 +133,10 @@ export function ReportsPage() {
   const [taskIdFilter, setTaskIdFilter] = useState<number | null>(null)
   const [edgeFilter, setEdgeFilter] = useState('')
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null)
   const [enqueueTaskId, setEnqueueTaskId] = useState<number | null>(null)
   const [enqueueEdge, setEnqueueEdge] = useState('')
+  const reportGenerationEnabled = env.runtimeFeatures.reportGeneration
 
   const templatesQuery = useQuery({
     queryKey: ['reports', 'templates'],
@@ -79,31 +151,37 @@ export function ReportsPage() {
         edge_instance_id: edgeFilter.trim() || undefined,
         limit: 100,
       }),
+    enabled: reportGenerationEnabled,
   })
 
   const jobs = useMemo(() => jobsQuery.data?.items ?? [], [jobsQuery.data?.items])
+  const templates = useMemo(() => templatesQuery.data ?? [], [templatesQuery.data])
   const selectedJob = useMemo(() => jobs.find((job) => job.id === selectedJobId) ?? jobs[0], [jobs, selectedJobId])
+  const selectedTemplate = useMemo(
+    () => templates.find((template) => template.id === selectedTemplateId) ?? templates[0],
+    [selectedTemplateId, templates],
+  )
 
   const jobDetailQuery = useQuery({
     queryKey: ['reports', 'job', selectedJob?.id],
     queryFn: () => getMainReportJob(selectedJob!.id),
-    enabled: Boolean(selectedJob?.id),
+    enabled: reportGenerationEnabled && Boolean(selectedJob?.id),
   })
   const activeJob = jobDetailQuery.data ?? selectedJob
   const readinessQuery = useQuery({
     queryKey: ['reports', 'readiness', activeJob?.task_id, activeJob?.edge_instance_id],
     queryFn: () => getMainReportReadiness(activeJob!.task_id, activeJob?.edge_instance_id),
-    enabled: Boolean(activeJob?.task_id),
+    enabled: reportGenerationEnabled && Boolean(activeJob?.task_id),
   })
   const eventsQuery = useQuery({
     queryKey: ['reports', 'events', activeJob?.id],
     queryFn: () => getMainReportJobEvents(activeJob!.id, 100),
-    enabled: Boolean(activeJob?.id),
+    enabled: reportGenerationEnabled && Boolean(activeJob?.id),
   })
   const requestsQuery = useQuery({
     queryKey: ['reports', 'requests', activeJob?.task_id],
     queryFn: () => getDetectionRunReportRequests(activeJob!.task_id),
-    enabled: Boolean(activeJob?.task_id),
+    enabled: reportGenerationEnabled && Boolean(activeJob?.task_id),
   })
 
   const refreshReports = () => {
@@ -261,47 +339,57 @@ export function ReportsPage() {
           <h1>{t('reports.title')}</h1>
           <p>{t('reports.subtitle')}</p>
         </div>
-        <Space wrap>
-          <Select
-            className="report-status-select"
-            value={statusFilter}
-            onChange={setStatusFilter}
-            options={reportJobStatuses.map((status) => ({ value: status, label: t(`reports.status.${status}`) }))}
-          />
-          <InputNumber
-            min={1}
-            value={taskIdFilter}
-            placeholder={t('reports.filters.taskId')}
-            onChange={setTaskIdFilter}
-          />
-          <Input
-            className="report-edge-filter"
-            value={edgeFilter}
-            placeholder={t('reports.filters.edge')}
-            prefix={<Search size={14} />}
-            onChange={(event) => setEdgeFilter(event.target.value)}
-          />
-          <Button icon={<RefreshCw size={14} />} onClick={refreshReports} loading={jobsQuery.isFetching || templatesQuery.isFetching}>
+        {reportGenerationEnabled ? (
+          <Space wrap>
+            <Select
+              className="report-status-select"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={reportJobStatuses.map((status) => ({ value: status, label: t(`reports.status.${status}`) }))}
+            />
+            <InputNumber
+              min={1}
+              value={taskIdFilter}
+              placeholder={t('reports.filters.taskId')}
+              onChange={setTaskIdFilter}
+            />
+            <Input
+              className="report-edge-filter"
+              value={edgeFilter}
+              placeholder={t('reports.filters.edge')}
+              prefix={<Search size={14} />}
+              onChange={(event) => setEdgeFilter(event.target.value)}
+            />
+            <Button icon={<RefreshCw size={14} />} onClick={refreshReports} loading={jobsQuery.isFetching || templatesQuery.isFetching}>
+              {t('reports.actions.refresh')}
+            </Button>
+          </Space>
+        ) : (
+          <Button icon={<RefreshCw size={14} />} onClick={refreshReports} loading={templatesQuery.isFetching}>
             {t('reports.actions.refresh')}
           </Button>
-        </Space>
+        )}
       </header>
 
-      <section className="report-enqueue-bar">
-        <Space wrap>
-          <Typography.Text strong>{t('reports.enqueue.title')}</Typography.Text>
-          <InputNumber min={1} value={enqueueTaskId} placeholder={t('reports.enqueue.taskId')} onChange={setEnqueueTaskId} />
-          <Input className="report-edge-filter" value={enqueueEdge} placeholder={t('reports.enqueue.edge')} onChange={(event) => setEnqueueEdge(event.target.value)} />
-          <Tooltip title={enqueueTaskId ? undefined : t('reports.enqueue.taskRequired')}>
-            <Button type="primary" icon={<Send size={14} />} disabled={!enqueueTaskId} loading={enqueueMutation.isPending} onClick={() => enqueueMutation.mutate()}>
-              {t('reports.actions.enqueue')}
-            </Button>
-          </Tooltip>
-        </Space>
-      </section>
+      {reportGenerationEnabled ? (
+        <section className="report-enqueue-bar">
+          <Space wrap>
+            <Typography.Text strong>{t('reports.enqueue.title')}</Typography.Text>
+            <InputNumber min={1} value={enqueueTaskId} placeholder={t('reports.enqueue.taskId')} onChange={setEnqueueTaskId} />
+            <Input className="report-edge-filter" value={enqueueEdge} placeholder={t('reports.enqueue.edge')} onChange={(event) => setEnqueueEdge(event.target.value)} />
+            <Tooltip title={enqueueTaskId ? undefined : t('reports.enqueue.taskRequired')}>
+              <Button type="primary" icon={<Send size={14} />} disabled={!enqueueTaskId} loading={enqueueMutation.isPending} onClick={() => enqueueMutation.mutate()}>
+                {t('reports.actions.enqueue')}
+              </Button>
+            </Tooltip>
+          </Space>
+        </section>
+      ) : (
+        <Alert className="report-alert" showIcon type="info" message={t('reports.edgeModeNotice')} />
+      )}
 
-      <main className="report-layout">
-        <section className="report-panel report-list-panel">
+      <main className={reportGenerationEnabled ? 'report-layout' : 'report-layout templates-only'}>
+        {reportGenerationEnabled ? <section className="report-panel report-list-panel">
           <div className="report-panel-header">
             <Space>
               <FileSpreadsheet size={16} />
@@ -320,11 +408,44 @@ export function ReportsPage() {
             onRow={(record) => ({ onClick: () => setSelectedJobId(record.id) })}
             locale={{ emptyText: <Empty description={t('reports.jobs.empty')} /> }}
           />
-        </section>
+        </section> : null}
 
         <section className="report-panel report-detail-panel">
           {!activeJob ? (
-            <Empty description={t('reports.jobs.empty')} />
+            <div className="report-template-workspace">
+              <section className="report-template-list-panel">
+                <div className="report-panel-header">
+                  <Space>
+                    <FileSpreadsheet size={16} />
+                    <strong>{t('reports.templates.title')}</strong>
+                  </Space>
+                  <Tag>{templates.length}</Tag>
+                </div>
+                <div className="report-template-list">
+                  {templatesQuery.isLoading ? (
+                    <Spin />
+                  ) : templates.length ? (
+                    templates.map((template) => (
+                      <button
+                        className={template.id === selectedTemplate?.id ? 'report-template-item active' : 'report-template-item'}
+                        key={template.id}
+                        onClick={() => setSelectedTemplateId(template.id)}
+                      >
+                        <span>
+                          <strong>{templateTitle(template)}</strong>
+                          <small>{template.template_code}</small>
+                          <em>{template.file_ref}</em>
+                        </span>
+                        <Tag>v{template.version}</Tag>
+                      </button>
+                    ))
+                  ) : (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('reports.templates.empty')} />
+                  )}
+                </div>
+              </section>
+              <ReportTemplateLuckysheet template={selectedTemplate} />
+            </div>
           ) : (
             <>
               <div className="report-panel-header">
@@ -409,13 +530,17 @@ export function ReportsPage() {
                     rowKey="id"
                     size="small"
                     columns={templateColumns}
-                    dataSource={templatesQuery.data ?? []}
+                    dataSource={templates}
                     loading={templatesQuery.isLoading}
                     pagination={false}
+                    rowClassName={(record) => (record.id === selectedTemplate?.id ? 'report-row-selected' : '')}
+                    onRow={(record) => ({ onClick: () => setSelectedTemplateId(record.id) })}
                     locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('reports.templates.empty')} /> }}
                   />
                 </section>
               </div>
+
+              <ReportTemplateLuckysheet template={selectedTemplate} />
             </>
           )}
         </section>

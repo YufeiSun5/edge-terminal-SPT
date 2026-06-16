@@ -1,15 +1,26 @@
-# Spindle Edge Terminal Desktop
+# Spindle Main Server Desktop
 
-Electron + React shell for the edge-side Go backend.
+Deprecated transitional copy of the desktop frontend.
+
+New frontend work must be implemented in `../../desktop/src` and run with
+`VITE_APP_ROLE=main_server`. This directory must not grow independent business
+pages, API clients, mock report flows, local station-view state, or direct gateway
+maintenance behavior. If it is kept temporarily, it should only receive mechanical
+syncs from the mainline frontend.
 
 ## Commands
 
 ```powershell
 npm install
-npm run backend:build
 npm run dev
 npm run build
-npm run package
+npm run lint
 ```
 
-The Electron main process starts `../backend/dist/edge-backend.exe` and passes `EDGE_CONFIG` to the bundled config file. The renderer talks to `http://127.0.0.1:18080` through typed API clients under `src/shared/api`.
+Business validation for the main server must use `../../desktop`:
+
+```powershell
+cd ..\..\desktop
+npm run dev:main-server
+npm run smoke:main-server
+```

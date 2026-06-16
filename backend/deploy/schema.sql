@@ -74,13 +74,18 @@ CREATE TABLE IF NOT EXISTS sys_station_view_templates (
   version INT NOT NULL DEFAULT 1,
   status VARCHAR(32) NOT NULL DEFAULT 'published',
   owner_scope VARCHAR(32) NOT NULL DEFAULT 'edge',
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   layout_json TEXT NULL,
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_station_view_templates_uid (template_uid),
   UNIQUE KEY uk_station_view_templates_code (template_code),
   INDEX idx_station_view_templates_status (status),
-  INDEX idx_station_view_templates_owner_scope (owner_scope)
+  INDEX idx_station_view_templates_owner_scope (owner_scope),
+  INDEX idx_station_view_templates_sync (sync_scope, edge_instance_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_station_view_regions (
@@ -92,6 +97,10 @@ CREATE TABLE IF NOT EXISTS sys_station_view_regions (
   layout_json TEXT NULL,
   sort_order INT NOT NULL DEFAULT 0,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_station_view_region (template_uid, region_key),
@@ -113,7 +122,12 @@ CREATE TABLE IF NOT EXISTS sys_station_view_items (
   binding_json TEXT NULL,
   display_json TEXT NULL,
   sort_order INT NOT NULL DEFAULT 0,
+  pinned BOOLEAN NOT NULL DEFAULT FALSE,
   visible BOOLEAN NOT NULL DEFAULT TRUE,
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_station_view_items_uid (item_uid),
@@ -123,6 +137,7 @@ CREATE TABLE IF NOT EXISTS sys_station_view_items (
   INDEX idx_station_view_items_binding_type (binding_type),
   INDEX idx_station_view_items_binding_key (binding_key),
   INDEX idx_station_view_items_sort_order (sort_order),
+  INDEX idx_station_view_items_pinned (pinned),
   INDEX idx_station_view_items_visible (visible)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -133,6 +148,10 @@ CREATE TABLE IF NOT EXISTS sys_station_view_assignments (
   target_key VARCHAR(128) NOT NULL,
   priority INT NOT NULL DEFAULT 0,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_station_view_assignment (target_type, target_key),
@@ -267,6 +286,11 @@ CREATE TABLE IF NOT EXISTS sys_task_flows (
     hold_ms INT NOT NULL DEFAULT 0,
     schedule_interval_ms INT NOT NULL DEFAULT 0,
     priority INT NOT NULL DEFAULT 0,
+  version INT NOT NULL DEFAULT 1,
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   remark VARCHAR(255) DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
@@ -274,7 +298,8 @@ CREATE TABLE IF NOT EXISTS sys_task_flows (
   INDEX idx_task_flows_project_id (project_id),
   INDEX idx_task_flows_enabled (enabled),
   INDEX idx_task_flows_trigger_type (trigger_type),
-  INDEX idx_task_flows_priority (priority)
+  INDEX idx_task_flows_priority (priority),
+  INDEX idx_task_flows_sync (sync_scope, edge_instance_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_task_flow_vars (
@@ -284,7 +309,12 @@ CREATE TABLE IF NOT EXISTS sys_task_flow_vars (
   var_id BIGINT NOT NULL,
   var_name VARCHAR(128) DEFAULT '',
   role VARCHAR(32) NOT NULL DEFAULT 'watch',
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
   INDEX idx_task_flow_vars_flow_id (flow_id),
   INDEX idx_task_flow_vars_project_id (project_id),
   INDEX idx_task_flow_vars_var_id (var_id),
@@ -296,6 +326,7 @@ CREATE TABLE IF NOT EXISTS task_flow_runs (
   flow_id BIGINT UNSIGNED NOT NULL,
   flow_code VARCHAR(128) DEFAULT '',
   project_id BIGINT UNSIGNED NOT NULL,
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
   trigger_type VARCHAR(32) DEFAULT '',
   trigger_var_id BIGINT DEFAULT 0,
   origin_flow_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -314,6 +345,7 @@ CREATE TABLE IF NOT EXISTS task_flow_runs (
   INDEX idx_task_flow_runs_flow_id (flow_id),
   INDEX idx_task_flow_runs_flow_code (flow_code),
   INDEX idx_task_flow_runs_project_id (project_id),
+  INDEX idx_task_flow_runs_edge_started (edge_instance_id, started_at),
   INDEX idx_task_flow_runs_trigger_type (trigger_type),
   INDEX idx_task_flow_runs_trigger_var_id (trigger_var_id),
   INDEX idx_task_flow_runs_origin_flow_id (origin_flow_id),
@@ -349,7 +381,12 @@ CREATE TABLE IF NOT EXISTS sys_detection_standards (
   mode VARCHAR(64) DEFAULT '',
   report_template_id BIGINT UNSIGNED NULL,
   version INT NOT NULL DEFAULT 1,
+  config_hash VARCHAR(64) DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   remark VARCHAR(255) DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
@@ -358,7 +395,8 @@ CREATE TABLE IF NOT EXISTS sys_detection_standards (
   INDEX idx_detection_standards_project_code (project_code),
   INDEX idx_detection_standards_mode (mode),
   INDEX idx_detection_standards_report_template_id (report_template_id),
-  INDEX idx_detection_standards_enabled (enabled)
+  INDEX idx_detection_standards_enabled (enabled),
+  INDEX idx_detection_standards_sync (sync_scope, edge_instance_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_report_templates (
@@ -432,6 +470,10 @@ CREATE TABLE IF NOT EXISTS sys_detection_standard_items (
   unit VARCHAR(32) DEFAULT '',
   decimal_places INT NOT NULL DEFAULT 2,
   sort_order INT NOT NULL DEFAULT 0,
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   INDEX idx_standard_items_standard_id (standard_id),
@@ -446,13 +488,24 @@ CREATE TABLE IF NOT EXISTS sys_detection_standard_items (
 CREATE TABLE IF NOT EXISTS sys_detection_tasks (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   test_no VARCHAR(128) NOT NULL,
+  factory_no VARCHAR(128) DEFAULT '',
+  customer_name VARCHAR(128) DEFAULT '',
+  device_model VARCHAR(128) DEFAULT '',
   project_id BIGINT UNSIGNED NOT NULL,
   project_code VARCHAR(64) DEFAULT '',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
   mode VARCHAR(64) NOT NULL,
   status VARCHAR(32) NOT NULL,
   standard_id BIGINT UNSIGNED NULL,
   standard_code VARCHAR(64) DEFAULT '',
   standard_version INT NOT NULL DEFAULT 0,
+  config_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  config_status VARCHAR(32) NOT NULL DEFAULT 'disabled',
+  config_code VARCHAR(64) DEFAULT '',
+  config_name VARCHAR(128) DEFAULT '',
+  config_version INT NOT NULL DEFAULT 0,
+  config_hash VARCHAR(64) DEFAULT '',
+  current_config_revision INT NOT NULL DEFAULT 1,
   started_at DATETIME(3) NULL,
   ended_at DATETIME(3) NULL,
   limit_check_enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -473,9 +526,13 @@ CREATE TABLE IF NOT EXISTS sys_detection_tasks (
   created_at DATETIME(3) NULL,
   updated_at DATETIME(3) NULL,
   UNIQUE KEY uk_detection_test_no (test_no),
+  INDEX idx_detection_factory_no (factory_no),
   INDEX idx_detection_project_id (project_id),
   INDEX idx_detection_project_code (project_code),
+  INDEX idx_detection_tasks_edge_status (edge_instance_id, status),
   INDEX idx_detection_standard_id (standard_id),
+  INDEX idx_detection_config_code (config_code),
+  INDEX idx_detection_config_status (config_status),
   INDEX idx_detection_report_template_id (report_template_id),
   INDEX idx_detection_status (status),
   INDEX idx_detection_end_policy (end_policy)
@@ -550,6 +607,7 @@ CREATE TABLE IF NOT EXISTS detection_run_standard_items (
   test_no VARCHAR(128) DEFAULT '',
   standard_id BIGINT UNSIGNED NOT NULL,
   standard_item_id BIGINT UNSIGNED NOT NULL,
+  config_revision INT NOT NULL DEFAULT 1,
   var_id BIGINT NOT NULL,
   var_name VARCHAR(128) NOT NULL,
   display_name VARCHAR(128) DEFAULT '',
@@ -582,11 +640,16 @@ CREATE TABLE IF NOT EXISTS detection_run_standard_items (
   unit VARCHAR(32) DEFAULT '',
   decimal_places INT NOT NULL DEFAULT 2,
   sort_order INT NOT NULL DEFAULT 0,
+  effective_from DATETIME(3) NULL,
+  effective_to DATETIME(3) NULL,
   created_at DATETIME(3) NULL,
   INDEX idx_run_standard_items_task_id (task_id),
   INDEX idx_run_standard_items_test_no (test_no),
   INDEX idx_run_standard_items_standard_id (standard_id),
   INDEX idx_run_standard_items_standard_item_id (standard_item_id),
+  INDEX idx_run_standard_items_config_revision (config_revision),
+  INDEX idx_run_standard_items_effective_from (effective_from),
+  INDEX idx_run_standard_items_effective_to (effective_to),
   INDEX idx_run_standard_items_var_id (var_id),
   INDEX idx_run_standard_items_check_enabled (check_enabled),
   INDEX idx_run_standard_items_alarm_enabled (alarm_enabled),
@@ -854,6 +917,14 @@ CREATE TABLE IF NOT EXISTS edge_control_commands (
   INDEX idx_edge_control_action (action),
   INDEX idx_edge_control_status (status),
   INDEX idx_edge_control_received_at (received_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS runtime_settings (
+  setting_key VARCHAR(128) PRIMARY KEY,
+  setting_value VARCHAR(512) NOT NULL,
+  remark VARCHAR(255) DEFAULT '',
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_notifications (

@@ -109,6 +109,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.EdgeControlCommand{},
 		&models.SysNotification{},
 		&models.SysNotificationRecipient{},
+		&models.RuntimeSetting{},
 	)
 }
 

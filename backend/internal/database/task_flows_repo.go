@@ -37,6 +37,23 @@ func (r *Repository) LoadEnabledTaskFlows() ([]models.TaskFlow, error) {
 	return r.ListTaskFlows(TaskFlowFilter{Enabled: boolPtr(true)})
 }
 
+func (r *Repository) LoadEnabledTaskFlowsForEdge(edgeInstanceID string) ([]models.TaskFlow, error) {
+	filter := TaskFlowFilter{Enabled: boolPtr(true)}
+	var flows []models.TaskFlow
+	query := r.db.Preload("Vars").
+		Model(&models.TaskFlow{}).
+		Joins("LEFT JOIN sys_projects p ON p.id = sys_task_flows.project_id").
+		Where("sys_task_flows.enabled = ?", true)
+	if edgeInstanceID = strings.TrimSpace(edgeInstanceID); edgeInstanceID != "" {
+		query = query.Where("(p.edge_instance_id = ? OR p.edge_instance_id = '' OR p.edge_instance_id IS NULL)", edgeInstanceID)
+	}
+	if filter.ProjectID != nil {
+		query = query.Where("sys_task_flows.project_id = ?", *filter.ProjectID)
+	}
+	err := query.Order("sys_task_flows.project_id asc, sys_task_flows.priority desc, sys_task_flows.id asc").Find(&flows).Error
+	return flows, err
+}
+
 func (r *Repository) ListTaskFlows(filter TaskFlowFilter) ([]models.TaskFlow, error) {
 	var flows []models.TaskFlow
 	query := r.db.Preload("Vars").Model(&models.TaskFlow{})
@@ -64,14 +81,44 @@ func (r *Repository) CreateTaskFlow(flow *models.TaskFlow) error {
 	now := time.Now()
 	flow.CreatedAt = now
 	flow.UpdatedAt = now
+	if flow.Version == 0 {
+		flow.Version = 1
+	}
+	if strings.TrimSpace(flow.SyncScope) == "" {
+		flow.SyncScope = "global"
+	}
 	for i := range flow.Vars {
 		flow.Vars[i].ProjectID = flow.ProjectID
 		flow.Vars[i].CreatedAt = now
+		flow.Vars[i].UpdatedAt = now
+		if strings.TrimSpace(flow.Vars[i].SyncScope) == "" {
+			flow.Vars[i].SyncScope = flow.SyncScope
+		}
+		flow.Vars[i].EdgeInstanceID = flow.EdgeInstanceID
+		flow.Vars[i].UpdatedByNode = flow.UpdatedByNode
+		flow.Vars[i].UpdatedByUser = flow.UpdatedByUser
 		if strings.TrimSpace(flow.Vars[i].Role) == "" {
 			flow.Vars[i].Role = models.TaskFlowVarRoleWatch
 		}
 	}
-	return r.db.Create(flow).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if id, err := r.nextID(tx, flow.TableName()); err != nil {
+			return err
+		} else if id > 0 {
+			flow.ID = id
+		}
+		varIDs, err := r.nextIDs(tx, (models.TaskFlowVar{}).TableName(), len(flow.Vars))
+		if err != nil {
+			return err
+		}
+		for i := range flow.Vars {
+			if len(varIDs) > 0 {
+				flow.Vars[i].ID = varIDs[i]
+			}
+			flow.Vars[i].FlowID = flow.ID
+		}
+		return tx.Create(flow).Error
+	})
 }
 
 func (r *Repository) UpdateTaskFlow(id uint64, updates map[string]any, vars []models.TaskFlowVar, replaceVars bool) (models.TaskFlow, error) {
@@ -80,7 +127,9 @@ func (r *Repository) UpdateTaskFlow(id uint64, updates map[string]any, vars []mo
 		if err := tx.First(&flow, "id = ?", id).Error; err != nil {
 			return err
 		}
-		updates["updated_at"] = time.Now()
+		now := time.Now()
+		delete(updates, "version")
+		updates["updated_at"] = now
 		if err := tx.Model(&models.TaskFlow{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return err
 		}
@@ -88,7 +137,6 @@ func (r *Repository) UpdateTaskFlow(id uint64, updates map[string]any, vars []mo
 			if err := tx.Delete(&models.TaskFlowVar{}, "flow_id = ?", id).Error; err != nil {
 				return err
 			}
-			now := time.Now()
 			projectID := flow.ProjectID
 			if rawProjectID, ok := updates["project_id"]; ok {
 				switch value := rawProjectID.(type) {
@@ -106,8 +154,24 @@ func (r *Repository) UpdateTaskFlow(id uint64, updates map[string]any, vars []mo
 				vars[i].FlowID = id
 				vars[i].ProjectID = projectID
 				vars[i].CreatedAt = now
+				vars[i].UpdatedAt = now
+				if strings.TrimSpace(vars[i].SyncScope) == "" {
+					vars[i].SyncScope = firstNonEmpty(flow.SyncScope, "global")
+				}
+				vars[i].EdgeInstanceID = flow.EdgeInstanceID
+				vars[i].UpdatedByNode = flow.UpdatedByNode
+				vars[i].UpdatedByUser = flow.UpdatedByUser
 				if strings.TrimSpace(vars[i].Role) == "" {
 					vars[i].Role = models.TaskFlowVarRoleWatch
+				}
+			}
+			varIDs, err := r.nextIDs(tx, (models.TaskFlowVar{}).TableName(), len(vars))
+			if err != nil {
+				return err
+			}
+			for i := range vars {
+				if len(varIDs) > 0 {
+					vars[i].ID = varIDs[i]
 				}
 			}
 			if len(vars) > 0 {
@@ -115,6 +179,12 @@ func (r *Repository) UpdateTaskFlow(id uint64, updates map[string]any, vars []mo
 					return err
 				}
 			}
+		}
+		if err := tx.Model(&models.TaskFlow{}).Where("id = ?", id).Updates(map[string]any{
+			"version":    gorm.Expr("version + ?", 1),
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
 		}
 		return tx.Preload("Vars").First(&flow, "id = ?", id).Error
 	})

@@ -77,6 +77,7 @@ import type {
   VariableAssignmentPayload,
   VariableConfig,
   VariableCreatePayload,
+  VariableListResponse,
   VariableListParams,
   VariablePatchPayload,
   VarIdentifier,
@@ -282,6 +283,7 @@ export function getVariables(params: VariableListParams = {}) {
   if (params.gateway_id !== undefined)
     query.set("gateway_id", String(params.gateway_id));
   if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+  if (params.assigned !== undefined) query.set("assigned", String(params.assigned));
   if (params.project_code) query.set("project_code", params.project_code);
   if (params.var_group) query.set("var_group", params.var_group);
   if (params.writable !== undefined) query.set("writable", String(params.writable));
@@ -295,6 +297,25 @@ export function getVariables(params: VariableListParams = {}) {
   return getJson<VariableConfig[]>(
     `/api/v1/variables${suffix ? `?${suffix}` : ""}`,
   ).then((items) => items.map(withVariableAliases));
+}
+
+export function getVariablesPage(params: VariableListParams = {}) {
+  const query = new URLSearchParams();
+  if (params.edge_instance_id) query.set("edge_instance_id", params.edge_instance_id);
+  if (params.gateway_id !== undefined) query.set("gateway_id", String(params.gateway_id));
+  if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+  if (params.assigned !== undefined) query.set("assigned", String(params.assigned));
+  if (params.project_code) query.set("project_code", params.project_code);
+  if (params.var_group) query.set("var_group", params.var_group);
+  if (params.writable !== undefined) query.set("writable", String(params.writable));
+  if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
+  if (params.discovered !== undefined) query.set("discovered", String(params.discovered));
+  if (params.source_type) query.set("source_type", params.source_type);
+  if (params.keyword) query.set("keyword", params.keyword);
+  query.set("limit", String(params.limit ?? 100));
+  query.set("offset", String(params.offset ?? 0));
+  return getJson<VariableListResponse>(`/api/v1/variables?${query.toString()}`)
+    .then((response) => ({ ...response, items: response.items.map(withVariableAliases) }));
 }
 
 export function createVariable(payload: VariableCreatePayload) {
@@ -417,6 +438,7 @@ export function getDetectionRuns(params: DetectionRunListParams = {}) {
   if (params.project_code) query.set("project_code", params.project_code);
   if (params.status) query.set("status", params.status);
   if (params.test_no) query.set("test_no", params.test_no);
+  if (params.factory_no) query.set("factory_no", params.factory_no);
   if (params.start) query.set("start", params.start);
   if (params.end) query.set("end", params.end);
   if (params.limit !== undefined) query.set("limit", String(params.limit));

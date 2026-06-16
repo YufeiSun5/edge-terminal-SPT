@@ -47,10 +47,11 @@ export type TaskBlock = {
   testNo: string
   projectCode: string
   status: string
+  mode: string
   startStr: string
   endStr: string
-  startPercent: number
-  widthPercent: number
+  startMs: number
+  endMs: number
 }
 
 export type TaskLane = {
@@ -157,18 +158,21 @@ export function buildGanttData(): GanttLane[] {
   ]
 }
 
-export function buildTaskLanes(runs: DetectionRun[]): TaskLane[] {
+export function buildTaskLanes(runs: DetectionRun[]): { lanes: TaskLane[], minTime: number, maxTime: number } {
   const datedRuns = runs.filter((run) => run.started_at)
-  if (datedRuns.length === 0) return []
+  if (datedRuns.length === 0) {
+    const now = Date.now()
+    return { lanes: [], minTime: now - 7 * 24 * 3600 * 1000, maxTime: now }
+  }
 
   const timestamps = datedRuns.flatMap((run) => {
     const start = Date.parse(run.started_at ?? '')
     const end = Date.parse(run.ended_at || run.expected_end_at || run.updated_at || run.started_at || '')
     return [start, Number.isFinite(end) ? end : start]
   }).filter(Number.isFinite)
-  const minTime = Math.min(...timestamps)
-  const maxTime = Math.max(...timestamps, minTime + 60 * 60 * 1000)
-  const windowMs = Math.max(maxTime - minTime, 60 * 60 * 1000)
+
+  const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 7 * 24 * 3600 * 1000
+  const maxTime = timestamps.length > 0 ? Math.max(...timestamps, minTime + 60 * 60 * 1000) : Date.now()
   const byProject = new Map<string, TaskBlock[]>()
 
   for (const run of datedRuns) {
@@ -183,18 +187,23 @@ export function buildTaskLanes(runs: DetectionRun[]): TaskLane[] {
       testNo: run.test_no,
       projectCode,
       status: run.status,
+      mode: run.mode,
       startStr: formatClock(start),
       endStr: formatClock(end),
-      startPercent: Math.max(0, ((start - minTime) / windowMs) * 100),
-      widthPercent: Math.max(2, ((end - start) / windowMs) * 100),
+      startMs: start,
+      endMs: end,
     })
     byProject.set(projectCode, blocks)
   }
 
-  return Array.from(byProject.entries()).map(([projectCode, blocks]) => ({
-    projectCode,
-    blocks,
-  }))
+  return {
+    lanes: Array.from(byProject.entries()).map(([projectCode, blocks]) => ({
+      projectCode,
+      blocks,
+    })),
+    minTime,
+    maxTime,
+  }
 }
 
 export function formatHistoryTime(value?: string) {

@@ -39,7 +39,7 @@ func NewKernel(cfg *config.Config, db *gorm.DB) *Kernel {
 	channels := pipeline.NewChannels()
 	tags := pipeline.NewTagManager()
 	tasks := pipeline.NewTaskManager()
-	repo := database.NewRepository(db)
+	repo := database.NewRepository(db).WithIDGenerator(database.NewIDGenerator(cfg.Sync.NodeID, cfg.Sync.IDBlockSize))
 	notifications := services.NewNotificationHub(nil)
 	flows := pipeline.NewTaskFlowExecutor(repo, tags, tasks, channels)
 	jwt := auth.NewJWTManager(cfg.Auth.JWTSecret, time.Duration(cfg.Auth.AccessTokenTTLSeconds)*time.Second)
@@ -77,6 +77,10 @@ func (k *Kernel) Start() error {
 	if err := k.repo.EnsureDefaultStationViewTemplate(); err != nil {
 		return err
 	}
+	runtimeSettings := services.NewRuntimeSettingsService(k.repo)
+	if err := runtimeSettings.Load(); err != nil {
+		return err
+	}
 
 	tagConfigs, err := k.repo.LoadTags(k.cfg.Auth.EdgeInstanceID)
 	if err != nil {
@@ -85,7 +89,7 @@ func (k *Kernel) Start() error {
 	k.tags.Load(tagConfigs)
 	log.Printf("loaded tags: %d", k.tags.Count())
 
-	activeTasks, err := k.repo.LoadActiveDetectionTasks()
+	activeTasks, err := k.repo.LoadActiveDetectionTasksForEdge(k.cfg.Auth.EdgeInstanceID)
 	if err != nil {
 		return err
 	}
@@ -99,7 +103,7 @@ func (k *Kernel) Start() error {
 	k.tasks.LoadTaskRules(taskRules)
 	log.Printf("loaded task rules: %d", len(taskRules))
 
-	taskFlows, err := k.repo.LoadEnabledTaskFlows()
+	taskFlows, err := k.repo.LoadEnabledTaskFlowsForEdge(k.cfg.Auth.EdgeInstanceID)
 	if err != nil {
 		return err
 	}
@@ -113,6 +117,7 @@ func (k *Kernel) Start() error {
 
 	discovery.Start(k.channels, k.repo, k.tags, k.cfg.Auth.EdgeInstanceID)
 	services.NewNotificationDispatcher(k.repo, k.notify).Start(k.channels.Notify)
+	services.NewConfigSyncWatcher(k.repo, k.flows, k.cfg.Auth.EdgeInstanceID, time.Duration(k.cfg.Sync.ConfigWatchIntervalSeconds)*time.Second).Start()
 	k.flows.Start(1)
 	k.flows.StartScheduleScanner(time.Second)
 	k.flows.RecoverActiveDetectionGuards(activeTasks)
@@ -229,6 +234,10 @@ func (k *Kernel) mountRoutes() {
 
 	variablesService := services.NewVariablesService(k.repo, k.tags, k.cfg.Auth.EdgeInstanceID)
 	detectionRunsService := services.NewDetectionRunsService(k.repo, k.tasks, services.DetectionRunsRuntimeDeps{Tags: k.tags, Channels: k.channels, Flows: k.flows})
+	runtimeSettingsService := services.NewRuntimeSettingsService(k.repo)
+	if err := runtimeSettingsService.Load(); err != nil {
+		log.Printf("load runtime settings failed: %v", err)
+	}
 	reportTemplatesService := services.NewReportTemplatesService(k.repo)
 	systemConfigService := services.NewSystemConfigService(k.cfg)
 	realtimeWSService := services.NewRealtimeWSService(k.tags, k.tasks)
@@ -273,7 +282,7 @@ func (k *Kernel) mountRoutes() {
 	})
 
 	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).WithNotificationHub(k.notify).Register(v1, k.auth)
-	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).Register(v1, k.auth)
+	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).WithRuntimeSettings(runtimeSettingsService).WithNotificationHub(k.notify).Register(v1, k.auth)
 	handlers.NewEdgeRealtimeHandler(variablesService).Register(v1, k.auth)
 	gatewaysHandler := handlers.NewGatewaysHandler(k.repo, k.mqtt, k.channels, k.notify)
 	taskFlowsHandler := handlers.NewTaskFlowsHandler(k.repo, k.flows)
@@ -290,6 +299,7 @@ func (k *Kernel) mountRoutes() {
 	handlers.NewReportTemplatesHandler(reportTemplatesService).Register(protected, k.auth)
 	handlers.NewDetectionRunsHandler(detectionRunsService).Register(protected, k.auth)
 	handlers.NewSystemConfigHandler(systemConfigService).Register(protected, k.auth)
+	handlers.NewRuntimeSettingsHandler(runtimeSettingsService).Register(protected, k.auth)
 	handlers.NewAuditLogsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewNotificationsHandler(k.repo).Register(protected, k.auth)
 	handlers.NewLimitAlarmsHandler(k.repo).Register(protected, k.auth)

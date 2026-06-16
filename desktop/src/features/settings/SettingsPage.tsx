@@ -22,6 +22,7 @@ import {
   ServerCog,
   ShieldCheck,
   SlidersHorizontal,
+  LayoutDashboard,
   Trash2,
   UsersRound,
   UserRound,
@@ -45,6 +46,8 @@ import type {
   RuntimeNotificationStats,
   RuntimeQueueDiagnostic,
   RuntimeWorkerStat,
+  StationViewItem,
+  StationViewItemPayload,
   TaskFlowRuntimeStats,
   DetectionStandard,
   DetectionStandardItemPayload,
@@ -86,6 +89,7 @@ import {
   getRuntimeChannelDetails,
   getRuntimeNotifications,
   getRuntimeWorkers,
+  getStationViewItems,
   getTaskFlowRuntime,
   getVariables,
   getDatabaseConfig,
@@ -95,6 +99,7 @@ import {
   deleteStorageRoute,
   replaceDetectionStandardItems,
   replaceProjectMembers,
+  replaceStationViewItems,
   testDatabaseConfig,
   updateGatewayConfig,
   updateDatabaseConfig,
@@ -163,8 +168,11 @@ type KioProjectRemapFormValues = {
 }
 type VariableFilter = 'all' | 'known' | 'unknown' | number
 type StorageRouteStatusFilter = 'all' | 'enabled' | 'disabled'
-type SettingsModule = 'variables' | 'standards' | 'storage' | 'realtime' | 'history' | 'system' | 'users'
+type SettingsModule = 'variables' | 'standards' | 'storage' | 'realtime' | 'history' | 'stationView' | 'system' | 'users'
 const UNASSIGNED_PAGE_SIZE = 48
+const STATION_CARD_LIMIT = 12
+const STATION_VIEW_CARD_POOL = 'card_pool'
+const STATION_VIEW_LIST_LAYOUT = 'list_layout'
 
 type ProjectMemberDraft = ProjectMemberUpdate & {
   draft_key: string
@@ -173,6 +181,17 @@ type ProjectMemberDraft = ProjectMemberUpdate & {
 type DatabaseTestFeedback = {
   ok: boolean
   message: string
+}
+
+type StationViewListDraft = {
+  var_name: string
+  pinned: boolean
+}
+
+type StationViewListRow = StationViewListDraft & {
+  key: string
+  index: number
+  variable?: VariableConfig
 }
 
 const sidecarTagColor: Record<SidecarState, string> = {
@@ -317,6 +336,46 @@ function normalizeVariableWritePayload<T extends VariableEditFormValues | Virtua
   }
 }
 
+function stationViewItemUID(layoutArea: string, varName: string, index: number) {
+  const safeName = varName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || `item_${index + 1}`
+  return `${layoutArea}_${safeName}_${index + 1}`
+}
+
+function stationViewItemPayload(layoutArea: typeof STATION_VIEW_CARD_POOL | typeof STATION_VIEW_LIST_LAYOUT, varName: string, index: number, pinned = false): StationViewItemPayload {
+  return {
+    item_uid: stationViewItemUID(layoutArea, varName, index),
+    layout_area: layoutArea,
+    item_type: layoutArea === STATION_VIEW_CARD_POOL ? 'metric_card' : 'inspection_row',
+    binding_type: 'var_name',
+    binding_key: varName,
+    sort_order: (index + 1) * 10,
+    pinned,
+    visible: true,
+  }
+}
+
+function stationViewVarNamesFromItems(items: StationViewItem[], layoutArea: string) {
+  return items
+    .filter((item) => item.layout_area === layoutArea && item.visible !== false && item.binding_type === 'var_name' && item.binding_key)
+    .sort((left, right) => {
+      const pinnedDiff = Number(right.pinned) - Number(left.pinned)
+      if (pinnedDiff !== 0) return pinnedDiff
+      return left.sort_order - right.sort_order
+    })
+    .map((item) => item.binding_key)
+}
+
+function stationViewListDraftsFromItems(items: StationViewItem[]) {
+  return items
+    .filter((item) => item.layout_area === STATION_VIEW_LIST_LAYOUT && item.visible !== false && item.binding_type === 'var_name' && item.binding_key)
+    .sort((left, right) => {
+      const pinnedDiff = Number(right.pinned) - Number(left.pinned)
+      if (pinnedDiff !== 0) return pinnedDiff
+      return left.sort_order - right.sort_order
+    })
+    .map((item) => ({ var_name: item.binding_key, pinned: item.pinned }))
+}
+
 export function SettingsPage() {
   const { t, i18n } = useTranslation()
   const [messageApi, contextHolder] = message.useMessage()
@@ -354,6 +413,10 @@ export function SettingsPage() {
   const [editingStorageRoute, setEditingStorageRoute] = useState<StorageRoute | undefined>()
   const [storageRouteSearch, setStorageRouteSearch] = useState('')
   const [storageRouteStatus, setStorageRouteStatus] = useState<StorageRouteStatusFilter>('all')
+  const [stationViewProjectId, setStationViewProjectId] = useState<number | undefined>()
+  const [stationViewDraftSource, setStationViewDraftSource] = useState('')
+  const [stationCardVarNames, setStationCardVarNames] = useState<string[]>([])
+  const [stationListDrafts, setStationListDrafts] = useState<StationViewListDraft[]>([])
   const [runtimeLogModalOpen, setRuntimeLogModalOpen] = useState(false)
   const [databaseTestFeedback, setDatabaseTestFeedback] = useState<DatabaseTestFeedback | undefined>()
   const [databaseRestartRequired, setDatabaseRestartRequired] = useState(false)
@@ -446,6 +509,7 @@ export function SettingsPage() {
     retry: false,
   })
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
+  const activeStationViewProjectId = stationViewProjectId ?? projects[0]?.id
   const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data])
   const activeMemberProjectId = memberProjectId ?? projects[0]?.id
   const projectMembersQuery = useQuery({
@@ -543,6 +607,7 @@ export function SettingsPage() {
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects])
   const userById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users])
   const memberProject = activeMemberProjectId ? projectById.get(activeMemberProjectId) : undefined
+  const stationViewProject = activeStationViewProjectId ? projectById.get(activeStationViewProjectId) : undefined
   const projectMemberRows = useMemo(() => memberDrafts.map((draft) => ({
     ...draft,
     user: userById.get(draft.user_id),
@@ -585,6 +650,46 @@ export function SettingsPage() {
       return haystack.includes(keyword)
     })
   }, [projectById, storageRouteSearch, storageRouteStatus, storageRoutes, variableById])
+  const stationViewItemsQuery = useQuery({
+    queryKey: ['settings', 'station-view-items', activeStationViewProjectId],
+    queryFn: () => getStationViewItems({ project_id: activeStationViewProjectId! }),
+    enabled: activeModule === 'stationView' && Boolean(activeStationViewProjectId),
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+  const stationViewProjectVariables = useMemo(
+    () => variables.filter((variable) => variableProjectId(variable) === activeStationViewProjectId && variable.var_name),
+    [activeStationViewProjectId, variables],
+  )
+  const stationViewVariableOptions = useMemo(() => {
+    const seen = new Set<string>()
+    return stationViewProjectVariables.flatMap((variable) => {
+      if (!variable.var_name || seen.has(variable.var_name)) return []
+      seen.add(variable.var_name)
+      return [{
+        label: `${variableTitle(variable, i18n.resolvedLanguage)} / ${variable.var_name}`,
+        value: variable.var_name,
+      }]
+    })
+  }, [i18n.resolvedLanguage, stationViewProjectVariables])
+  const stationViewItemsData = stationViewItemsQuery.data
+  const nextStationViewDraftSource = stationViewItemsData
+    ? `${activeStationViewProjectId ?? 'none'}:${stationViewItemsData.template_uid}:${stationViewItemsQuery.dataUpdatedAt}`
+    : ''
+  if (stationViewItemsData && stationViewDraftSource !== nextStationViewDraftSource) {
+    setStationViewDraftSource(nextStationViewDraftSource)
+    setStationCardVarNames(stationViewVarNamesFromItems(stationViewItemsData.items, STATION_VIEW_CARD_POOL).slice(0, STATION_CARD_LIMIT))
+    setStationListDrafts(stationViewListDraftsFromItems(stationViewItemsData.items))
+  }
+  const stationListRows = useMemo(
+    () => stationListDrafts.map((item, index) => ({
+      ...item,
+      key: item.var_name,
+      index,
+      variable: stationViewProjectVariables.find((variable) => variable.var_name === item.var_name),
+    })),
+    [stationListDrafts, stationViewProjectVariables],
+  )
 
   const saveGatewayMutation = useMutation({
     mutationFn: (payload: GatewayFormValues) => {
@@ -599,6 +704,39 @@ export function SettingsPage() {
     },
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('messages.noData')),
   })
+  const saveStationViewMutation = useMutation({
+    mutationFn: () => {
+      const templateUID = stationViewItemsQuery.data?.template_uid
+      if (!templateUID) throw new Error(t('settings.stationView.noTemplate'))
+      const cardItems = stationCardVarNames
+        .slice(0, STATION_CARD_LIMIT)
+        .map((varName, index) => stationViewItemPayload(STATION_VIEW_CARD_POOL, varName, index))
+      const listItems = stationListDrafts.map((item, index) =>
+        stationViewItemPayload(STATION_VIEW_LIST_LAYOUT, item.var_name, index, item.pinned),
+      )
+      return replaceStationViewItems({ template_uid: templateUID, items: [...cardItems, ...listItems] })
+    },
+    onSuccess: async () => {
+      messageApi.success(t('settings.stationView.saveSuccess'))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['settings', 'station-view-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['station', 'view-effective'] }),
+        queryClient.invalidateQueries({ queryKey: ['station', 'view-items'] }),
+      ])
+    },
+    onError: (error) => messageApi.error(error instanceof Error ? error.message : t('settings.stationView.saveFailed')),
+  })
+
+  function updateStationListVarNames(varNames: string[]) {
+    setStationListDrafts((current) => {
+      const byName = new Map(current.map((item) => [item.var_name, item]))
+      return varNames.map((varName) => byName.get(varName) ?? { var_name: varName, pinned: false })
+    })
+  }
+
+  function toggleStationListPinned(varName: string, pinned: boolean) {
+    setStationListDrafts((current) => current.map((item) => (item.var_name === varName ? { ...item, pinned } : item)))
+  }
 
   const createProjectMutation = useMutation({
     mutationFn: (values: ProjectPayload) =>
@@ -2026,6 +2164,39 @@ export function SettingsPage() {
       ),
     },
   ]
+  const stationListColumns: TableColumnsType<StationViewListRow> = [
+    {
+      title: t('settings.stationView.order'),
+      dataIndex: 'index',
+      key: 'index',
+      width: 80,
+      render: (index: number) => index + 1,
+    },
+    {
+      title: t('settings.stationView.variable'),
+      key: 'variable',
+      render: (_, record) => (
+        <div className="settings-station-variable-cell">
+          <strong>{record.variable ? variableTitle(record.variable, i18n.resolvedLanguage) : record.var_name}</strong>
+          <span>{record.var_name}</span>
+        </div>
+      ),
+    },
+    {
+      title: t('settings.stationView.pinned'),
+      dataIndex: 'pinned',
+      key: 'pinned',
+      width: 120,
+      render: (value: boolean, record) => (
+        <Switch
+          checked={value}
+          checkedChildren={t('settings.stationView.pinned')}
+          unCheckedChildren={t('settings.stationView.normal')}
+          onChange={(checked) => toggleStationListPinned(record.var_name, checked)}
+        />
+      ),
+    },
+  ]
 
   return (
     <div className="settings-page">
@@ -2055,6 +2226,11 @@ export function SettingsPage() {
             <Database size={17} />
             <strong>{t('settings.historySource.reserved')}</strong>
             <span>{t('settings.historySource.title')}</span>
+          </button>
+          <button className={activeModule === 'stationView' ? 'active' : ''} onClick={() => setActiveModule('stationView')}>
+            <LayoutDashboard size={17} />
+            <strong>{stationCardVarNames.length + stationListDrafts.length}</strong>
+            <span>{t('settings.stationView.title')}</span>
           </button>
           <button className={activeModule === 'system' ? 'active' : ''} onClick={() => setActiveModule('system')}>
             <ServerCog size={17} />
@@ -2450,6 +2626,121 @@ export function SettingsPage() {
                 </ul>
               </section>
             </div>
+          ) : null}
+
+          {activeModule === 'stationView' ? (
+            <section className="settings-panel settings-full-module settings-station-view-module">
+              <div className="settings-panel-head">
+                <div>
+                  <span className="settings-eyebrow">{t('settings.stationView.subtitle')}</span>
+                  <h2>{t('settings.stationView.title')}</h2>
+                </div>
+                <Space wrap>
+                  <Tag>{stationViewItemsQuery.data?.template_uid ?? '-'}</Tag>
+                  <Button
+                    type="primary"
+                    icon={<Save size={15} />}
+                    loading={saveStationViewMutation.isPending}
+                    disabled={!canUseSystemSettings || !activeStationViewProjectId || stationViewItemsQuery.isFetching}
+                    onClick={() => saveStationViewMutation.mutate()}
+                  >
+                    {t('actions.save')}
+                  </Button>
+                </Space>
+              </div>
+              <div className="settings-station-view-toolbar">
+                <div>
+                  <span>{t('settings.stationView.project')}</span>
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    value={activeStationViewProjectId}
+                    options={projects.map((project) => ({
+                      value: project.id,
+                      label: `${displayProjectName(project)} / ${project.project_code}`,
+                    }))}
+                    onChange={setStationViewProjectId}
+                    loading={projectsQuery.isFetching}
+                    style={{ minWidth: 280 }}
+                  />
+                </div>
+                <div>
+                  <span>{t('settings.stationView.projectVariables')}</span>
+                  <strong>{stationViewProjectVariables.length}</strong>
+                </div>
+                <div>
+                  <span>{t('settings.stationView.currentProject')}</span>
+                  <strong>{stationViewProject ? `${displayProjectName(stationViewProject)} / ${stationViewProject.project_code}` : '-'}</strong>
+                </div>
+              </div>
+              <div className="settings-station-view-grid">
+                <section className="settings-system-card settings-station-view-card">
+                  <div>
+                    <span className="settings-system-icon"><LayoutDashboard size={18} /></span>
+                    <strong>{t('settings.stationView.cardPool')}</strong>
+                    <p>{t('settings.stationView.cardHint', { count: STATION_CARD_LIMIT })}</p>
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch
+                      maxTagCount="responsive"
+                      optionFilterProp="label"
+                      loading={stationViewItemsQuery.isFetching || variablesQuery.isFetching}
+                      value={stationCardVarNames}
+                      options={stationViewVariableOptions}
+                      placeholder={t('settings.stationView.variablePlaceholder')}
+                      onChange={(next) => setStationCardVarNames(next.slice(0, STATION_CARD_LIMIT))}
+                    />
+                  </div>
+                </section>
+                <section className="settings-system-card settings-station-view-card">
+                  <div>
+                    <span className="settings-system-icon"><Clipboard size={18} /></span>
+                    <strong>{t('settings.stationView.listLayout')}</strong>
+                    <p>{t('settings.stationView.listHint')}</p>
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      showSearch
+                      maxTagCount="responsive"
+                      optionFilterProp="label"
+                      loading={stationViewItemsQuery.isFetching || variablesQuery.isFetching}
+                      value={stationListDrafts.map((item) => item.var_name)}
+                      options={stationViewVariableOptions}
+                      placeholder={t('settings.stationView.variablePlaceholder')}
+                      onChange={updateStationListVarNames}
+                    />
+                  </div>
+                </section>
+              </div>
+              <div className="settings-station-view-table">
+                <div className="settings-panel-head compact">
+                  <div>
+                    <span className="settings-eyebrow">{t('settings.stationView.listPreview')}</span>
+                    <h2>{t('settings.stationView.pinnedConfig')}</h2>
+                  </div>
+                  <Tag>{stationListRows.length}</Tag>
+                </div>
+                <Table<StationViewListRow>
+                  size="small"
+                  rowKey="key"
+                  loading={stationViewItemsQuery.isFetching}
+                  columns={stationListColumns}
+                  dataSource={stationListRows}
+                  pagination={false}
+                  scroll={{ x: 720, y: 300 }}
+                  locale={{ emptyText: t('settings.stationView.emptyList') }}
+                />
+              </div>
+              {stationViewItemsQuery.isError ? (
+                <Alert
+                  className="settings-database-alert"
+                  type="error"
+                  showIcon
+                  message={t('settings.stationView.loadFailed')}
+                />
+              ) : null}
+            </section>
           ) : null}
 
           {activeModule === 'system' ? (
@@ -2955,7 +3246,7 @@ export function SettingsPage() {
         <Form form={kioRemapForm} layout="vertical">
           <div className="settings-form-grid modal-grid">
             <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}>
-              <InputNumber min={1} max={99} />
+              <InputNumber min={1} max={12} />
             </Form.Item>
             <Form.Item name="project_code_prefix" label={t('settings.variables.kioProjectCodePrefix')}>
               <Input />

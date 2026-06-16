@@ -19,9 +19,17 @@ type DetectionRunsHandler struct {
 
 type startDetectionRequest struct {
 	ProjectID        uint           `json:"project_id" binding:"required"`
-	TestNo           string         `json:"test_no" binding:"required"`
-	Mode             string         `json:"mode" binding:"required"`
+	TestNo           string         `json:"test_no"`
+	FactoryNo        string         `json:"factory_no"`
+	CustomerName     string         `json:"customer_name"`
+	DeviceModel      string         `json:"device_model"`
+	Mode             string         `json:"mode"`
 	StandardID       *uint          `json:"standard_id"`
+	ConfigEnabled    *bool          `json:"config_enabled"`
+	ConfigCode       string         `json:"config_code"`
+	ConfigName       string         `json:"config_name"`
+	ConfigVersion    int            `json:"config_version"`
+	ConfigHash       string         `json:"config_hash"`
 	DurationSec      int            `json:"duration_sec"`
 	OperatorNote     string         `json:"operator_note"`
 	ReportTemplateID *uint          `json:"report_template_id"`
@@ -195,8 +203,16 @@ func (h *DetectionRunsHandler) start(c *gin.Context) {
 	task, err := h.service.Start(database.StartDetectionOptions{
 		ProjectID:        req.ProjectID,
 		TestNo:           req.TestNo,
+		FactoryNo:        req.FactoryNo,
+		CustomerName:     req.CustomerName,
+		DeviceModel:      req.DeviceModel,
 		Mode:             req.Mode,
 		StandardID:       req.StandardID,
+		ConfigEnabled:    req.ConfigEnabled,
+		ConfigCode:       req.ConfigCode,
+		ConfigName:       req.ConfigName,
+		ConfigVersion:    req.ConfigVersion,
+		ConfigHash:       req.ConfigHash,
 		DurationSec:      req.DurationSec,
 		OperatorNote:     req.OperatorNote,
 		ReportTemplateID: req.ReportTemplateID,
@@ -335,6 +351,7 @@ func parseDetectionTaskFilter(c *gin.Context) (database.DetectionTaskFilter, err
 	}
 	filter.Status = c.Query("status")
 	filter.TestNo = c.Query("test_no")
+	filter.FactoryNo = c.Query("factory_no")
 	if raw := c.Query("start"); raw != "" {
 		value, err := parseQueryTime(raw)
 		if err != nil {

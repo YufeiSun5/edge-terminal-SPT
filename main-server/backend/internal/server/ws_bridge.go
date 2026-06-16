@@ -292,6 +292,8 @@ func mainWSCommandRoute(messageType string) (string, string, bool) {
 		return "api/v1/edge-control/detection/pause", auth.PermStopDetection, true
 	case "command.detection.resume":
 		return "api/v1/edge-control/detection/resume", auth.PermStartDetection, true
+	case "command.detection.apply_config":
+		return "api/v1/edge-control/detection/apply-config", auth.PermStartDetection, true
 	case "command.write_variable":
 		return "api/v1/edge-control/variables/write", auth.PermKIOWrite, true
 	default:

@@ -125,19 +125,23 @@ func (t TagConfig) MarshalJSON() ([]byte, error) {
 }
 
 type StationViewTemplate struct {
-	ID            uint      `gorm:"column:id;primaryKey"`
-	TemplateUID   string    `gorm:"column:template_uid"`
-	TemplateCode  string    `gorm:"column:template_code"`
-	Name          string    `gorm:"column:name"`
-	DisplayName   string    `gorm:"column:display_name"`
-	DisplayNameEN string    `gorm:"column:display_name_en"`
-	DisplayNameJA string    `gorm:"column:display_name_ja"`
-	Version       int       `gorm:"column:version"`
-	Status        string    `gorm:"column:status"`
-	OwnerScope    string    `gorm:"column:owner_scope"`
-	LayoutJSON    string    `gorm:"column:layout_json"`
-	CreatedAt     time.Time `gorm:"column:created_at"`
-	UpdatedAt     time.Time `gorm:"column:updated_at"`
+	ID             uint      `gorm:"column:id;primaryKey"`
+	TemplateUID    string    `gorm:"column:template_uid"`
+	TemplateCode   string    `gorm:"column:template_code"`
+	Name           string    `gorm:"column:name"`
+	DisplayName    string    `gorm:"column:display_name"`
+	DisplayNameEN  string    `gorm:"column:display_name_en"`
+	DisplayNameJA  string    `gorm:"column:display_name_ja"`
+	Version        int       `gorm:"column:version"`
+	Status         string    `gorm:"column:status"`
+	OwnerScope     string    `gorm:"column:owner_scope"`
+	SyncScope      string    `gorm:"column:sync_scope" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user" json:"updated_by_user"`
+	LayoutJSON     string    `gorm:"column:layout_json"`
+	CreatedAt      time.Time `gorm:"column:created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at"`
 }
 
 func (StationViewTemplate) TableName() string { return "sys_station_view_templates" }
@@ -156,18 +160,23 @@ type StationViewRegion struct {
 func (StationViewRegion) TableName() string { return "sys_station_view_regions" }
 
 type StationViewItem struct {
-	ID          uint   `gorm:"column:id;primaryKey"`
-	TemplateUID string `gorm:"column:template_uid"`
-	RegionKey   string `gorm:"column:region_key"`
-	LayoutArea  string `gorm:"column:layout_area"`
-	ItemUID     string `gorm:"column:item_uid"`
-	ItemType    string `gorm:"column:item_type"`
-	BindingType string `gorm:"column:binding_type"`
-	BindingKey  string `gorm:"column:binding_key"`
-	BindingJSON string `gorm:"column:binding_json"`
-	DisplayJSON string `gorm:"column:display_json"`
-	SortOrder   int    `gorm:"column:sort_order"`
-	Visible     bool   `gorm:"column:visible"`
+	ID             uint   `gorm:"column:id;primaryKey"`
+	TemplateUID    string `gorm:"column:template_uid"`
+	RegionKey      string `gorm:"column:region_key"`
+	LayoutArea     string `gorm:"column:layout_area"`
+	ItemUID        string `gorm:"column:item_uid"`
+	ItemType       string `gorm:"column:item_type"`
+	BindingType    string `gorm:"column:binding_type"`
+	BindingKey     string `gorm:"column:binding_key"`
+	BindingJSON    string `gorm:"column:binding_json"`
+	DisplayJSON    string `gorm:"column:display_json"`
+	SortOrder      int    `gorm:"column:sort_order"`
+	Pinned         bool   `gorm:"column:pinned"`
+	Visible        bool   `gorm:"column:visible"`
+	SyncScope      string `gorm:"column:sync_scope"`
+	EdgeInstanceID string `gorm:"column:edge_instance_id"`
+	UpdatedByNode  string `gorm:"column:updated_by_node"`
+	UpdatedByUser  string `gorm:"column:updated_by_user"`
 }
 
 func (StationViewItem) TableName() string { return "sys_station_view_items" }
@@ -222,6 +231,9 @@ type StationViewAssignmentDTO struct {
 type DetectionTask struct {
 	ID                    uint                        `gorm:"column:id;primaryKey" json:"id"`
 	TestNo                string                      `gorm:"column:test_no" json:"test_no"`
+	FactoryNo             string                      `gorm:"column:factory_no" json:"factory_no"`
+	CustomerName          string                      `gorm:"column:customer_name" json:"customer_name"`
+	DeviceModel           string                      `gorm:"column:device_model" json:"device_model"`
 	ProjectID             uint                        `gorm:"column:project_id" json:"project_id"`
 	ProjectCode           string                      `gorm:"column:project_code" json:"project_code"`
 	Mode                  string                      `gorm:"column:mode" json:"mode"`
@@ -229,6 +241,13 @@ type DetectionTask struct {
 	StandardID            *uint                       `gorm:"column:standard_id" json:"standard_id,omitempty"`
 	StandardCode          string                      `gorm:"column:standard_code" json:"standard_code"`
 	StandardVer           int                         `gorm:"column:standard_version" json:"standard_version"`
+	ConfigEnabled         bool                        `gorm:"column:config_enabled" json:"config_enabled"`
+	ConfigStatus          string                      `gorm:"column:config_status" json:"config_status"`
+	ConfigCode            string                      `gorm:"column:config_code" json:"config_code"`
+	ConfigName            string                      `gorm:"column:config_name" json:"config_name"`
+	ConfigVersion         int                         `gorm:"column:config_version" json:"config_version"`
+	ConfigHash            string                      `gorm:"column:config_hash" json:"config_hash"`
+	CurrentConfigRevision int                         `gorm:"column:current_config_revision" json:"current_config_revision"`
 	StartedAt             *time.Time                  `gorm:"column:started_at" json:"started_at,omitempty"`
 	EndedAt               *time.Time                  `gorm:"column:ended_at" json:"ended_at,omitempty"`
 	LimitCheckEnabled     bool                        `gorm:"column:limit_check_enabled" json:"limit_check_enabled"`
@@ -258,44 +277,47 @@ type DetectionTask struct {
 func (DetectionTask) TableName() string { return "sys_detection_tasks" }
 
 type DetectionRunStandardItem struct {
-	ID                             uint      `gorm:"column:id;primaryKey" json:"id"`
-	TaskID                         uint      `gorm:"column:task_id" json:"task_id"`
-	TestNo                         string    `gorm:"column:test_no" json:"test_no"`
-	StandardID                     uint      `gorm:"column:standard_id" json:"standard_id"`
-	StandardItemID                 uint      `gorm:"column:standard_item_id" json:"standard_item_id"`
-	VarID                          int64     `gorm:"column:var_id" json:"var_id"`
-	VarName                        string    `gorm:"column:var_name" json:"var_name"`
-	DisplayName                    string    `gorm:"column:display_name" json:"display_name"`
-	DisplayNameEN                  string    `gorm:"column:display_name_en" json:"display_name_en"`
-	DisplayNameJA                  string    `gorm:"column:display_name_ja" json:"display_name_ja"`
-	CheckEnabled                   bool      `gorm:"column:check_enabled" json:"check_enabled"`
-	AlarmEnabled                   bool      `gorm:"column:alarm_enabled" json:"alarm_enabled"`
-	StoreEnabled                   bool      `gorm:"column:store_enabled" json:"store_enabled"`
-	CheckCycleMS                   int       `gorm:"column:check_cycle_ms" json:"check_cycle_ms"`
-	CheckOnStart                   bool      `gorm:"column:check_on_start" json:"check_on_start"`
-	Required                       bool      `gorm:"column:required" json:"required"`
-	CheckMethod                    string    `gorm:"column:check_method" json:"check_method"`
-	TargetValue                    string    `gorm:"column:target_value" json:"target_value"`
-	LimitLL                        *float64  `gorm:"column:limit_ll" json:"limit_ll,omitempty"`
-	LimitL                         *float64  `gorm:"column:limit_l" json:"limit_l,omitempty"`
-	LimitH                         *float64  `gorm:"column:limit_h" json:"limit_h,omitempty"`
-	LimitHH                        *float64  `gorm:"column:limit_hh" json:"limit_hh,omitempty"`
-	LimitDeadband                  float64   `gorm:"column:limit_deadband" json:"limit_deadband"`
-	ViolationHoldMS                int       `gorm:"column:violation_hold_ms" json:"violation_hold_ms"`
-	RecoverHoldMS                  int       `gorm:"column:recover_hold_ms" json:"recover_hold_ms"`
-	QualityPolicy                  string    `gorm:"column:quality_policy" json:"quality_policy"`
-	VariableDefaultAlarmEnabled    bool      `gorm:"column:variable_default_alarm_enabled" json:"variable_default_alarm_enabled"`
-	VariableDefaultLimitLL         *float64  `gorm:"column:variable_default_limit_ll" json:"variable_default_limit_ll,omitempty"`
-	VariableDefaultLimitL          *float64  `gorm:"column:variable_default_limit_l" json:"variable_default_limit_l,omitempty"`
-	VariableDefaultLimitH          *float64  `gorm:"column:variable_default_limit_h" json:"variable_default_limit_h,omitempty"`
-	VariableDefaultLimitHH         *float64  `gorm:"column:variable_default_limit_hh" json:"variable_default_limit_hh,omitempty"`
-	VariableDefaultLimitDeadband   float64   `gorm:"column:variable_default_limit_deadband" json:"variable_default_limit_deadband"`
-	VariableDefaultViolationHoldMS int       `gorm:"column:variable_default_violation_hold_ms" json:"variable_default_violation_hold_ms"`
-	VariableDefaultRecoverHoldMS   int       `gorm:"column:variable_default_recover_hold_ms" json:"variable_default_recover_hold_ms"`
-	Unit                           string    `gorm:"column:unit" json:"unit"`
-	DecimalPlaces                  int       `gorm:"column:decimal_places" json:"decimal_places"`
-	SortOrder                      int       `gorm:"column:sort_order" json:"sort_order"`
-	CreatedAt                      time.Time `gorm:"column:created_at" json:"created_at"`
+	ID                             uint       `gorm:"column:id;primaryKey" json:"id"`
+	TaskID                         uint       `gorm:"column:task_id" json:"task_id"`
+	TestNo                         string     `gorm:"column:test_no" json:"test_no"`
+	StandardID                     uint       `gorm:"column:standard_id" json:"standard_id"`
+	StandardItemID                 uint       `gorm:"column:standard_item_id" json:"standard_item_id"`
+	ConfigRevision                 int        `gorm:"column:config_revision" json:"config_revision"`
+	VarID                          int64      `gorm:"column:var_id" json:"var_id"`
+	VarName                        string     `gorm:"column:var_name" json:"var_name"`
+	DisplayName                    string     `gorm:"column:display_name" json:"display_name"`
+	DisplayNameEN                  string     `gorm:"column:display_name_en" json:"display_name_en"`
+	DisplayNameJA                  string     `gorm:"column:display_name_ja" json:"display_name_ja"`
+	CheckEnabled                   bool       `gorm:"column:check_enabled" json:"check_enabled"`
+	AlarmEnabled                   bool       `gorm:"column:alarm_enabled" json:"alarm_enabled"`
+	StoreEnabled                   bool       `gorm:"column:store_enabled" json:"store_enabled"`
+	CheckCycleMS                   int        `gorm:"column:check_cycle_ms" json:"check_cycle_ms"`
+	CheckOnStart                   bool       `gorm:"column:check_on_start" json:"check_on_start"`
+	Required                       bool       `gorm:"column:required" json:"required"`
+	CheckMethod                    string     `gorm:"column:check_method" json:"check_method"`
+	TargetValue                    string     `gorm:"column:target_value" json:"target_value"`
+	LimitLL                        *float64   `gorm:"column:limit_ll" json:"limit_ll,omitempty"`
+	LimitL                         *float64   `gorm:"column:limit_l" json:"limit_l,omitempty"`
+	LimitH                         *float64   `gorm:"column:limit_h" json:"limit_h,omitempty"`
+	LimitHH                        *float64   `gorm:"column:limit_hh" json:"limit_hh,omitempty"`
+	LimitDeadband                  float64    `gorm:"column:limit_deadband" json:"limit_deadband"`
+	ViolationHoldMS                int        `gorm:"column:violation_hold_ms" json:"violation_hold_ms"`
+	RecoverHoldMS                  int        `gorm:"column:recover_hold_ms" json:"recover_hold_ms"`
+	QualityPolicy                  string     `gorm:"column:quality_policy" json:"quality_policy"`
+	VariableDefaultAlarmEnabled    bool       `gorm:"column:variable_default_alarm_enabled" json:"variable_default_alarm_enabled"`
+	VariableDefaultLimitLL         *float64   `gorm:"column:variable_default_limit_ll" json:"variable_default_limit_ll,omitempty"`
+	VariableDefaultLimitL          *float64   `gorm:"column:variable_default_limit_l" json:"variable_default_limit_l,omitempty"`
+	VariableDefaultLimitH          *float64   `gorm:"column:variable_default_limit_h" json:"variable_default_limit_h,omitempty"`
+	VariableDefaultLimitHH         *float64   `gorm:"column:variable_default_limit_hh" json:"variable_default_limit_hh,omitempty"`
+	VariableDefaultLimitDeadband   float64    `gorm:"column:variable_default_limit_deadband" json:"variable_default_limit_deadband"`
+	VariableDefaultViolationHoldMS int        `gorm:"column:variable_default_violation_hold_ms" json:"variable_default_violation_hold_ms"`
+	VariableDefaultRecoverHoldMS   int        `gorm:"column:variable_default_recover_hold_ms" json:"variable_default_recover_hold_ms"`
+	Unit                           string     `gorm:"column:unit" json:"unit"`
+	DecimalPlaces                  int        `gorm:"column:decimal_places" json:"decimal_places"`
+	SortOrder                      int        `gorm:"column:sort_order" json:"sort_order"`
+	EffectiveFrom                  *time.Time `gorm:"column:effective_from" json:"effective_from,omitempty"`
+	EffectiveTo                    *time.Time `gorm:"column:effective_to" json:"effective_to,omitempty"`
+	CreatedAt                      time.Time  `gorm:"column:created_at" json:"created_at"`
 }
 
 func (DetectionRunStandardItem) TableName() string { return "detection_run_standard_items" }
@@ -350,6 +372,7 @@ type StationViewItemDTO struct {
 	BindingJSON      string                       `json:"binding_json,omitempty"`
 	DisplayJSON      string                       `json:"display_json,omitempty"`
 	SortOrder        int                          `json:"sort_order"`
+	Pinned           bool                         `json:"pinned"`
 	Visible          bool                         `json:"visible"`
 	ResolvedBindings []StationViewResolvedBinding `json:"resolved_bindings,omitempty"`
 }
@@ -443,6 +466,7 @@ func (q *StationViewQuery) Effective(projectID uint, requestedEdgeInstanceID str
 			BindingJSON: item.BindingJSON,
 			DisplayJSON: item.DisplayJSON,
 			SortOrder:   item.SortOrder,
+			Pinned:      item.Pinned,
 			Visible:     item.Visible,
 		}
 		bindings, itemWarnings := resolveItemBindings(item, tags, currentRun, hasCurrentRun)
@@ -590,7 +614,7 @@ func (q *StationViewQuery) loadRegions(templateUID string) ([]StationViewRegion,
 
 func (q *StationViewQuery) loadItems(templateUID string) ([]StationViewItem, error) {
 	var items []StationViewItem
-	err := q.db.Where("template_uid = ? AND visible = ?", templateUID, true).Order("layout_area ASC, sort_order ASC, id ASC").Find(&items).Error
+	err := q.db.Where("template_uid = ? AND visible = ?", templateUID, true).Order("layout_area ASC, pinned DESC, sort_order ASC, id ASC").Find(&items).Error
 	return items, err
 }
 
@@ -754,28 +778,14 @@ func itemLayoutArea(item StationViewItem) string {
 	if layoutArea := strings.TrimSpace(item.LayoutArea); layoutArea != "" {
 		return layoutArea
 	}
-	switch item.RegionKey {
-	case "left":
-		return StationViewLayoutAreaCardPool
-	case "right":
-		return StationViewLayoutAreaListLayout
-	default:
-		return strings.TrimSpace(item.RegionKey)
-	}
+	return strings.TrimSpace(item.RegionKey)
 }
 
 func regionLayoutArea(region StationViewRegion) string {
 	if layoutArea := strings.TrimSpace(region.LayoutArea); layoutArea != "" {
 		return layoutArea
 	}
-	switch region.RegionKey {
-	case "left":
-		return StationViewLayoutAreaCardPool
-	case "right":
-		return StationViewLayoutAreaListLayout
-	default:
-		return strings.TrimSpace(region.RegionKey)
-	}
+	return strings.TrimSpace(region.RegionKey)
 }
 
 func stationViewTemplateListItem(template StationViewTemplate, assignments []StationViewAssignmentDTO) StationViewTemplateListItem {

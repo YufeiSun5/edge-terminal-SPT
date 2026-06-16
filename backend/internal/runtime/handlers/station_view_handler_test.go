@@ -12,6 +12,7 @@ import (
 	"spindle-edge/backend/internal/models"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func TestStationViewEffectiveFiltersCurrentProjectVariables(t *testing.T) {
@@ -32,6 +33,10 @@ func TestStationViewEffectiveFiltersCurrentProjectVariables(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create tags: %v", err)
 	}
+	seedStationViewTestTemplate(t, db, "tpl-filter", projectA.ProjectCode, []models.StationViewItem{
+		{ItemUID: "card-temp", LayoutArea: models.StationViewLayoutAreaCardPool, RegionKey: models.StationViewLayoutAreaCardPool, ItemType: "metric_card", BindingType: models.StationViewBindingVarName, BindingKey: "temp", SortOrder: 10, Visible: true},
+		{ItemUID: "list-pressure", LayoutArea: models.StationViewLayoutAreaListLayout, RegionKey: models.StationViewLayoutAreaListLayout, ItemType: "inspection_row", BindingType: models.StationViewBindingVarName, BindingKey: "pressure", SortOrder: 20, Visible: true},
+	})
 
 	handler := NewStationViewHandler(repo, "edge-01")
 	rec := callHandler(t, http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(projectA.ID), 10), nil, handler.effective)
@@ -45,8 +50,8 @@ func TestStationViewEffectiveFiltersCurrentProjectVariables(t *testing.T) {
 	if response.Project.ID != projectA.ID {
 		t.Fatalf("expected project A, got %+v", response.Project)
 	}
-	if response.Template.TemplateCode != "STATION-DEFAULT" {
-		t.Fatalf("expected auto-seeded default template, got %+v", response.Template)
+	if response.Template.TemplateCode != "TPL-FILTER" {
+		t.Fatalf("expected explicit station template, got %+v", response.Template)
 	}
 	if len(response.Regions) != 2 {
 		t.Fatalf("expected default card/list layouts, got %+v", response.Regions)
@@ -73,6 +78,9 @@ func TestStationViewEffectiveReturnsEmptyBindingsForEmptyProject(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatalf("create project: %v", err)
 	}
+	seedStationViewTestTemplate(t, db, "tpl-empty", project.ProjectCode, []models.StationViewItem{
+		{ItemUID: "card-all", LayoutArea: models.StationViewLayoutAreaCardPool, RegionKey: models.StationViewLayoutAreaCardPool, ItemType: "metric_card", BindingType: models.StationViewBindingVarGroup, SortOrder: 10, Visible: true},
+	})
 
 	handler := NewStationViewHandler(repo, "edge-01")
 	rec := callHandler(t, http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(project.ID), 10), nil, handler.effective)
@@ -91,8 +99,8 @@ func TestStationViewEffectiveReturnsEmptyBindingsForEmptyProject(t *testing.T) {
 			t.Fatalf("expected empty bindings for empty project item=%+v", item)
 		}
 	}
-	if len(response.Warnings) == 0 {
-		t.Fatalf("expected warning for missing current run")
+	if len(response.Warnings) != 0 {
+		t.Fatalf("expected no warning when configured items do not require a current run, got %+v", response.Warnings)
 	}
 }
 
@@ -151,6 +159,9 @@ func testStationViewEffectiveUsesCurrentRunDetectionItems(t *testing.T, status s
 	}).Error; err != nil {
 		t.Fatalf("create run standard item: %v", err)
 	}
+	seedStationViewTestTemplate(t, db, "tpl-run-items", project.ProjectCode, []models.StationViewItem{
+		{ItemUID: "list-run-items", LayoutArea: models.StationViewLayoutAreaListLayout, RegionKey: models.StationViewLayoutAreaListLayout, ItemType: "inspection_row", BindingType: models.StationViewBindingDetectionItems, SortOrder: 10, Visible: true},
+	})
 
 	handler := NewStationViewHandler(repo, "edge-01")
 	rec := callHandler(t, http.MethodGet, "/api/v1/station-view/effective?project_id="+strconv.FormatUint(uint64(project.ID), 10), nil, handler.effective)
@@ -431,14 +442,14 @@ func TestStationViewItemsListAndReplace(t *testing.T) {
 		"template_uid": template.TemplateUID,
 		"items": []map[string]any{
 			{"item_uid": "card-temp", "layout_area": models.StationViewLayoutAreaCardPool, "item_type": "metric_card", "binding_type": models.StationViewBindingVarName, "binding_key": "temp", "sort_order": 10, "visible": true},
-			{"item_uid": "list-humidity", "layout_area": models.StationViewLayoutAreaListLayout, "item_type": "inspection_row", "binding_type": models.StationViewBindingVarName, "binding_key": "humidity", "sort_order": 20, "visible": true},
+			{"item_uid": "list-humidity", "layout_area": models.StationViewLayoutAreaListLayout, "item_type": "inspection_row", "binding_type": models.StationViewBindingVarName, "binding_key": "humidity", "sort_order": 20, "pinned": true, "visible": true},
 			{"item_uid": "hidden-temp", "layout_area": models.StationViewLayoutAreaCardPool, "item_type": "metric_card", "binding_type": models.StationViewBindingVarName, "binding_key": "temp", "sort_order": 30, "visible": false},
 		},
 	}, handler.replaceItems)
 	if replace.Code != http.StatusOK {
 		t.Fatalf("expected replace 200, got %d body=%s", replace.Code, replace.Body.String())
 	}
-	if body := replace.Body.String(); !strings.Contains(body, `"layout_area":"card_pool"`) || !strings.Contains(body, `"layout_area":"list_layout"`) || !strings.Contains(body, `"visible":false`) {
+	if body := replace.Body.String(); !strings.Contains(body, `"layout_area":"card_pool"`) || !strings.Contains(body, `"layout_area":"list_layout"`) || !strings.Contains(body, `"pinned":true`) || !strings.Contains(body, `"visible":false`) {
 		t.Fatalf("replace should return layout areas and visible flag, body=%s", body)
 	}
 
@@ -464,6 +475,9 @@ func TestStationViewItemsListAndReplace(t *testing.T) {
 	}
 	if response.Items[0].LayoutArea != models.StationViewLayoutAreaCardPool || response.Items[1].LayoutArea != models.StationViewLayoutAreaListLayout {
 		t.Fatalf("unexpected effective layout areas: %+v", response.Items)
+	}
+	if !response.Items[1].Pinned {
+		t.Fatalf("expected pinned flag to round-trip through effective response: %+v", response.Items)
 	}
 	if got := response.WSSubscription.VarIDs; len(got) != 2 || got[0] != "4001" || got[1] != "4002" {
 		t.Fatalf("unexpected effective ws ids: %+v", got)
@@ -517,6 +531,45 @@ func TestStationViewPatchValidation(t *testing.T) {
 	})
 	if err != nil || assignmentUpdates["template_uid"] != templateUID || assignmentUpdates["target_type"] != targetType || assignmentUpdates["target_key"] != targetKey || assignmentUpdates["priority"] != priority || assignmentUpdates["enabled"] != enabled {
 		t.Fatalf("unexpected assignment updates=%+v err=%v", assignmentUpdates, err)
+	}
+}
+
+func seedStationViewTestTemplate(t *testing.T, db *gorm.DB, templateUID string, projectCode string, items []models.StationViewItem) {
+	t.Helper()
+	template := models.StationViewTemplate{
+		TemplateUID:  templateUID,
+		TemplateCode: strings.ToUpper(templateUID),
+		Name:         templateUID,
+		Version:      1,
+		Status:       models.StationViewStatusPublished,
+	}
+	regions := []models.StationViewRegion{
+		{TemplateUID: templateUID, RegionKey: models.StationViewLayoutAreaCardPool, LayoutArea: models.StationViewLayoutAreaCardPool, RegionType: "metric_grid", SortOrder: 10, Enabled: true},
+		{TemplateUID: templateUID, RegionKey: models.StationViewLayoutAreaListLayout, LayoutArea: models.StationViewLayoutAreaListLayout, RegionType: "inspection_table", SortOrder: 20, Enabled: true},
+	}
+	assignment := models.StationViewAssignment{
+		TemplateUID: templateUID,
+		TargetType:  models.StationViewTargetProject,
+		TargetKey:   projectCode,
+		Priority:    10,
+		Enabled:     true,
+	}
+	for index := range items {
+		items[index].TemplateUID = templateUID
+	}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatalf("create station view template: %v", err)
+	}
+	if err := db.Create(&regions).Error; err != nil {
+		t.Fatalf("create station view regions: %v", err)
+	}
+	if err := db.Create(&assignment).Error; err != nil {
+		t.Fatalf("create station view assignment: %v", err)
+	}
+	if len(items) > 0 {
+		if err := db.Create(&items).Error; err != nil {
+			t.Fatalf("create station view items: %v", err)
+		}
 	}
 }
 

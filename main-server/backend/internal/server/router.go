@@ -387,6 +387,19 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		}
 		c.JSON(http.StatusOK, flows)
 	})
+	protected.POST("/task-flows", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		var req query.TaskFlow
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			return
+		}
+		flow, err := stationViewQuery.CreateTaskFlow(&req, syncWriteMeta(c))
+		if err != nil {
+			writeSyncedReadError(c, err, "task flow write failed")
+			return
+		}
+		c.JSON(http.StatusCreated, flow)
+	})
 	protected.GET("/task-flows/runtime", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/task-flows/runtime")
 	})
@@ -399,6 +412,25 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		flow, err := stationViewQuery.GetTaskFlow(flowID, edgeContext(c, cfg))
 		if err != nil {
 			writeSyncedReadError(c, err, "task flow query failed")
+			return
+		}
+		c.JSON(http.StatusOK, flow)
+	})
+	protected.PUT("/task-flows/:id", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		flowID, err := parseUintParam(c, "id")
+		if err != nil || flowID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid task flow id", "code": "invalid_task_flow_id"})
+			return
+		}
+		var req query.TaskFlow
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			return
+		}
+		vars := req.Vars
+		flow, err := stationViewQuery.UpdateTaskFlow(flowID, taskFlowDefinitionUpdates(req), &vars, syncWriteMeta(c))
+		if err != nil {
+			writeSyncedReadError(c, err, "task flow write failed")
 			return
 		}
 		c.JSON(http.StatusOK, flow)
@@ -418,6 +450,21 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			return
 		}
 		c.JSON(http.StatusOK, standards)
+	})
+	protected.POST("/detection-standards", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		var req query.DetectionStandard
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			return
+		}
+		items := req.Items
+		req.Items = nil
+		standard, err := stationViewQuery.CreateDetectionStandard(&req, items, syncWriteMeta(c))
+		if err != nil {
+			writeSyncedReadError(c, err, "detection standard write failed")
+			return
+		}
+		c.JSON(http.StatusCreated, standard)
 	})
 	protected.GET("/detection-standards/favorites", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
 		principal, ok := auth.PrincipalFromContext(c)
@@ -467,6 +514,25 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		standard, err := stationViewQuery.GetDetectionStandard(uint(standardID), edgeContext(c, cfg))
 		if err != nil {
 			writeSyncedReadError(c, err, "detection standard query failed")
+			return
+		}
+		c.JSON(http.StatusOK, standard)
+	})
+	protected.PUT("/detection-standards/:id", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		standardID, err := parseUintParam(c, "id")
+		if err != nil || standardID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid standard id", "code": "invalid_standard_id"})
+			return
+		}
+		var req query.DetectionStandard
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			return
+		}
+		items := req.Items
+		standard, err := stationViewQuery.UpdateDetectionStandard(uint(standardID), detectionStandardDefinitionUpdates(req), &items, syncWriteMeta(c))
+		if err != nil {
+			writeSyncedReadError(c, err, "detection standard write failed")
 			return
 		}
 		c.JSON(http.StatusOK, standard)
@@ -616,6 +682,24 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 				"error": err.Error(),
 				"code":  "invalid_query",
 			})
+			return
+		}
+		if _, hasLimit := c.GetQuery("limit"); hasLimit {
+			tags, total, limit, offset, err := stationViewQuery.ListVariablesPage(filter, edgeContext(c, cfg))
+			if err != nil {
+				writeSyncedReadError(c, err, "variables query failed")
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"items": tags, "total": total, "limit": limit, "offset": offset})
+			return
+		}
+		if _, hasOffset := c.GetQuery("offset"); hasOffset {
+			tags, total, limit, offset, err := stationViewQuery.ListVariablesPage(filter, edgeContext(c, cfg))
+			if err != nil {
+				writeSyncedReadError(c, err, "variables query failed")
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"items": tags, "total": total, "limit": limit, "offset": offset})
 			return
 		}
 		tags, err := stationViewQuery.ListVariables(filter, edgeContext(c, cfg))
@@ -875,6 +959,9 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 	protected.POST("/detection-runs/:id/resume", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
 		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/resume", "id")
 	})
+	protected.POST("/detection-runs/:id/apply-config", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection/apply-config", "id")
+	})
 	protected.POST("/detection-runs/:id/notes", authService.RequirePermission(auth.PermStartDetection), mainServerDetectionNoteWriteUnsupported)
 
 	protected.GET("/station-view/effective", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
@@ -912,6 +999,72 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			"count":        len(templates),
 			"query_source": "synced_mysql",
 		})
+	})
+	protected.GET("/station-view/items", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		templateUID := strings.TrimSpace(c.Query("template_uid"))
+		if templateUID == "" {
+			projectID, err := parseUintQuery(c, "project_id")
+			if err != nil || projectID == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "template_uid or project_id is required", "code": "invalid_query"})
+				return
+			}
+			edgeInstanceID, ok := resolveStationViewEdgeInstanceID(c, edges, stationViewQuery, uint(projectID))
+			if !ok {
+				return
+			}
+			effective, err := stationViewQuery.Effective(uint(projectID), edgeInstanceID)
+			if err != nil {
+				writeStationViewError(c, err)
+				return
+			}
+			templateUID = effective.Template.TemplateUID
+		}
+		items, err := stationViewQuery.ListStationViewItems(templateUID)
+		if err != nil {
+			writeStationViewError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"template_uid": templateUID, "items": items, "count": len(items), "query_source": "synced_mysql"})
+	})
+	protected.PUT("/station-view/items", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		var req stationViewItemsRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
+			return
+		}
+		templateUID := strings.TrimSpace(req.TemplateUID)
+		if templateUID == "" {
+			templateUID = strings.TrimSpace(c.Query("template_uid"))
+		}
+		if templateUID == "" {
+			projectID := req.ProjectID
+			if projectID == 0 {
+				parsed, err := parseUintQuery(c, "project_id")
+				if err == nil {
+					projectID = uint(parsed)
+				}
+			}
+			if projectID == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "template_uid or project_id is required", "code": "invalid_query"})
+				return
+			}
+			edgeInstanceID, ok := resolveStationViewEdgeInstanceID(c, edges, stationViewQuery, projectID)
+			if !ok {
+				return
+			}
+			effective, err := stationViewQuery.Effective(projectID, edgeInstanceID)
+			if err != nil {
+				writeStationViewError(c, err)
+				return
+			}
+			templateUID = effective.Template.TemplateUID
+		}
+		items, err := stationViewQuery.ReplaceStationViewItems(templateUID, req.Items, syncWriteMeta(c))
+		if err != nil {
+			writeStationViewError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": items, "count": len(items), "query_source": "synced_mysql"})
 	})
 	protected.POST("/station-view/reload", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		diagnostics := stationViewQuery.SyncDiagnostics()
@@ -975,6 +1128,7 @@ func registerEdgeControlRoutes(router *gin.Engine, registry *edgeRegistry, stati
 		"/api/v1/edge-control/detection/resume",
 		"/api/v1/edge-control/detection/mute-alarms",
 		"/api/v1/edge-control/detection/update-limits",
+		"/api/v1/edge-control/detection/apply-config",
 		"/api/v1/edge-control/detection/refresh-features",
 		"/api/v1/edge-control/detection/report-requests",
 		"/api/v1/edge-control/variables/write",
@@ -1331,6 +1485,7 @@ func parseDetectionRunFilter(c *gin.Context) (query.DetectionRunFilter, error) {
 	}
 	filter.Status = strings.TrimSpace(c.Query("status"))
 	filter.TestNo = strings.TrimSpace(c.Query("test_no"))
+	filter.FactoryNo = strings.TrimSpace(c.Query("factory_no"))
 	if raw := strings.TrimSpace(c.Query("start")); raw != "" {
 		value, err := query.ParseDetectionRunTime(raw)
 		if err != nil {
@@ -1396,6 +1551,27 @@ func parseVariableFilter(c *gin.Context) (query.VariableFilter, error) {
 		}
 		filter.Writable = &value
 	}
+	if raw := strings.TrimSpace(c.Query("assigned")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return filter, errors.New("invalid assigned")
+		}
+		filter.Assigned = &value
+	}
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return filter, errors.New("invalid limit")
+		}
+		filter.Limit = value
+	}
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return filter, errors.New("invalid offset")
+		}
+		filter.Offset = value
+	}
 	filter.SourceType = strings.TrimSpace(c.Query("source_type"))
 	filter.ProjectCode = strings.TrimSpace(c.Query("project_code"))
 	filter.VarGroup = strings.TrimSpace(c.Query("var_group"))
@@ -1423,6 +1599,7 @@ func parseHistoryFilter(c *gin.Context) (query.HistoryFilter, error) {
 	}
 	filter.ProjectCode = strings.TrimSpace(c.Query("project_code"))
 	filter.TestNo = strings.TrimSpace(c.Query("test_no"))
+	filter.FactoryNo = strings.TrimSpace(c.Query("factory_no"))
 	if raw := strings.TrimSpace(c.Query("start")); raw != "" {
 		value, err := query.ParseHistoryTime(raw)
 		if err != nil {
@@ -1864,6 +2041,68 @@ func parseDetectionStandardFilter(c *gin.Context) (query.DetectionStandardFilter
 	}
 	filter.Keyword = strings.TrimSpace(c.Query("keyword"))
 	return filter, nil
+}
+
+type stationViewItemsRequest struct {
+	TemplateUID string                     `json:"template_uid"`
+	ProjectID   uint                       `json:"project_id"`
+	Items       []query.StationViewItemDTO `json:"items"`
+}
+
+func syncWriteMeta(c *gin.Context) query.SyncWriteMeta {
+	meta := query.SyncWriteMeta{
+		UpdatedByNode:  "main-server",
+		EdgeInstanceID: strings.TrimSpace(c.Query("edge_instance_id")),
+		SyncScope:      strings.TrimSpace(c.Query("sync_scope")),
+	}
+	if principal, ok := auth.PrincipalFromContext(c); ok {
+		meta.UpdatedByUser = principal.Username
+		if meta.UpdatedByUser == "" && principal.UserID > 0 {
+			meta.UpdatedByUser = strconv.FormatUint(uint64(principal.UserID), 10)
+		}
+	}
+	return meta
+}
+
+func detectionStandardDefinitionUpdates(req query.DetectionStandard) map[string]any {
+	return map[string]any{
+		"standard_code":      req.StandardCode,
+		"name":               req.Name,
+		"display_name":       req.DisplayName,
+		"display_name_en":    req.DisplayNameEN,
+		"display_name_ja":    req.DisplayNameJA,
+		"project_id":         req.ProjectID,
+		"project_code":       req.ProjectCode,
+		"mode":               req.Mode,
+		"report_template_id": req.ReportTemplateID,
+		"enabled":            req.Enabled,
+		"remark":             req.Remark,
+		"sync_scope":         req.SyncScope,
+		"edge_instance_id":   req.EdgeInstanceID,
+	}
+}
+
+func taskFlowDefinitionUpdates(req query.TaskFlow) map[string]any {
+	return map[string]any{
+		"project_id":           req.ProjectID,
+		"flow_code":            req.FlowCode,
+		"name":                 req.Name,
+		"enabled":              req.Enabled,
+		"trigger_type":         req.TriggerType,
+		"condition_script":     req.ConditionScript,
+		"action_type":          req.ActionType,
+		"action_script":        req.ActionScript,
+		"action_payload":       req.ActionPayload,
+		"steps_json":           req.StepsJSON,
+		"timeout_ms":           req.TimeoutMS,
+		"cooldown_ms":          req.CooldownMS,
+		"hold_ms":              req.HoldMS,
+		"schedule_interval_ms": req.ScheduleIntervalMS,
+		"priority":             req.Priority,
+		"remark":               req.Remark,
+		"sync_scope":           req.SyncScope,
+		"edge_instance_id":     req.EdgeInstanceID,
+	}
 }
 
 func parseFlexibleQueryTime(raw string) (*time.Time, error) {

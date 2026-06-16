@@ -2943,7 +2943,7 @@ export function SettingsPage() {
         <Form form={kioRemapForm} layout="vertical">
           <div className="settings-form-grid modal-grid">
             <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}>
-              <InputNumber min={1} max={99} />
+              <InputNumber min={1} max={12} />
             </Form.Item>
             <Form.Item name="project_code_prefix" label={t('settings.variables.kioProjectCodePrefix')}>
               <Input />

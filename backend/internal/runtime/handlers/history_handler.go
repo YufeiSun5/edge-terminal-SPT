@@ -61,6 +61,7 @@ func parseHistoryFilter(c *gin.Context) (database.HistoryFilter, error) {
 	}
 	filter.ProjectCode = c.Query("project_code")
 	filter.TestNo = c.Query("test_no")
+	filter.FactoryNo = c.Query("factory_no")
 	if raw := c.Query("start"); raw != "" {
 		value, err := parseQueryTime(raw)
 		if err != nil {

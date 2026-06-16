@@ -198,6 +198,7 @@ async function smokeProjectBusinessFlows(token) {
       body: JSON.stringify({
         project_id: project.id,
         test_no: testNo,
+        factory_no: `FACTORY-${stamp}`,
         mode: 'standard',
         duration_sec: 60,
         operator_note: 'desktop smoke project flow',
@@ -243,23 +244,31 @@ async function clickSummaryButton(page, text) {
   await page.locator('button').filter({ hasText: text }).last().click()
 }
 
+async function loginPage(page, rendererUrl) {
+  await page.goto(`${rendererUrl}/#/login`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(1000)
+  if (!page.url().includes('/login')) return
+  await page.getByLabel('账号', { exact: true }).fill(username)
+  await page.getByLabel('密码', { exact: true }).fill(password)
+  const response = page.waitForResponse((item) => item.url().includes('/api/v1/auth/login') && item.status() === 200, { timeout: 15000 })
+  await page.getByRole('button', { name: /登录|Login|ログイン/ }).click()
+  await response
+  await page.waitForFunction(() => !window.location.hash.includes('/login'), null, { timeout: 15000 })
+}
+
 async function smokeSettingsUI(rendererUrl, businessFlow) {
   const { chromium } = await import('playwright')
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage()
   try {
-    await page.goto(`${rendererUrl}/#/login`, { waitUntil: 'domcontentloaded' })
-    await page.locator('input').nth(0).fill(username)
-    await page.locator('input').nth(1).fill(password)
-    await page.getByRole('button', { name: /登录|Login|ログイン/ }).click()
+    await loginPage(page, rendererUrl)
+
+    await page.goto(`${rendererUrl}/#/variables`, { waitUntil: 'domcontentloaded' })
     await page.waitForTimeout(1500)
 
-    await page.goto(`${rendererUrl}/#/settings`, { waitUntil: 'domcontentloaded' })
-    await page.waitForTimeout(1500)
-
-    await page.getByRole('heading', { name: '变量全量信息' }).waitFor({ timeout: 10000 })
+    await page.getByText('全部变量').first().waitFor({ timeout: 10000 })
     await page.getByRole('button', { name: '创建虚变量' }).waitFor({ timeout: 10000 })
-    await page.getByPlaceholder('搜索变量、路径或名称').fill(businessFlow.assignedVarName)
+    await page.getByPlaceholder(/搜索变量|Search/).fill(businessFlow.assignedVarName)
     await page.getByText(businessFlow.assignedVarName).first().waitFor({ timeout: 10000 })
 
     await page.getByRole('button', { name: '创建虚变量' }).click()
@@ -270,12 +279,14 @@ async function smokeSettingsUI(rendererUrl, businessFlow) {
     await page.keyboard.press('Escape')
     await page.locator('.ant-modal').filter({ hasText: '创建虚变量' }).waitFor({ state: 'hidden', timeout: 10000 })
 
-    await page.getByPlaceholder('搜索变量、路径或名称').fill(businessFlow.unassignedVarName)
-    await page.getByText('所有未知变量').click()
+    await page.getByPlaceholder(/搜索变量|Search/).fill(businessFlow.unassignedVarName)
+    await page.getByText('未分配变量池').first().waitFor({ timeout: 10000 })
     await page.getByText(businessFlow.unassignedVarName).first().waitFor({ timeout: 10000 })
-    await page.getByText(businessFlow.unassignedVarName).first().click()
-    await page.getByRole('button', { name: '批量分配 1 个' }).waitFor({ timeout: 10000 })
+    await page.locator('.variable-config-unassigned').locator('button').filter({ hasText: '全选' }).click()
+    await page.locator('button').filter({ hasText: '批量分配 1 个' }).waitFor({ timeout: 10000 })
 
+    await page.goto(`${rendererUrl}/#/settings`, { waitUntil: 'domcontentloaded' })
+    await page.waitForTimeout(1500)
     await clickSummaryButton(page, '存储路由')
     await page.getByPlaceholder('搜索路由、变量、表列或项目').fill(businessFlow.assignedVarName)
     await page.getByText(businessFlow.assignedVarName).first().waitFor({ timeout: 10000 })

@@ -5,6 +5,7 @@ import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
 import { EdgeStatusPage } from '@/features/edge-status/EdgeStatusPage'
 import { StationOperationPage } from '@/features/station-operation/StationOperationPage'
 import { HistoryQueryPage } from '@/features/history-query/HistoryQueryPage'
+import { TaskDetailPage } from '@/features/history-query/TaskDetailPage'
 import { ReportsPage } from '@/features/reports/ReportsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { DetectionConfigPage } from '@/features/detection-config/DetectionConfigPage'
@@ -51,6 +52,10 @@ export const router = createHashRouter([
               {
                 index: true,
                 element: <HistoryQueryPage />,
+              },
+              {
+                path: 'runs/:taskId',
+                element: <TaskDetailPage />,
               },
             ],
           },

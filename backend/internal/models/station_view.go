@@ -34,19 +34,23 @@ const (
 )
 
 type StationViewTemplate struct {
-	ID            uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TemplateUID   string    `gorm:"column:template_uid;size:128;uniqueIndex;not null" json:"template_uid"`
-	TemplateCode  string    `gorm:"column:template_code;size:64;uniqueIndex;not null" json:"template_code"`
-	Name          string    `gorm:"column:name;size:128;not null" json:"name"`
-	DisplayName   string    `gorm:"column:display_name;size:128" json:"display_name"`
-	DisplayNameEN string    `gorm:"column:display_name_en;size:128" json:"display_name_en"`
-	DisplayNameJA string    `gorm:"column:display_name_ja;size:128" json:"display_name_ja"`
-	Version       int       `gorm:"column:version;default:1;not null" json:"version"`
-	Status        string    `gorm:"column:status;size:32;default:published;index;not null" json:"status"`
-	OwnerScope    string    `gorm:"column:owner_scope;size:32;default:edge;index;not null" json:"owner_scope"`
-	LayoutJSON    string    `gorm:"column:layout_json;type:text" json:"layout_json"`
-	CreatedAt     time.Time `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt     time.Time `gorm:"column:updated_at" json:"updated_at"`
+	ID             uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	TemplateUID    string    `gorm:"column:template_uid;size:128;uniqueIndex;not null" json:"template_uid"`
+	TemplateCode   string    `gorm:"column:template_code;size:64;uniqueIndex;not null" json:"template_code"`
+	Name           string    `gorm:"column:name;size:128;not null" json:"name"`
+	DisplayName    string    `gorm:"column:display_name;size:128" json:"display_name"`
+	DisplayNameEN  string    `gorm:"column:display_name_en;size:128" json:"display_name_en"`
+	DisplayNameJA  string    `gorm:"column:display_name_ja;size:128" json:"display_name_ja"`
+	Version        int       `gorm:"column:version;default:1;not null" json:"version"`
+	Status         string    `gorm:"column:status;size:32;default:published;index;not null" json:"status"`
+	OwnerScope     string    `gorm:"column:owner_scope;size:32;default:edge;index;not null" json:"owner_scope"`
+	SyncScope      string    `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
+	LayoutJSON     string    `gorm:"column:layout_json;type:text" json:"layout_json"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (StationViewTemplate) TableName() string {
@@ -54,16 +58,20 @@ func (StationViewTemplate) TableName() string {
 }
 
 type StationViewRegion struct {
-	ID          uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TemplateUID string    `gorm:"column:template_uid;size:128;uniqueIndex:uk_station_view_region;index;not null" json:"template_uid"`
-	RegionKey   string    `gorm:"column:region_key;size:64;uniqueIndex:uk_station_view_region;not null" json:"-"`
-	LayoutArea  string    `gorm:"column:layout_area;size:64;index;not null" json:"layout_area"`
-	RegionType  string    `gorm:"column:region_type;size:64;not null" json:"layout_type"`
-	LayoutJSON  string    `gorm:"column:layout_json;type:text" json:"layout_json"`
-	SortOrder   int       `gorm:"column:sort_order;default:0;index" json:"sort_order"`
-	Enabled     bool      `gorm:"column:enabled;default:true;index;not null" json:"enabled"`
-	CreatedAt   time.Time `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt   time.Time `gorm:"column:updated_at" json:"updated_at"`
+	ID             uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	TemplateUID    string    `gorm:"column:template_uid;size:128;uniqueIndex:uk_station_view_region;index;not null" json:"template_uid"`
+	RegionKey      string    `gorm:"column:region_key;size:64;uniqueIndex:uk_station_view_region;not null" json:"-"`
+	LayoutArea     string    `gorm:"column:layout_area;size:64;index;not null" json:"layout_area"`
+	RegionType     string    `gorm:"column:region_type;size:64;not null" json:"layout_type"`
+	LayoutJSON     string    `gorm:"column:layout_json;type:text" json:"layout_json"`
+	SortOrder      int       `gorm:"column:sort_order;default:0;index" json:"sort_order"`
+	Enabled        bool      `gorm:"column:enabled;default:true;index;not null" json:"enabled"`
+	SyncScope      string    `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (StationViewRegion) TableName() string {
@@ -71,20 +79,25 @@ func (StationViewRegion) TableName() string {
 }
 
 type StationViewItem struct {
-	ID          uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TemplateUID string    `gorm:"column:template_uid;size:128;index;not null" json:"template_uid"`
-	RegionKey   string    `gorm:"column:region_key;size:64;index;not null" json:"-"`
-	LayoutArea  string    `gorm:"column:layout_area;size:64;index;not null" json:"layout_area"`
-	ItemUID     string    `gorm:"column:item_uid;size:128;uniqueIndex;not null" json:"item_uid"`
-	ItemType    string    `gorm:"column:item_type;size:64;not null" json:"item_type"`
-	BindingType string    `gorm:"column:binding_type;size:64;index;not null" json:"binding_type"`
-	BindingKey  string    `gorm:"column:binding_key;size:128;index" json:"binding_key"`
-	BindingJSON string    `gorm:"column:binding_json;type:text" json:"binding_json"`
-	DisplayJSON string    `gorm:"column:display_json;type:text" json:"display_json"`
-	SortOrder   int       `gorm:"column:sort_order;default:0;index" json:"sort_order"`
-	Visible     bool      `gorm:"column:visible;default:true;index;not null" json:"visible"`
-	CreatedAt   time.Time `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt   time.Time `gorm:"column:updated_at" json:"updated_at"`
+	ID             uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	TemplateUID    string    `gorm:"column:template_uid;size:128;index;not null" json:"template_uid"`
+	RegionKey      string    `gorm:"column:region_key;size:64;index;not null" json:"-"`
+	LayoutArea     string    `gorm:"column:layout_area;size:64;index;not null" json:"layout_area"`
+	ItemUID        string    `gorm:"column:item_uid;size:128;uniqueIndex;not null" json:"item_uid"`
+	ItemType       string    `gorm:"column:item_type;size:64;not null" json:"item_type"`
+	BindingType    string    `gorm:"column:binding_type;size:64;index;not null" json:"binding_type"`
+	BindingKey     string    `gorm:"column:binding_key;size:128;index" json:"binding_key"`
+	BindingJSON    string    `gorm:"column:binding_json;type:text" json:"binding_json"`
+	DisplayJSON    string    `gorm:"column:display_json;type:text" json:"display_json"`
+	SortOrder      int       `gorm:"column:sort_order;default:0;index" json:"sort_order"`
+	Pinned         bool      `gorm:"column:pinned;default:false;index;not null" json:"pinned"`
+	Visible        bool      `gorm:"column:visible;default:true;index;not null" json:"visible"`
+	SyncScope      string    `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (StationViewItem) TableName() string {
@@ -92,14 +105,18 @@ func (StationViewItem) TableName() string {
 }
 
 type StationViewAssignment struct {
-	ID          uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TemplateUID string    `gorm:"column:template_uid;size:128;index;not null" json:"template_uid"`
-	TargetType  string    `gorm:"column:target_type;size:32;uniqueIndex:uk_station_view_assignment;index;not null" json:"target_type"`
-	TargetKey   string    `gorm:"column:target_key;size:128;uniqueIndex:uk_station_view_assignment;index;not null" json:"target_key"`
-	Priority    int       `gorm:"column:priority;default:0;index" json:"priority"`
-	Enabled     bool      `gorm:"column:enabled;default:true;index;not null" json:"enabled"`
-	CreatedAt   time.Time `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt   time.Time `gorm:"column:updated_at" json:"updated_at"`
+	ID             uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	TemplateUID    string    `gorm:"column:template_uid;size:128;index;not null" json:"template_uid"`
+	TargetType     string    `gorm:"column:target_type;size:32;uniqueIndex:uk_station_view_assignment;index;not null" json:"target_type"`
+	TargetKey      string    `gorm:"column:target_key;size:128;uniqueIndex:uk_station_view_assignment;index;not null" json:"target_key"`
+	Priority       int       `gorm:"column:priority;default:0;index" json:"priority"`
+	Enabled        bool      `gorm:"column:enabled;default:true;index;not null" json:"enabled"`
+	SyncScope      string    `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (StationViewAssignment) TableName() string {
@@ -204,6 +221,7 @@ type StationViewItemDTO struct {
 	BindingJSON      string                       `json:"binding_json,omitempty"`
 	DisplayJSON      string                       `json:"display_json,omitempty"`
 	SortOrder        int                          `json:"sort_order"`
+	Pinned           bool                         `json:"pinned"`
 	Visible          bool                         `json:"visible"`
 	ResolvedBindings []StationViewResolvedBinding `json:"resolved_bindings,omitempty"`
 }

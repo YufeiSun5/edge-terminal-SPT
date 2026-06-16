@@ -1,9 +1,12 @@
 package database
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,8 +18,18 @@ import (
 )
 
 func (r *Repository) LoadActiveDetectionTasks() ([]models.DetectionTask, error) {
+	return r.LoadActiveDetectionTasksForEdge("")
+}
+
+func (r *Repository) LoadActiveDetectionTasksForEdge(edgeInstanceID string) ([]models.DetectionTask, error) {
 	var tasks []models.DetectionTask
-	if err := r.db.Where("status = ?", "running").Order("started_at asc").Find(&tasks).Error; err != nil {
+	query := r.db.Model(&models.DetectionTask{}).
+		Joins("LEFT JOIN sys_projects p ON p.id = sys_detection_tasks.project_id").
+		Where("sys_detection_tasks.status = ?", models.DetectionStatusRunning)
+	if edgeInstanceID = strings.TrimSpace(edgeInstanceID); edgeInstanceID != "" {
+		query = query.Where("((sys_detection_tasks.edge_instance_id = ? OR sys_detection_tasks.edge_instance_id = '' OR sys_detection_tasks.edge_instance_id IS NULL) AND (p.edge_instance_id = ? OR p.edge_instance_id = '' OR p.edge_instance_id IS NULL))", edgeInstanceID, edgeInstanceID)
+	}
+	if err := query.Order("sys_detection_tasks.started_at asc").Find(&tasks).Error; err != nil {
 		return nil, err
 	}
 	if err := r.attachRunStandardItems(tasks); err != nil {
@@ -39,6 +52,16 @@ func (r *Repository) StartDetectionTask(ProjectID uint, testNo string, mode stri
 
 func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (*models.DetectionTask, error) {
 	now := time.Now()
+	opts.FactoryNo = strings.TrimSpace(opts.FactoryNo)
+	opts.TestNo = strings.TrimSpace(opts.TestNo)
+	if opts.TestNo == "" {
+		opts.TestNo = fmt.Sprintf("RUN-%s", now.Format("20060102150405.000000000"))
+		opts.TestNo = strings.ReplaceAll(opts.TestNo, ".", "")
+	}
+	opts.Mode = strings.TrimSpace(opts.Mode)
+	if opts.Mode == "" {
+		opts.Mode = "standard"
+	}
 	limitCheckEnabled := true
 	if opts.LimitCheckEnabled != nil {
 		limitCheckEnabled = *opts.LimitCheckEnabled
@@ -63,17 +86,27 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 	}
 	customConfigJSON := customDetectionConfigJSON(opts)
 	task := &models.DetectionTask{
-		TestNo:            opts.TestNo,
-		Mode:              opts.Mode,
-		Status:            models.DetectionStatusRunning,
-		StartedAt:         &now,
-		LimitCheckEnabled: limitCheckEnabled,
-		EndPolicy:         endPolicy,
-		DurationSec:       opts.DurationSec,
-		QualifiedHoldMS:   opts.QualifiedHoldMS,
-		ExpectedEndAt:     expectedEndAt,
-		OperatorNote:      opts.OperatorNote,
-		CustomConfigJSON:  customConfigJSON,
+		TestNo:                opts.TestNo,
+		FactoryNo:             opts.FactoryNo,
+		CustomerName:          strings.TrimSpace(opts.CustomerName),
+		DeviceModel:           strings.TrimSpace(opts.DeviceModel),
+		Mode:                  opts.Mode,
+		Status:                models.DetectionStatusRunning,
+		ConfigEnabled:         startDetectionConfigEnabled(opts),
+		ConfigStatus:          startDetectionConfigStatus(opts),
+		ConfigCode:            strings.TrimSpace(opts.ConfigCode),
+		ConfigName:            strings.TrimSpace(opts.ConfigName),
+		ConfigVersion:         opts.ConfigVersion,
+		ConfigHash:            strings.TrimSpace(opts.ConfigHash),
+		CurrentConfigRevision: 1,
+		StartedAt:             &now,
+		LimitCheckEnabled:     limitCheckEnabled,
+		EndPolicy:             endPolicy,
+		DurationSec:           opts.DurationSec,
+		QualifiedHoldMS:       opts.QualifiedHoldMS,
+		ExpectedEndAt:         expectedEndAt,
+		OperatorNote:          opts.OperatorNote,
+		CustomConfigJSON:      customConfigJSON,
 	}
 	var snapshotItems []models.DetectionRunStandardItem
 	var runStorageRoutes []models.DetectionRunStorageRoute
@@ -99,6 +132,7 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 		}
 		task.ProjectID = Project.ID
 		task.ProjectCode = Project.ProjectCode
+		task.EdgeInstanceID = Project.EdgeInstanceID
 
 		if opts.StandardID != nil && len(opts.CustomItems) > 0 {
 			return errors.New("standard_id and custom_items cannot both be set")
@@ -114,6 +148,12 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 			task.StandardID = &standard.ID
 			task.StandardCode = standard.StandardCode
 			task.StandardVer = standard.Version
+			task.ConfigEnabled = true
+			task.ConfigStatus = models.DetectionConfigStatusApplied
+			task.ConfigCode = firstNonEmpty(task.ConfigCode, standard.StandardCode)
+			task.ConfigName = firstNonEmpty(task.ConfigName, standard.DisplayName, standard.Name)
+			task.ConfigVersion = firstNonZero(task.ConfigVersion, standard.Version)
+			task.ConfigHash = firstNonEmpty(task.ConfigHash, standard.ConfigHash)
 			if opts.ReportTemplateID == nil && standard.ReportTemplateID != nil {
 				opts.ReportTemplateID = standard.ReportTemplateID
 			}
@@ -133,6 +173,11 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 			}
 			task.StandardCode = "custom"
 			task.StandardVer = 1
+			task.ConfigEnabled = true
+			task.ConfigStatus = models.DetectionConfigStatusApplied
+			task.ConfigCode = firstNonEmpty(task.ConfigCode, "custom")
+			task.ConfigName = firstNonEmpty(task.ConfigName, "custom")
+			task.ConfigVersion = firstNonZero(task.ConfigVersion, 1)
 			snapshotItems = makeRunStandardItems(task, models.DetectionStandard{
 				ID:           0,
 				StandardCode: "custom",
@@ -355,6 +400,9 @@ func (r *Repository) ListDetectionTasks(filter DetectionTaskFilter) ([]models.De
 	if filter.TestNo != "" {
 		query = query.Where("test_no = ?", filter.TestNo)
 	}
+	if filter.FactoryNo != "" {
+		query = query.Where("factory_no = ?", filter.FactoryNo)
+	}
 	if filter.Start != nil {
 		query = query.Where("started_at >= ?", *filter.Start)
 	}
@@ -429,6 +477,129 @@ func (r *Repository) UpdateDetectionRunStandardItem(taskID uint, varID int64, up
 	}
 	err := r.db.First(&item, "task_id = ? AND var_id = ?", taskID, varID).Error
 	return item, err
+}
+
+type ApplyDetectionConfigOptions struct {
+	TaskID        uint
+	ConfigCode    string
+	ConfigVersion int
+	ConfigHash    string
+}
+
+func (r *Repository) ApplyDetectionConfigToTask(opts ApplyDetectionConfigOptions) (models.DetectionTask, error) {
+	configCode := strings.TrimSpace(opts.ConfigCode)
+	if opts.TaskID == 0 {
+		return models.DetectionTask{}, fmt.Errorf("task_id is required")
+	}
+	if configCode == "" {
+		return models.DetectionTask{}, fmt.Errorf("config_code is required")
+	}
+	if opts.ConfigVersion <= 0 {
+		return models.DetectionTask{}, fmt.Errorf("config_version is required")
+	}
+	expectedHash := strings.TrimSpace(opts.ConfigHash)
+	if expectedHash == "" {
+		return models.DetectionTask{}, fmt.Errorf("config_hash is required")
+	}
+	var updatedTask models.DetectionTask
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var task models.DetectionTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&task, "id = ? AND status = ?", opts.TaskID, models.DetectionStatusRunning).Error; err != nil {
+			return err
+		}
+		if !task.ConfigEnabled {
+			return fmt.Errorf("config_disabled_for_run")
+		}
+		var standard models.DetectionStandard
+		if err := tx.First(&standard, "standard_code = ?", configCode).Error; err != nil {
+			return err
+		}
+		if standard.Version != opts.ConfigVersion {
+			return fmt.Errorf("config_not_ready")
+		}
+		items, err := loadDetectionStandardItems(tx, standard.ID)
+		if err != nil {
+			return err
+		}
+		localHash, err := computeDetectionStandardHash(standard, items)
+		if err != nil {
+			return err
+		}
+		if localHash != expectedHash {
+			return fmt.Errorf("config_not_ready")
+		}
+		now := time.Now()
+		nextRevision := task.CurrentConfigRevision + 1
+		if nextRevision <= 1 {
+			nextRevision = 2
+		}
+		if err := tx.Model(&models.DetectionRunStandardItem{}).
+			Where("task_id = ? AND effective_to IS NULL", task.ID).
+			Updates(map[string]interface{}{"effective_to": now}).Error; err != nil {
+			return err
+		}
+		task.StandardID = &standard.ID
+		task.StandardCode = standard.StandardCode
+		task.StandardVer = standard.Version
+		task.ConfigEnabled = true
+		task.ConfigStatus = models.DetectionConfigStatusApplied
+		task.ConfigCode = standard.StandardCode
+		task.ConfigName = firstNonEmpty(standard.DisplayName, standard.Name)
+		task.ConfigVersion = standard.Version
+		task.ConfigHash = localHash
+		task.CurrentConfigRevision = nextRevision
+		task.StartedAt = task.StartedAt
+		tagByVarID, err := loadTagsByVarID(tx, items)
+		if err != nil {
+			return err
+		}
+		snapshotItems := makeRunStandardItems(&task, standard, items, tagByVarID, now)
+		for i := range snapshotItems {
+			snapshotItems[i].TaskID = task.ID
+			snapshotItems[i].ConfigRevision = nextRevision
+			snapshotItems[i].EffectiveFrom = &now
+		}
+		if len(snapshotItems) > 0 {
+			if err := tx.Select("*").Create(&snapshotItems).Error; err != nil {
+				return err
+			}
+		}
+		runStorageRoutes, err := freezeDetectionRunStorageRoutes(tx, &task, snapshotItems, now)
+		if err != nil {
+			return err
+		}
+		if err := NewRepository(tx).EnsureProjectWideTable(task.ProjectID, runStorageRoutes); err != nil {
+			return err
+		}
+		if err := tx.Model(&models.DetectionTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+			"standard_id":             task.StandardID,
+			"standard_code":           task.StandardCode,
+			"standard_version":        task.StandardVer,
+			"config_enabled":          true,
+			"config_status":           task.ConfigStatus,
+			"config_code":             task.ConfigCode,
+			"config_name":             task.ConfigName,
+			"config_version":          task.ConfigVersion,
+			"config_hash":             task.ConfigHash,
+			"current_config_revision": task.CurrentConfigRevision,
+			"updated_at":              now,
+		}).Error; err != nil {
+			return err
+		}
+		updatedTask = task
+		updatedTask.StandardItems = snapshotItems
+		updatedTask.StorageRoutes = runStorageRoutes
+		return nil
+	})
+	if err != nil {
+		return models.DetectionTask{}, err
+	}
+	routes, err := r.ListRunStorageRoutes(updatedTask.ID)
+	if err == nil {
+		updatedTask.StorageRoutes = routes
+	}
+	return updatedTask, nil
 }
 
 func (r *Repository) CreateDetectionRunEvent(event *models.DetectionRunEvent) error {
@@ -848,6 +1019,40 @@ func (r *Repository) GetDetectionStandard(id uint) (models.DetectionStandard, er
 	return standard, nil
 }
 
+func (r *Repository) GetDetectionStandardByCode(code string) (models.DetectionStandard, error) {
+	var standard models.DetectionStandard
+	if err := r.db.First(&standard, "standard_code = ?", strings.TrimSpace(code)).Error; err != nil {
+		return standard, err
+	}
+	items, err := loadDetectionStandardItems(r.db, standard.ID)
+	if err != nil {
+		return models.DetectionStandard{}, err
+	}
+	standard.Items = items
+	return standard, nil
+}
+
+func (r *Repository) ComputeDetectionStandardHash(id uint) (string, error) {
+	standard, items, err := loadDetectionStandardWithItems(r.db, id)
+	if err != nil {
+		return "", err
+	}
+	return computeDetectionStandardHash(standard, items)
+}
+
+func (r *Repository) RefreshDetectionStandardHash(id uint) (models.DetectionStandard, error) {
+	hash, err := r.ComputeDetectionStandardHash(id)
+	if err != nil {
+		return models.DetectionStandard{}, err
+	}
+	if err := r.db.Model(&models.DetectionStandard{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{"config_hash": hash, "updated_at": time.Now()}).Error; err != nil {
+		return models.DetectionStandard{}, err
+	}
+	return r.GetDetectionStandard(id)
+}
+
 func (r *Repository) ListFavoriteDetectionStandards(userID uint) ([]models.DetectionStandard, error) {
 	var standards []models.DetectionStandard
 	err := r.db.Model(&models.DetectionStandard{}).
@@ -901,14 +1106,26 @@ func (r *Repository) CreateDetectionStandard(standard *models.DetectionStandard,
 	if standard.Version == 0 {
 		standard.Version = 1
 	}
+	if strings.TrimSpace(standard.SyncScope) == "" {
+		standard.SyncScope = "global"
+	}
 	if err := validateDetectionStandardItems(items); err != nil {
 		return err
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if id, err := r.nextID(tx, standard.TableName()); err != nil {
+			return err
+		} else if id > 0 {
+			standard.ID = uintID(id)
+		}
 		if err := tx.Create(standard).Error; err != nil {
 			return err
 		}
 		if err := hydrateDetectionStandardItemDisplayFields(tx, items); err != nil {
+			return err
+		}
+		itemIDs, err := r.nextIDs(tx, (models.DetectionStandardItem{}).TableName(), len(items))
+		if err != nil {
 			return err
 		}
 		for i := range items {
@@ -916,11 +1133,27 @@ func (r *Repository) CreateDetectionStandard(standard *models.DetectionStandard,
 			items[i].StandardID = standard.ID
 			items[i].CreatedAt = now
 			items[i].UpdatedAt = now
+			if strings.TrimSpace(items[i].SyncScope) == "" {
+				items[i].SyncScope = standard.SyncScope
+			}
+			items[i].EdgeInstanceID = standard.EdgeInstanceID
+			items[i].UpdatedByNode = standard.UpdatedByNode
+			items[i].UpdatedByUser = standard.UpdatedByUser
+			if len(itemIDs) > 0 {
+				items[i].ID = uintID(itemIDs[i])
+			}
 		}
 		if len(items) > 0 {
-			return tx.Create(&items).Error
+			if err := tx.Create(&items).Error; err != nil {
+				return err
+			}
 		}
-		return nil
+		hash, err := computeDetectionStandardHash(*standard, items)
+		if err != nil {
+			return err
+		}
+		standard.ConfigHash = hash
+		return tx.Model(&models.DetectionStandard{}).Where("id = ?", standard.ID).Update("config_hash", hash).Error
 	})
 }
 
@@ -928,8 +1161,44 @@ func (r *Repository) UpdateDetectionStandard(id uint, updates map[string]interfa
 	if len(updates) == 0 {
 		return r.GetDetectionStandard(id)
 	}
-	updates["updated_at"] = time.Now()
-	if err := r.db.Model(&models.DetectionStandard{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	normalizedUpdates := make(map[string]interface{}, len(updates)+1)
+	for key, value := range updates {
+		normalizedUpdates[key] = value
+	}
+	now := time.Now()
+	normalizedUpdates["updated_at"] = now
+	delete(normalizedUpdates, "config_hash")
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
+		var current models.DetectionStandard
+		if err := tx.First(&current, "id = ?", id).Error; err != nil {
+			return err
+		}
+		targetVersion := current.Version + 1
+		if explicitVersion, ok := normalizedUpdates["version"]; ok {
+			parsed, err := detectionStandardVersionValue(explicitVersion)
+			if err != nil {
+				return err
+			}
+			targetVersion = parsed
+			delete(normalizedUpdates, "version")
+		}
+		if err := tx.Model(&models.DetectionStandard{}).Where("id = ?", id).Updates(normalizedUpdates).Error; err != nil {
+			return err
+		}
+		standard, items, err := loadDetectionStandardWithItems(tx, id)
+		if err != nil {
+			return err
+		}
+		standard.Version = targetVersion
+		hash, err := computeDetectionStandardHash(standard, items)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.DetectionStandard{}).Where("id = ?", id).Update("config_hash", hash).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.DetectionStandard{}).Where("id = ?", id).Updates(map[string]interface{}{"version": targetVersion, "updated_at": now}).Error
+	}); err != nil {
 		return models.DetectionStandard{}, err
 	}
 	return r.GetDetectionStandard(id)
@@ -945,10 +1214,15 @@ func (r *Repository) ReplaceDetectionStandardItems(standardID uint, items []mode
 		if err := tx.First(&standard, "id = ?", standardID).Error; err != nil {
 			return err
 		}
+		targetVersion := standard.Version + 1
 		if err := tx.Delete(&models.DetectionStandardItem{}, "standard_id = ?", standardID).Error; err != nil {
 			return err
 		}
 		if err := hydrateDetectionStandardItemDisplayFields(tx, items); err != nil {
+			return err
+		}
+		itemIDs, err := r.nextIDs(tx, (models.DetectionStandardItem{}).TableName(), len(items))
+		if err != nil {
 			return err
 		}
 		for i := range items {
@@ -956,18 +1230,37 @@ func (r *Repository) ReplaceDetectionStandardItems(standardID uint, items []mode
 			items[i].StandardID = standardID
 			items[i].CreatedAt = now
 			items[i].UpdatedAt = now
+			if strings.TrimSpace(items[i].SyncScope) == "" {
+				items[i].SyncScope = firstNonEmpty(standard.SyncScope, "global")
+			}
+			items[i].EdgeInstanceID = standard.EdgeInstanceID
+			items[i].UpdatedByNode = standard.UpdatedByNode
+			items[i].UpdatedByUser = standard.UpdatedByUser
+			if len(itemIDs) > 0 {
+				items[i].ID = uintID(itemIDs[i])
+			}
 		}
 		if len(items) > 0 {
 			if err := tx.Create(&items).Error; err != nil {
 				return err
 			}
 		}
-		return tx.Model(&models.DetectionStandard{}).
-			Where("id = ?", standardID).
-			Updates(map[string]interface{}{
-				"version":    gorm.Expr("version + 1"),
-				"updated_at": now,
-			}).Error
+		if err := tx.Model(&models.DetectionStandard{}).Where("id = ?", standardID).Update("updated_at", now).Error; err != nil {
+			return err
+		}
+		standard, items, err := loadDetectionStandardWithItems(tx, standardID)
+		if err != nil {
+			return err
+		}
+		standard.Version = targetVersion
+		hash, err := computeDetectionStandardHash(standard, items)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.DetectionStandard{}).Where("id = ?", standardID).Update("config_hash", hash).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.DetectionStandard{}).Where("id = ?", standardID).Update("version", targetVersion).Error
 	})
 	if err != nil {
 		return models.DetectionStandard{}, err
@@ -999,11 +1292,115 @@ func loadDetectionStandardWithItems(db *gorm.DB, id uint) (models.DetectionStand
 	if err := db.First(&standard, "id = ?", id).Error; err != nil {
 		return standard, nil, err
 	}
+	items, err := loadDetectionStandardItems(db, id)
+	return standard, items, err
+}
+
+func loadDetectionStandardItems(db *gorm.DB, id uint) ([]models.DetectionStandardItem, error) {
 	var items []models.DetectionStandardItem
 	if err := db.Where("standard_id = ?", id).Order("sort_order asc, id asc").Find(&items).Error; err != nil {
-		return standard, nil, err
+		return nil, err
 	}
-	return standard, items, nil
+	return items, nil
+}
+
+func computeDetectionStandardHash(standard models.DetectionStandard, items []models.DetectionStandardItem) (string, error) {
+	type hashItem struct {
+		VarID           int64    `json:"var_id"`
+		VarName         string   `json:"var_name"`
+		DisplayName     string   `json:"display_name"`
+		DisplayNameEN   string   `json:"display_name_en"`
+		DisplayNameJA   string   `json:"display_name_ja"`
+		CheckEnabled    bool     `json:"check_enabled"`
+		AlarmEnabled    bool     `json:"alarm_enabled"`
+		StoreEnabled    bool     `json:"store_enabled"`
+		CheckCycleMS    int      `json:"check_cycle_ms"`
+		CheckOnStart    bool     `json:"check_on_start"`
+		Required        bool     `json:"required"`
+		CheckMethod     string   `json:"check_method"`
+		TargetValue     string   `json:"target_value"`
+		LimitLL         *float64 `json:"limit_ll"`
+		LimitL          *float64 `json:"limit_l"`
+		LimitH          *float64 `json:"limit_h"`
+		LimitHH         *float64 `json:"limit_hh"`
+		LimitDeadband   float64  `json:"limit_deadband"`
+		ViolationHoldMS int      `json:"violation_hold_ms"`
+		RecoverHoldMS   int      `json:"recover_hold_ms"`
+		QualityPolicy   string   `json:"quality_policy"`
+		Unit            string   `json:"unit"`
+		DecimalPlaces   int      `json:"decimal_places"`
+		SortOrder       int      `json:"sort_order"`
+	}
+	payload := struct {
+		StandardCode     string     `json:"standard_code"`
+		Name             string     `json:"name"`
+		DisplayName      string     `json:"display_name"`
+		DisplayNameEN    string     `json:"display_name_en"`
+		DisplayNameJA    string     `json:"display_name_ja"`
+		ProjectCode      string     `json:"project_code"`
+		Mode             string     `json:"mode"`
+		ReportTemplateID *uint      `json:"report_template_id"`
+		Version          int        `json:"version"`
+		Enabled          bool       `json:"enabled"`
+		Items            []hashItem `json:"items"`
+	}{
+		StandardCode:     strings.TrimSpace(standard.StandardCode),
+		Name:             strings.TrimSpace(standard.Name),
+		DisplayName:      strings.TrimSpace(standard.DisplayName),
+		DisplayNameEN:    strings.TrimSpace(standard.DisplayNameEN),
+		DisplayNameJA:    strings.TrimSpace(standard.DisplayNameJA),
+		ProjectCode:      strings.TrimSpace(standard.ProjectCode),
+		Mode:             strings.TrimSpace(standard.Mode),
+		ReportTemplateID: standard.ReportTemplateID,
+		Version:          standard.Version,
+		Enabled:          standard.Enabled,
+		Items:            make([]hashItem, 0, len(items)),
+	}
+	sorted := append([]models.DetectionStandardItem(nil), items...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].SortOrder != sorted[j].SortOrder {
+			return sorted[i].SortOrder < sorted[j].SortOrder
+		}
+		if sorted[i].VarID != sorted[j].VarID {
+			return sorted[i].VarID < sorted[j].VarID
+		}
+		return sorted[i].VarName < sorted[j].VarName
+	})
+	for _, item := range sorted {
+		applyDetectionStandardItemDefaults(&item)
+		payload.Items = append(payload.Items, hashItem{
+			VarID:           item.VarID,
+			VarName:         strings.TrimSpace(item.VarName),
+			DisplayName:     strings.TrimSpace(item.DisplayName),
+			DisplayNameEN:   strings.TrimSpace(item.DisplayNameEN),
+			DisplayNameJA:   strings.TrimSpace(item.DisplayNameJA),
+			CheckEnabled:    item.CheckEnabled,
+			AlarmEnabled:    item.AlarmEnabled,
+			StoreEnabled:    item.StoreEnabled,
+			CheckCycleMS:    item.CheckCycleMS,
+			CheckOnStart:    item.CheckOnStart,
+			Required:        item.Required,
+			CheckMethod:     strings.TrimSpace(item.CheckMethod),
+			TargetValue:     strings.TrimSpace(item.TargetValue),
+			LimitLL:         item.LimitLL,
+			LimitL:          item.LimitL,
+			LimitH:          item.LimitH,
+			LimitHH:         item.LimitHH,
+			LimitDeadband:   item.LimitDeadband,
+			ViolationHoldMS: item.ViolationHoldMS,
+			RecoverHoldMS:   item.RecoverHoldMS,
+			QualityPolicy:   strings.TrimSpace(item.QualityPolicy),
+			Unit:            strings.TrimSpace(item.Unit),
+			DecimalPlaces:   item.DecimalPlaces,
+			SortOrder:       item.SortOrder,
+		})
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func loadTagsByVarID(db *gorm.DB, items []models.DetectionStandardItem) (map[int64]models.TagConfig, error) {
@@ -1042,6 +1439,7 @@ func makeRunStandardItems(task *models.DetectionTask, standard models.DetectionS
 			TestNo:                         task.TestNo,
 			StandardID:                     standard.ID,
 			StandardItemID:                 item.ID,
+			ConfigRevision:                 task.CurrentConfigRevision,
 			VarID:                          item.VarID,
 			VarName:                        item.VarName,
 			DisplayName:                    item.DisplayName,
@@ -1074,6 +1472,7 @@ func makeRunStandardItems(task *models.DetectionTask, standard models.DetectionS
 			Unit:                           item.Unit,
 			DecimalPlaces:                  item.DecimalPlaces,
 			SortOrder:                      item.SortOrder,
+			EffectiveFrom:                  task.StartedAt,
 			CreatedAt:                      now,
 		})
 	}
@@ -1621,10 +2020,69 @@ func reportRequestDedupeKey(variable reportRequestVariableSpec) string {
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
-			return value
+			return strings.TrimSpace(value)
 		}
 	}
 	return ""
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func detectionStandardVersionValue(value interface{}) (int, error) {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return typed, nil
+		}
+	case int64:
+		if typed > 0 {
+			return int(typed), nil
+		}
+	case int32:
+		if typed > 0 {
+			return int(typed), nil
+		}
+	case uint:
+		if typed > 0 {
+			return int(typed), nil
+		}
+	case uint64:
+		if typed > 0 {
+			return int(typed), nil
+		}
+	case uint32:
+		if typed > 0 {
+			return int(typed), nil
+		}
+	}
+	return 0, fmt.Errorf("version must be positive")
+}
+
+func startDetectionConfigEnabled(opts StartDetectionOptions) bool {
+	if opts.ConfigEnabled != nil {
+		return *opts.ConfigEnabled
+	}
+	return opts.StandardID != nil || len(opts.CustomItems) > 0 || strings.TrimSpace(opts.ConfigCode) != ""
+}
+
+func startDetectionConfigStatus(opts StartDetectionOptions) string {
+	if !startDetectionConfigEnabled(opts) {
+		return models.DetectionConfigStatusDisabled
+	}
+	if opts.StandardID != nil || len(opts.CustomItems) > 0 {
+		return models.DetectionConfigStatusApplied
+	}
+	if strings.TrimSpace(opts.ConfigCode) != "" {
+		return models.DetectionConfigStatusWaiting
+	}
+	return models.DetectionConfigStatusPending
 }
 
 func firstMapValue(values map[string]any, keys ...string) any {

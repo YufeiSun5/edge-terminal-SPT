@@ -13,6 +13,7 @@ type Config struct {
 	App        AppConfig      `json:"app"`
 	Database   DatabaseConfig `json:"database"`
 	Auth       AuthConfig     `json:"auth"`
+	Sync       SyncConfig     `json:"sync"`
 	Gateways   []GatewaySeed  `json:"gateways"`
 }
 
@@ -41,6 +42,12 @@ type AuthConfig struct {
 	BootstrapAdminUsername string              `json:"bootstrap_admin_username"`
 	BootstrapAdminPassword string              `json:"bootstrap_admin_password"`
 	ServiceClients         []ServiceClientSeed `json:"service_clients"`
+}
+
+type SyncConfig struct {
+	NodeID                     uint64 `json:"node_id"`
+	IDBlockSize                uint64 `json:"id_block_size"`
+	ConfigWatchIntervalSeconds int    `json:"config_watch_interval_seconds"`
 }
 
 type ServiceClientSeed struct {
@@ -136,6 +143,11 @@ func Default() *Config {
 			BootstrapAdminUsername: "admin",
 			BootstrapAdminPassword: "Admin@12345",
 		},
+		Sync: SyncConfig{
+			NodeID:                     1,
+			IDBlockSize:                1000000000000,
+			ConfigWatchIntervalSeconds: 5,
+		},
 	}
 }
 
@@ -181,6 +193,15 @@ func normalize(cfg *Config) {
 	}
 	if cfg.Auth.BootstrapAdminPassword == "" {
 		cfg.Auth.BootstrapAdminPassword = "Admin@12345"
+	}
+	if cfg.Sync.NodeID == 0 {
+		cfg.Sync.NodeID = 1
+	}
+	if cfg.Sync.IDBlockSize == 0 {
+		cfg.Sync.IDBlockSize = 1000000000000
+	}
+	if cfg.Sync.ConfigWatchIntervalSeconds <= 0 {
+		cfg.Sync.ConfigWatchIntervalSeconds = 5
 	}
 }
 
@@ -229,6 +250,21 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("EDGE_BOOTSTRAP_ADMIN_PASSWORD"); value != "" {
 		cfg.Auth.BootstrapAdminPassword = value
+	}
+	if value := os.Getenv("EDGE_NODE_ID"); value != "" {
+		if nodeID, err := strconv.ParseUint(value, 10, 64); err == nil {
+			cfg.Sync.NodeID = nodeID
+		}
+	}
+	if value := os.Getenv("EDGE_ID_BLOCK_SIZE"); value != "" {
+		if blockSize, err := strconv.ParseUint(value, 10, 64); err == nil {
+			cfg.Sync.IDBlockSize = blockSize
+		}
+	}
+	if value := os.Getenv("EDGE_CONFIG_WATCH_INTERVAL_SECONDS"); value != "" {
+		if interval, err := strconv.Atoi(value); err == nil {
+			cfg.Sync.ConfigWatchIntervalSeconds = interval
+		}
 	}
 	if value := os.Getenv("EDGE_MAIN_SERVICE_TOKEN"); value != "" {
 		clientID := os.Getenv("EDGE_MAIN_SERVICE_CLIENT_ID")

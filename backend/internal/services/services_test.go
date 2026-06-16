@@ -108,6 +108,49 @@ func TestVariablesServiceCreateAndReload(t *testing.T) {
 	}
 }
 
+func TestVariablesServiceListUsesLocalEdgeInstance(t *testing.T) {
+	db := newServiceTestDB(t)
+	repo := database.NewRepository(db)
+	if err := repo.UpsertGatewaySeeds([]models.GatewayConfig{
+		{ID: 1, Name: "local", EdgeInstanceID: "edge-local", Broker: "tcp://127.0.0.1:1883", ClientID: "local", Topic: "topic", Enabled: true},
+		{ID: 2, Name: "other", EdgeInstanceID: "edge-other", Broker: "tcp://127.0.0.1:1884", ClientID: "other", Topic: "topic", Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	localProject := &models.Project{ProjectCode: "AC-LOCAL", EdgeInstanceID: "edge-local", Name: "Local", Enabled: true}
+	otherProject := &models.Project{ProjectCode: "AC-OTHER", EdgeInstanceID: "edge-other", Name: "Other", Enabled: true}
+	for _, project := range []*models.Project{localProject, otherProject} {
+		if err := repo.CreateProject(project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixtures := []models.TagConfig{
+		{VarID: 201, GatewayID: 1, SourcePath: "local-assigned", RawName: "local-assigned", ProjectID: &localProject.ID, ProjectCode: localProject.ProjectCode, VarName: "local_assigned", JSONPath: "local-assigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+		{VarID: 202, GatewayID: 2, SourcePath: "other-assigned", RawName: "other-assigned", ProjectID: &otherProject.ID, ProjectCode: otherProject.ProjectCode, VarName: "other_assigned", JSONPath: "other-assigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+	}
+	for i := range fixtures {
+		if err := repo.CreateTag(&fixtures[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := NewVariablesService(repo, pipeline.NewTagManager(), "edge-local")
+	listed, err := service.List(database.TagFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].VarID != 201 {
+		t.Fatalf("local edge list should only include local project variables, got %+v", listed)
+	}
+	mismatch, err := service.List(database.TagFilter{ProjectID: &localProject.ID, EdgeInstanceID: "edge-other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mismatch) != 0 {
+		t.Fatalf("explicit non-local edge query should return no variables, got %+v", mismatch)
+	}
+}
+
 func TestVariablesServiceBulkRemapKIOProjects(t *testing.T) {
 	db := newServiceTestDB(t)
 	repo := database.NewRepository(db)
@@ -197,6 +240,19 @@ func TestVariablesServiceBulkRemapKIOProjects(t *testing.T) {
 	}
 	if disabled.VarName != "mapped_01_39" || disabled.Enabled {
 		t.Fatalf("expected var_name preserved and disabled, got %+v", disabled)
+	}
+}
+
+func TestVariablesServiceBulkRemapKIOProjectsRejectsOutsideTestRange(t *testing.T) {
+	db := newServiceTestDB(t)
+	repo := database.NewRepository(db)
+	service := NewVariablesService(repo, pipeline.NewTagManager())
+
+	if _, err := service.BulkRemapKIOProjects(BulkRemapKIOProjectsInput{ProjectCount: 13}); err == nil {
+		t.Fatal("expected project_count above AC-01..AC-12 test range to be rejected")
+	}
+	if projects, err := repo.ListProjects(); err != nil || len(projects) != 0 {
+		t.Fatalf("rejected bulk remap should not create projects len=%d err=%v", len(projects), err)
 	}
 }
 
@@ -416,11 +472,11 @@ func TestDetectionRunsServiceLifecycleAndNotes(t *testing.T) {
 	flows.Start(1)
 	service := NewDetectionRunsService(repo, taskManager, DetectionRunsRuntimeDeps{Channels: channels, Flows: flows})
 
-	task, err := service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-1", Mode: "standard", DurationSec: 60, OperatorNote: "note"})
+	task, err := service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-1", FactoryNo: "F-T-SVC-1", Mode: "standard", DurationSec: 60, OperatorNote: "note"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-2", Mode: "standard"}); !errors.Is(err, database.ErrProjectAlreadyRunning) {
+	if _, err := service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-2", FactoryNo: "F-T-SVC-2", Mode: "standard"}); !errors.Is(err, database.ErrProjectAlreadyRunning) {
 		t.Fatalf("expected duplicate running error, got %v", err)
 	}
 	if _, err := service.AddNote(AddNoteInput{TaskID: task.ID, Content: "memo", ActorType: "user", ActorID: "1"}); err != nil {
@@ -486,7 +542,7 @@ func TestDetectionRunsServiceLifecycleAndNotes(t *testing.T) {
 	if !hasServiceNotification(notifications, models.NotificationDetectionRunStarted) || !hasServiceNotification(notifications, models.NotificationDetectionRunStopped) || !hasServiceNotification(notifications, models.NotificationDetectionResultOK) {
 		t.Fatalf("expected lifecycle and ok notifications, got %+v", notifications)
 	}
-	task, err = service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-3", Mode: "standard"})
+	task, err = service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-3", FactoryNo: "F-T-SVC-3", Mode: "standard"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +660,7 @@ func TestDetectionRunsServiceStartSnapshotsAndInitialAlarm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-SNAPSHOT", Mode: "standard", StandardID: &standard.ID})
+	task, err := service.Start(database.StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-SVC-SNAPSHOT", FactoryNo: "F-T-SVC-SNAPSHOT", Mode: "standard", StandardID: &standard.ID})
 	if err != nil {
 		t.Fatal(err)
 	}

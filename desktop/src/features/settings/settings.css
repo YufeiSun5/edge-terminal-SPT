@@ -489,6 +489,94 @@
   border-radius: 999px;
 }
 
+.settings-station-view-module {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-station-view-toolbar {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.2fr) minmax(160px, 0.45fr) minmax(260px, 1fr);
+  gap: 10px;
+}
+
+.settings-station-view-toolbar > div {
+  min-height: 64px;
+  padding: 10px 12px;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.settings-station-view-toolbar span,
+.settings-station-view-toolbar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-station-view-toolbar span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.settings-station-view-toolbar strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.settings-station-view-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-station-view-card {
+  min-height: 210px;
+}
+
+.settings-station-view-card > div {
+  width: 100%;
+  display: grid;
+  gap: 10px;
+}
+
+.settings-station-view-card .ant-select {
+  width: 100%;
+}
+
+.settings-station-view-table {
+  min-height: 390px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.66);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.settings-panel-head.compact {
+  margin-bottom: 10px;
+}
+
+.settings-station-variable-cell strong,
+.settings-station-variable-cell span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-station-variable-cell strong {
+  color: #0f172a;
+}
+
+.settings-station-variable-cell span {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .settings-log-preview-card {
   grid-column: 1 / -1;
   display: grid;

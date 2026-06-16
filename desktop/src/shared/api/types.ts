@@ -441,6 +441,7 @@ export type VariableListParams = {
   gateway_id?: number;
   edge_instance_id?: string;
   project_id?: number;
+  assigned?: boolean;
   project_code?: string;
   var_group?: string;
   writable?: boolean;
@@ -448,6 +449,15 @@ export type VariableListParams = {
   discovered?: boolean;
   source_type?: "mqtt" | "virtual" | "manual" | string;
   keyword?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type VariableListResponse = {
+  items: VariableConfig[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type BulkRemapKioProjectsPayload = Partial<{
@@ -574,18 +584,29 @@ export type TagSnapshot = {
 export type ActiveDetectionRun = {
   id: number;
   test_no: string;
+  factory_no?: string;
   project_id: number;
   project_code: string;
   mode: string;
   standard_id?: number;
   standard_code: string;
   standard_version: number;
+  config_enabled?: boolean;
+  config_status?: string;
+  config_code?: string;
+  config_name?: string;
+  config_version?: number;
+  config_hash?: string;
+  config_revision?: number;
 };
 
 export type DetectionRunStandardItem = DetectionStandardItem & {
   task_id: number;
   test_no: string;
   standard_item_id: number;
+  config_revision?: number;
+  effective_from?: string;
+  effective_to?: string;
   variable_default_alarm_enabled: boolean;
   variable_default_limit_ll?: number | null;
   variable_default_limit_l?: number | null;
@@ -806,6 +827,9 @@ export type DetectionRunSummary = {
 export type DetectionRun = {
   id: number;
   test_no: string;
+  factory_no: string;
+  customer_name: string;
+  device_model: string;
   project_id: number;
   project_code: string;
   mode: string;
@@ -813,6 +837,13 @@ export type DetectionRun = {
   standard_id?: number;
   standard_code: string;
   standard_version: number;
+  config_enabled: boolean;
+  config_status: string;
+  config_code: string;
+  config_name: string;
+  config_version: number;
+  config_hash: string;
+  current_config_revision: number;
   started_at?: string;
   ended_at?: string;
   duration_sec: number;
@@ -838,6 +869,7 @@ export type DetectionRunListParams = {
   project_code?: string;
   status?: string;
   test_no?: string;
+  factory_no?: string;
   start?: string;
   end?: string;
   limit?: number;
@@ -852,9 +884,17 @@ export type DetectionRunListResponse = {
 export type DetectionRunStartPayload = {
   project_id: number;
   project_code?: string;
-  test_no: string;
-  mode: string;
+  test_no?: string;
+  factory_no: string;
+  customer_name?: string;
+  device_model?: string;
+  mode?: string;
   standard_id?: number;
+  config_enabled: boolean;
+  config_code?: string;
+  config_name?: string;
+  config_version?: number;
+  config_hash?: string;
   duration_sec?: number;
   operator_note?: string;
   report_template_id?: number;
@@ -926,6 +966,7 @@ export type DetectionStandard = {
   mode: string;
   report_template_id?: number;
   version: number;
+  config_hash: string;
   enabled: boolean;
   remark: string;
   created_at: string;
@@ -1136,6 +1177,7 @@ export type StationViewItem = {
   binding_json?: string;
   display_json?: string;
   sort_order: number;
+  pinned: boolean;
   visible: boolean;
   resolved_bindings?: StationViewResolvedBinding[];
 };
@@ -1149,13 +1191,14 @@ export type StationViewItemsResponse = {
 
 export type StationViewItemPayload = {
   item_uid: string;
-  layout_area: StationViewLayoutArea;
+  layout_area: StationViewLayoutArea | string;
   item_type: string;
   binding_type: "var_name" | "var_group" | "detection_items" | "alarm_summary" | "run_state" | "manual" | string;
   binding_key: string;
   binding_json?: string;
   display_json?: string;
   sort_order: number;
+  pinned?: boolean;
   visible: boolean;
 };
 
@@ -1282,6 +1325,7 @@ export type HistoryDataParams = {
   project_code?: string;
   task_id?: number;
   test_no?: string;
+  factory_no?: string;
   start?: string;
   end?: string;
   limit?: number;

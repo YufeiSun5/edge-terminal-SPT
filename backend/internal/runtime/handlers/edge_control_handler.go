@@ -19,10 +19,12 @@ import (
 )
 
 type EdgeControlHandler struct {
-	repo      *database.Repository
-	detection *services.DetectionRunsService
-	variables *services.VariableWriteService
-	now       func() time.Time
+	repo            *database.Repository
+	detection       *services.DetectionRunsService
+	variables       *services.VariableWriteService
+	runtimeSettings *services.RuntimeSettingsService
+	notify          *services.NotificationHub
+	now             func() time.Time
 }
 
 type edgeControlEnvelope struct {
@@ -44,6 +46,22 @@ func NewEdgeControlHandler(repo *database.Repository, detection *services.Detect
 	return &EdgeControlHandler{repo: repo, detection: detection, variables: variables, now: time.Now}
 }
 
+func (h *EdgeControlHandler) WithRuntimeSettings(runtimeSettings *services.RuntimeSettingsService) *EdgeControlHandler {
+	h.runtimeSettings = runtimeSettings
+	return h
+}
+
+func (h *EdgeControlHandler) WithNotificationHub(hub *services.NotificationHub) *EdgeControlHandler {
+	h.notify = hub
+	return h
+}
+
+type edgeControlAsyncAccepted struct {
+	Status   string         `json:"status"`
+	TargetID string         `json:"target_id,omitempty"`
+	Result   map[string]any `json:"result"`
+}
+
 func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.Service) {
 	control := group.Group("/edge-control")
 	control.GET("/commands/:command_id", authService.RequireServiceScope(auth.ScopeServiceRuntimeRead), h.commandStatus)
@@ -54,6 +72,7 @@ func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.
 	control.POST("/detection/resume", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("detection.resume", "task", h.resumeDetection))
 	control.POST("/detection/mute-alarms", authService.RequireServiceScope(auth.ScopeEdgeAlarmMute), h.handle("detection.mute_alarms", "task", h.muteDetectionAlarms))
 	control.POST("/detection/update-limits", authService.RequireServiceScope(auth.ScopeEdgeLimitUpdate), h.handle("detection.update_limits", "task", h.updateDetectionLimits))
+	control.POST("/detection/apply-config", authService.RequireServiceScope(auth.ScopeEdgeLimitUpdate), h.handle("detection.apply_config", "task", h.applyDetectionConfig))
 	control.POST("/detection/refresh-features", authService.RequireServiceScope(auth.ScopeEdgeFeatureRefresh), h.handle("detection.refresh_features", "task", h.refreshDetectionFeatures))
 	control.POST("/detection/report-requests", authService.RequireServiceScope(auth.ScopeEdgeReportRequest), h.handle("detection.report_request", "task", h.createReportRequests))
 	control.POST("/variables/write", authService.RequireServiceScope(auth.ScopeEdgeVariableWrite), h.handle("variable.write", "variable", h.writeVariable))
@@ -147,6 +166,21 @@ func (h *EdgeControlHandler) handle(action string, targetType string, execute fu
 			h.writeErrorWithResult(c, status, envelope.CommandID, "failed", code, message, retryable, result)
 			return
 		}
+		if accepted, ok := result.(edgeControlAsyncAccepted); ok {
+			if accepted.TargetID != "" {
+				targetID = accepted.TargetID
+			}
+			_ = h.repo.UpdateEdgeControlCommandResult(command.ID, "running", targetID, marshalJSON(accepted.Result), "", "")
+			command.TargetID = targetID
+			h.audit(principal, edgeUser, command, "accepted", "", started)
+			c.JSON(http.StatusAccepted, gin.H{
+				"ok":         true,
+				"command_id": envelope.CommandID,
+				"status":     accepted.Status,
+				"result":     accepted.Result,
+			})
+			return
+		}
 
 		resultJSON := marshalJSON(result)
 		_ = h.repo.CompleteEdgeControlCommand(command.ID, "success", targetID, resultJSON, "", "")
@@ -204,8 +238,47 @@ func (h *EdgeControlHandler) startDetection(c *gin.Context, envelope edgeControl
 	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
 		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
 	}
-	if req.ProjectID == 0 || strings.TrimSpace(req.TestNo) == "" || strings.TrimSpace(req.Mode) == "" {
-		return nil, "", edgeControlRequestError("invalid_payload", "project_id, test_no, and mode are required", false, http.StatusBadRequest)
+	if req.ProjectID == 0 {
+		return nil, "", edgeControlRequestError("invalid_payload", "project_id is required", false, http.StatusBadRequest)
+	}
+	if req.ConfigEnabled != nil && *req.ConfigEnabled && strings.TrimSpace(req.ConfigCode) != "" {
+		if ready, detail := h.detectionConfigReady(req); !ready {
+			principal, _ := auth.PrincipalFromContext(c)
+			edgeUser, _ := h.resolveOperator(c, envelope)
+			operatorNote := req.OperatorNote
+			if operatorNote == "" {
+				operatorNote = envelope.Reason
+			}
+			opts := database.StartDetectionOptions{
+				ProjectID:        req.ProjectID,
+				TestNo:           req.TestNo,
+				FactoryNo:        req.FactoryNo,
+				CustomerName:     req.CustomerName,
+				DeviceModel:      req.DeviceModel,
+				Mode:             req.Mode,
+				StandardID:       req.StandardID,
+				ConfigEnabled:    req.ConfigEnabled,
+				ConfigCode:       req.ConfigCode,
+				ConfigName:       req.ConfigName,
+				ConfigVersion:    req.ConfigVersion,
+				ConfigHash:       req.ConfigHash,
+				DurationSec:      req.DurationSec,
+				OperatorNote:     operatorNote,
+				ReportTemplateID: req.ReportTemplateID,
+				ReportRequest:    req.ReportRequest,
+				StartedByUserID:  edgeUser.ID,
+			}
+			h.publishConfigNotification(models.NotificationDetectionConfigWaiting, models.NotificationLevelInfo, req.ProjectID, "detection config is waiting for database sync", detail)
+			go h.waitAndStartDetection(principal.ClientID, envelope.CommandID, opts, detail)
+			return edgeControlAsyncAccepted{
+				Status: "config_waiting",
+				Result: map[string]any{
+					"status":     "config_waiting",
+					"project_id": req.ProjectID,
+					"detail":     detail,
+				},
+			}, strconv.FormatUint(uint64(req.ProjectID), 10), nil
+		}
 	}
 	edgeUser, _ := h.resolveOperator(c, envelope)
 	operatorNote := req.OperatorNote
@@ -215,8 +288,16 @@ func (h *EdgeControlHandler) startDetection(c *gin.Context, envelope edgeControl
 	task, err := h.detection.Start(database.StartDetectionOptions{
 		ProjectID:        req.ProjectID,
 		TestNo:           req.TestNo,
+		FactoryNo:        req.FactoryNo,
+		CustomerName:     req.CustomerName,
+		DeviceModel:      req.DeviceModel,
 		Mode:             req.Mode,
 		StandardID:       req.StandardID,
+		ConfigEnabled:    req.ConfigEnabled,
+		ConfigCode:       req.ConfigCode,
+		ConfigName:       req.ConfigName,
+		ConfigVersion:    req.ConfigVersion,
+		ConfigHash:       req.ConfigHash,
 		DurationSec:      req.DurationSec,
 		OperatorNote:     operatorNote,
 		ReportTemplateID: req.ReportTemplateID,
@@ -227,6 +308,146 @@ func (h *EdgeControlHandler) startDetection(c *gin.Context, envelope edgeControl
 		return nil, "", err
 	}
 	return task, strconv.FormatUint(uint64(task.ID), 10), nil
+}
+
+func (h *EdgeControlHandler) waitAndStartDetection(clientID string, commandID string, opts database.StartDetectionOptions, firstDetail map[string]any) {
+	timeout := h.configReadyTimeout()
+	interval := h.configReadyInterval()
+	deadline := time.Now().Add(timeout)
+	attempts := 1
+	req := startDetectionRequest{
+		ProjectID:        opts.ProjectID,
+		TestNo:           opts.TestNo,
+		FactoryNo:        opts.FactoryNo,
+		CustomerName:     opts.CustomerName,
+		DeviceModel:      opts.DeviceModel,
+		Mode:             opts.Mode,
+		StandardID:       opts.StandardID,
+		ConfigEnabled:    opts.ConfigEnabled,
+		ConfigCode:       opts.ConfigCode,
+		ConfigName:       opts.ConfigName,
+		ConfigVersion:    opts.ConfigVersion,
+		ConfigHash:       opts.ConfigHash,
+		DurationSec:      opts.DurationSec,
+		OperatorNote:     opts.OperatorNote,
+		ReportTemplateID: opts.ReportTemplateID,
+	}
+	var lastDetail map[string]any
+	for {
+		ready, detail := h.detectionConfigReady(req)
+		lastDetail = detail
+		if ready {
+			task, err := h.detection.Start(opts)
+			if err != nil {
+				_ = h.completeCommandByIdentity(clientID, commandID, "failed", "", map[string]any{"status": "failed", "error": err.Error(), "detail": detail}, edgeControlErrorCode(err), err.Error())
+				h.publishConfigNotification(models.NotificationDetectionConfigNotReady, models.NotificationLevelWarning, opts.ProjectID, "detection start failed after config ready", map[string]any{"command_id": commandID, "error": err.Error(), "detail": detail})
+				return
+			}
+			result := map[string]any{"status": "success", "task": task, "attempts": attempts}
+			_ = h.completeCommandByIdentity(clientID, commandID, "success", strconv.FormatUint(uint64(task.ID), 10), result, "", "")
+			return
+		}
+		if !time.Now().Add(interval).Before(deadline) {
+			break
+		}
+		attempts++
+		time.Sleep(interval)
+	}
+	result := map[string]any{
+		"status":       "config_not_ready",
+		"attempts":     attempts,
+		"timeout_ms":   timeout.Milliseconds(),
+		"first_detail": firstDetail,
+		"last_detail":  lastDetail,
+	}
+	_ = h.completeCommandByIdentity(clientID, commandID, "failed", "", result, "config_not_ready", "detection config is not synchronized to edge")
+	h.publishConfigNotification(models.NotificationDetectionConfigNotReady, models.NotificationLevelWarning, opts.ProjectID, "detection config is not ready", map[string]any{"command_id": commandID, "attempts": attempts, "timeout_ms": timeout.Milliseconds(), "detail": lastDetail})
+}
+
+func (h *EdgeControlHandler) detectionConfigReady(req startDetectionRequest) (bool, map[string]any) {
+	detail := map[string]any{
+		"config_code":      strings.TrimSpace(req.ConfigCode),
+		"config_name":      strings.TrimSpace(req.ConfigName),
+		"expected_version": req.ConfigVersion,
+		"expected_hash":    strings.TrimSpace(req.ConfigHash),
+	}
+	if strings.TrimSpace(req.ConfigCode) == "" || req.ConfigVersion <= 0 || strings.TrimSpace(req.ConfigHash) == "" {
+		detail["reason"] = "config_reference_incomplete"
+		return false, detail
+	}
+	standard, err := h.repo.GetDetectionStandardByCode(req.ConfigCode)
+	if err != nil {
+		detail["reason"] = "config_missing"
+		detail["error"] = err.Error()
+		return false, detail
+	}
+	localHash, err := h.repo.ComputeDetectionStandardHash(standard.ID)
+	if err != nil {
+		detail["reason"] = "config_hash_failed"
+		detail["error"] = err.Error()
+		return false, detail
+	}
+	detail["local_version"] = standard.Version
+	detail["local_hash"] = localHash
+	detail["local_config_hash"] = standard.ConfigHash
+	if standard.Version != req.ConfigVersion {
+		detail["reason"] = "version_mismatch"
+		return false, detail
+	}
+	if localHash != strings.TrimSpace(req.ConfigHash) {
+		detail["reason"] = "hash_mismatch"
+		return false, detail
+	}
+	return true, detail
+}
+
+func (h *EdgeControlHandler) configReadyTimeout() time.Duration {
+	if h.runtimeSettings == nil {
+		return 60 * time.Second
+	}
+	timeout := h.runtimeSettings.DetectionConfigWaitTimeout()
+	if timeout <= 0 {
+		return 60 * time.Second
+	}
+	return timeout
+}
+
+func (h *EdgeControlHandler) configReadyInterval() time.Duration {
+	if h.runtimeSettings == nil {
+		return 5 * time.Second
+	}
+	interval := h.runtimeSettings.DetectionConfigWaitInterval()
+	if interval <= 0 {
+		return 5 * time.Second
+	}
+	return interval
+}
+
+func (h *EdgeControlHandler) completeCommandByIdentity(clientID string, commandID string, status string, targetID string, result map[string]any, code string, message string) error {
+	command, err := h.repo.FindEdgeControlCommand(clientID, commandID)
+	if err != nil {
+		return err
+	}
+	return h.repo.CompleteEdgeControlCommand(command.ID, status, targetID, marshalJSON(result), code, message)
+}
+
+func (h *EdgeControlHandler) publishConfigNotification(notificationType string, level string, projectID uint, message string, payload map[string]any) {
+	notification := models.NewRuntimeNotification(notificationType, level, message, time.Now())
+	notification.TargetType = models.NotificationTargetProject
+	notification.TargetID = strconv.FormatUint(uint64(projectID), 10)
+	notification.ProjectID = projectID
+	notification.Payload = payload
+	if _, err := h.repo.CreateRuntimeNotification(notification); err != nil {
+		return
+	}
+	if h.notify != nil {
+		h.notify.Publish(notification)
+	}
+}
+
+func edgeControlErrorCode(err error) string {
+	code, _, _ := edgeControlErrorMeta(err)
+	return code
 }
 
 func (h *EdgeControlHandler) stopDetection(abnormal bool) func(*gin.Context, edgeControlEnvelope) (any, string, error) {
@@ -406,6 +627,106 @@ func (h *EdgeControlHandler) updateDetectionLimits(_ *gin.Context, envelope edge
 	return result, targetID, nil
 }
 
+func (h *EdgeControlHandler) applyDetectionConfig(c *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
+	var req struct {
+		TaskID        uint   `json:"task_id"`
+		ProjectID     uint   `json:"project_id"`
+		ConfigCode    string `json:"config_code"`
+		ConfigName    string `json:"config_name"`
+		ConfigVersion int    `json:"config_version"`
+		ConfigHash    string `json:"config_hash"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
+		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
+	}
+	if req.TaskID == 0 && req.ProjectID == 0 {
+		return nil, "", edgeControlRequestError("invalid_payload", "task_id or project_id is required", false, http.StatusBadRequest)
+	}
+	if req.TaskID == 0 {
+		if active, ok := h.detectionActiveForProject(req.ProjectID); ok {
+			req.TaskID = active.ID
+		}
+	}
+	if req.TaskID == 0 {
+		return nil, "", edgeControlRequestError("invalid_state", "no active detection run for project", false, http.StatusConflict)
+	}
+	startReq := startDetectionRequest{ProjectID: req.ProjectID, ConfigEnabled: boolPtr(true), ConfigCode: req.ConfigCode, ConfigName: req.ConfigName, ConfigVersion: req.ConfigVersion, ConfigHash: req.ConfigHash}
+	if ready, detail := h.detectionConfigReady(startReq); !ready {
+		principal, _ := auth.PrincipalFromContext(c)
+		h.publishConfigNotification(models.NotificationDetectionConfigWaiting, models.NotificationLevelInfo, req.ProjectID, "detection config apply is waiting for database sync", detail)
+		go h.waitAndApplyDetectionConfig(principal.ClientID, envelope.CommandID, services.ApplyDetectionConfigInput{
+			TaskID:        req.TaskID,
+			ConfigCode:    req.ConfigCode,
+			ConfigVersion: req.ConfigVersion,
+			ConfigHash:    req.ConfigHash,
+		}, req.ProjectID, detail)
+		return edgeControlAsyncAccepted{
+			Status:   "config_apply_waiting",
+			TargetID: strconv.FormatUint(uint64(req.TaskID), 10),
+			Result: map[string]any{
+				"status":     "config_apply_waiting",
+				"task_id":    req.TaskID,
+				"project_id": req.ProjectID,
+				"detail":     detail,
+			},
+		}, strconv.FormatUint(uint64(req.TaskID), 10), nil
+	}
+	result, err := h.detection.ApplyDetectionConfig(services.ApplyDetectionConfigInput{
+		TaskID:        req.TaskID,
+		ConfigCode:    req.ConfigCode,
+		ConfigVersion: req.ConfigVersion,
+		ConfigHash:    req.ConfigHash,
+	})
+	targetID := strconv.FormatUint(uint64(req.TaskID), 10)
+	if err != nil {
+		return nil, targetID, err
+	}
+	return result, targetID, nil
+}
+
+func (h *EdgeControlHandler) waitAndApplyDetectionConfig(clientID string, commandID string, input services.ApplyDetectionConfigInput, projectID uint, firstDetail map[string]any) {
+	timeout := h.configReadyTimeout()
+	interval := h.configReadyInterval()
+	deadline := time.Now().Add(timeout)
+	attempts := 1
+	req := startDetectionRequest{ProjectID: projectID, ConfigEnabled: boolPtr(true), ConfigCode: input.ConfigCode, ConfigVersion: input.ConfigVersion, ConfigHash: input.ConfigHash}
+	var lastDetail map[string]any
+	for {
+		ready, detail := h.detectionConfigReady(req)
+		lastDetail = detail
+		if ready {
+			result, err := h.detection.ApplyDetectionConfig(input)
+			if err != nil {
+				_ = h.completeCommandByIdentity(clientID, commandID, "failed", strconv.FormatUint(uint64(input.TaskID), 10), map[string]any{"status": "failed", "error": err.Error(), "detail": detail}, edgeControlErrorCode(err), err.Error())
+				h.publishConfigNotification(models.NotificationDetectionConfigApplyFailed, models.NotificationLevelWarning, projectID, "detection config apply failed", map[string]any{"command_id": commandID, "error": err.Error(), "detail": detail})
+				return
+			}
+			_ = h.completeCommandByIdentity(clientID, commandID, "success", strconv.FormatUint(uint64(input.TaskID), 10), map[string]any{"status": "success", "result": result, "attempts": attempts}, "", "")
+			return
+		}
+		if !time.Now().Add(interval).Before(deadline) {
+			break
+		}
+		attempts++
+		time.Sleep(interval)
+	}
+	result := map[string]any{"status": "config_not_ready", "attempts": attempts, "timeout_ms": timeout.Milliseconds(), "first_detail": firstDetail, "last_detail": lastDetail}
+	_ = h.completeCommandByIdentity(clientID, commandID, "failed", strconv.FormatUint(uint64(input.TaskID), 10), result, "config_not_ready", "detection config is not synchronized to edge")
+	h.publishConfigNotification(models.NotificationDetectionConfigApplyFailed, models.NotificationLevelWarning, projectID, "detection config apply timed out", map[string]any{"command_id": commandID, "attempts": attempts, "timeout_ms": timeout.Milliseconds(), "detail": lastDetail})
+}
+
+func (h *EdgeControlHandler) detectionActiveForProject(projectID uint) (models.DetectionTask, bool) {
+	if projectID == 0 {
+		return models.DetectionTask{}, false
+	}
+	task, err := h.detection.Current(projectID)
+	return task, err == nil && task.Status == models.DetectionStatusRunning
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func (h *EdgeControlHandler) refreshDetectionFeatures(_ *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
 	var req struct {
 		TaskID uint `json:"task_id"`
@@ -578,6 +899,12 @@ func edgeControlErrorMeta(err error) (string, bool, int) {
 		return "not_found", false, http.StatusNotFound
 	}
 	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "config_not_ready") {
+		return "config_not_ready", true, http.StatusConflict
+	}
+	if strings.Contains(message, "config_disabled_for_run") {
+		return "config_disabled_for_run", false, http.StatusConflict
+	}
 	if strings.Contains(message, "must be running") {
 		return "invalid_state", false, http.StatusConflict
 	}

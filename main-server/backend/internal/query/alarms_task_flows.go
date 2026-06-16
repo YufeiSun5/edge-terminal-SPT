@@ -106,25 +106,26 @@ func (a DetectionLimitAlarm) MarshalJSON() ([]byte, error) {
 }
 
 type TaskFlowRun struct {
-	ID            uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	FlowID        uint64     `gorm:"column:flow_id" json:"flow_id"`
-	FlowCode      string     `gorm:"column:flow_code" json:"flow_code"`
-	ProjectID     uint       `gorm:"column:project_id" json:"project_id"`
-	TriggerType   string     `gorm:"column:trigger_type" json:"trigger_type"`
-	TriggerVarID  int64      `gorm:"column:trigger_var_id" json:"trigger_var_id"`
-	OriginFlowID  uint64     `gorm:"column:origin_flow_id" json:"origin_flow_id"`
-	OriginRunID   uint64     `gorm:"column:origin_run_id" json:"origin_run_id"`
-	Depth         int        `gorm:"column:depth" json:"depth"`
-	Status        string     `gorm:"column:status" json:"status"`
-	StartedAt     time.Time  `gorm:"column:started_at" json:"started_at"`
-	FinishedAt    *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
-	DurationMS    int64      `gorm:"column:duration_ms" json:"duration_ms"`
-	InputSnapshot string     `gorm:"column:input_snapshot" json:"input_snapshot"`
-	ResultJSON    string     `gorm:"column:result_json" json:"result_json"`
-	ErrorMessage  string     `gorm:"column:error_message" json:"error_message"`
-	ScriptLogs    string     `gorm:"column:script_logs" json:"script_logs"`
-	CreatedAt     time.Time  `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at" json:"updated_at"`
+	ID             uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	FlowID         uint64     `gorm:"column:flow_id" json:"flow_id"`
+	FlowCode       string     `gorm:"column:flow_code" json:"flow_code"`
+	ProjectID      uint       `gorm:"column:project_id" json:"project_id"`
+	EdgeInstanceID string     `gorm:"column:edge_instance_id" json:"edge_instance_id"`
+	TriggerType    string     `gorm:"column:trigger_type" json:"trigger_type"`
+	TriggerVarID   int64      `gorm:"column:trigger_var_id" json:"trigger_var_id"`
+	OriginFlowID   uint64     `gorm:"column:origin_flow_id" json:"origin_flow_id"`
+	OriginRunID    uint64     `gorm:"column:origin_run_id" json:"origin_run_id"`
+	Depth          int        `gorm:"column:depth" json:"depth"`
+	Status         string     `gorm:"column:status" json:"status"`
+	StartedAt      time.Time  `gorm:"column:started_at" json:"started_at"`
+	FinishedAt     *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+	DurationMS     int64      `gorm:"column:duration_ms" json:"duration_ms"`
+	InputSnapshot  string     `gorm:"column:input_snapshot" json:"input_snapshot"`
+	ResultJSON     string     `gorm:"column:result_json" json:"result_json"`
+	ErrorMessage   string     `gorm:"column:error_message" json:"error_message"`
+	ScriptLogs     string     `gorm:"column:script_logs" json:"script_logs"`
+	CreatedAt      time.Time  `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (TaskFlowRun) TableName() string { return "task_flow_runs" }

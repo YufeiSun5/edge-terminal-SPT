@@ -275,17 +275,18 @@ func (e *TaskFlowExecutor) execute(workerID int, flow models.TaskFlow, event Tas
 	startedAt := time.Now()
 	snapshot := e.inputSnapshot(flow, event)
 	run := models.TaskFlowRun{
-		FlowID:        flow.ID,
-		FlowCode:      flow.FlowCode,
-		ProjectID:     flow.ProjectID,
-		TriggerType:   event.TriggerType,
-		TriggerVarID:  event.TriggerVarID,
-		OriginFlowID:  event.OriginFlowID,
-		OriginRunID:   event.OriginRunID,
-		Depth:         event.Depth,
-		Status:        models.TaskFlowStatusRunning,
-		StartedAt:     startedAt,
-		InputSnapshot: snapshot,
+		FlowID:         flow.ID,
+		FlowCode:       flow.FlowCode,
+		ProjectID:      flow.ProjectID,
+		EdgeInstanceID: flow.EdgeInstanceID,
+		TriggerType:    event.TriggerType,
+		TriggerVarID:   event.TriggerVarID,
+		OriginFlowID:   event.OriginFlowID,
+		OriginRunID:    event.OriginRunID,
+		Depth:          event.Depth,
+		Status:         models.TaskFlowStatusRunning,
+		StartedAt:      startedAt,
+		InputSnapshot:  snapshot,
 	}
 	if err := e.repo.CreateTaskFlowRun(&run); err != nil {
 		log.Printf("[task-flow-%d] create run failed flow=%s err=%v", workerID, flow.FlowCode, err)
@@ -1093,8 +1094,16 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 	opts := database.StartDetectionOptions{
 		ProjectID:         projectID,
 		TestNo:            testNo,
+		FactoryNo:         stringFromAny(params["factory_no"]),
+		CustomerName:      stringFromAny(params["customer_name"]),
+		DeviceModel:       stringFromAny(params["device_model"]),
 		Mode:              mode,
 		StandardID:        optionalUintFromAny(params["standard_id"]),
+		ConfigEnabled:     optionalBoolFromAny(params["config_enabled"]),
+		ConfigCode:        stringFromAny(params["config_code"]),
+		ConfigName:        stringFromAny(params["config_name"]),
+		ConfigVersion:     int(toFloat64(params["config_version"])),
+		ConfigHash:        stringFromAny(params["config_hash"]),
 		CustomItems:       customItems,
 		ProcessParams:     params["process_params"],
 		PLCWrites:         params["plc_writes"],
@@ -2093,6 +2102,14 @@ func optionalUintFromAny(value any) *uint {
 	if out == 0 {
 		return nil
 	}
+	return &out
+}
+
+func optionalBoolFromAny(value any) *bool {
+	if value == nil {
+		return nil
+	}
+	out := boolFromAnyDefault(value, false)
 	return &out
 }
 

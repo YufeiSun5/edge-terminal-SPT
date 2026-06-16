@@ -89,12 +89,20 @@ func activeTaskFromDetection(task models.DetectionTask) models.ActiveTask {
 	active := models.ActiveTask{
 		ID:              task.ID,
 		TestNo:          task.TestNo,
+		FactoryNo:       task.FactoryNo,
 		ProjectID:       task.ProjectID,
 		ProjectCode:     task.ProjectCode,
 		Mode:            task.Mode,
 		StandardID:      task.StandardID,
 		StandardCode:    task.StandardCode,
 		StandardVersion: task.StandardVer,
+		ConfigEnabled:   task.ConfigEnabled,
+		ConfigStatus:    task.ConfigStatus,
+		ConfigCode:      task.ConfigCode,
+		ConfigName:      task.ConfigName,
+		ConfigVersion:   task.ConfigVersion,
+		ConfigHash:      task.ConfigHash,
+		ConfigRevision:  task.CurrentConfigRevision,
 	}
 	if len(task.StandardItems) > 0 {
 		active.StandardItems = make(map[int64]models.DetectionRunStandardItem, len(task.StandardItems))

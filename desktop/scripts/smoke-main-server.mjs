@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from 'playwright'
 
-const appBase = process.env.RENDERER_URL || process.env.APP_BASE || 'http://127.0.0.1:5173'
+const appBase = process.env.RENDERER_URL || process.env.APP_BASE || 'http://127.0.0.1:5273'
 const mainBase = process.env.MAIN_BASE || 'http://127.0.0.1:19080'
 const mainHost = new URL(mainBase).host
 const viteAppRole = process.env.VITE_APP_ROLE || ''
@@ -10,8 +10,8 @@ const viteMainAPIBase = process.env.VITE_MAIN_API_BASE_URL || ''
 const mistakenMainServerAPIBase = process.env.VITE_MAIN_SERVER_API_BASE_URL || ''
 const username = process.env.SMOKE_USERNAME || 'admin'
 const password = process.env.SMOKE_PASSWORD || 'Admin@12345'
-const edge1ProjectID = process.env.EDGE1_PROJECT_ID || '136'
-const edge2ProjectID = process.env.EDGE2_PROJECT_ID || '138'
+const edge1ProjectID = process.env.EDGE1_PROJECT_ID || '1'
+const edge2ProjectID = process.env.EDGE2_PROJECT_ID || '2'
 const outDir = path.resolve('output/playwright')
 const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
 const evidencePath = path.join(outDir, `main-server-regression-${stamp}.json`)
@@ -21,8 +21,8 @@ const pages = [
   { key: 'debug', url: `${appBase}/#/debug`, expect: ['浏览器预览', '实时变量', '主服务器后端'] },
   { key: 'settings', url: `${appBase}/#/settings`, expect: ['系统', '运行', '配置', 'settings'] },
   { key: 'tasks', url: `${appBase}/#/tasks`, expect: ['任务', 'task-flows', '发送任务请求'] },
-  { key: 'station_edge1', url: `${appBase}/#/station?project_id=${edge1ProjectID}`, expect: ['工位', '检测', 'WS-SMOKE-E1'] },
-  { key: 'station_edge2', url: `${appBase}/#/station?project_id=${edge2ProjectID}`, expect: ['工位', '检测', 'WS-SMOKE-E2'] },
+  { key: 'station_edge1', url: `${appBase}/#/station?project_id=${edge1ProjectID}`, expect: ['工位', '检测', 'AC-01'] },
+  { key: 'station_edge2', url: `${appBase}/#/station?project_id=${edge2ProjectID}`, expect: ['工位', '检测', 'AC-02'] },
   { key: 'variables', url: `${appBase}/#/variables`, expect: ['变量', '项目', 'virtual'] },
   { key: 'history', url: `${appBase}/#/history`, expect: ['历史', '查询', '任务'] },
   { key: 'alarms', url: `${appBase}/#/alarms`, expect: ['报警', '超限', '任务'] },

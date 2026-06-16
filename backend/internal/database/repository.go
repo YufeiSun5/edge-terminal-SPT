@@ -10,7 +10,8 @@ import (
 )
 
 type Repository struct {
-	db *gorm.DB
+	db          *gorm.DB
+	idGenerator *IDGenerator
 }
 
 type HistoryFilter struct {
@@ -18,6 +19,7 @@ type HistoryFilter struct {
 	TaskID      *uint
 	ProjectCode string
 	TestNo      string
+	FactoryNo   string
 	Start       *time.Time
 	End         *time.Time
 	Limit       int
@@ -35,6 +37,7 @@ type DetectionTaskFilter struct {
 	ProjectID *uint
 	Status    string
 	TestNo    string
+	FactoryNo string
 	Start     *time.Time
 	End       *time.Time
 	Limit     int
@@ -64,8 +67,16 @@ type StorageRouteFilter struct {
 type StartDetectionOptions struct {
 	ProjectID         uint
 	TestNo            string
+	FactoryNo         string
+	CustomerName      string
+	DeviceModel       string
 	Mode              string
 	StandardID        *uint
+	ConfigEnabled     *bool
+	ConfigCode        string
+	ConfigName        string
+	ConfigVersion     int
+	ConfigHash        string
 	CustomItems       []models.DetectionStandardItem
 	ProcessParams     any
 	PLCWrites         any
@@ -87,4 +98,9 @@ var (
 
 func NewRepository(db *gorm.DB) *Repository {
 	return &Repository{db: db}
+}
+
+func (r *Repository) WithIDGenerator(generator *IDGenerator) *Repository {
+	r.idGenerator = generator
+	return r
 }

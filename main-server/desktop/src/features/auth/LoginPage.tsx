@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Form, Input, Segmented, message } from 'antd'
+import { Button, Checkbox, Form, Input, Segmented, message } from 'antd'
 import { useMutation } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
@@ -9,10 +9,64 @@ import { useAuthStore } from './authStore'
 import type { LoginRequest } from '@/shared/api/types'
 import './login.css'
 
+const REMEMBERED_LOGIN_KEY = 'main-server-desktop:login-credentials:v1'
+
 type LoginLocationState = {
   from?: {
     pathname?: string
     search?: string
+  }
+}
+
+type LoginFormValues = LoginRequest & {
+  rememberPassword?: boolean
+}
+
+type RememberedLogin = {
+  v: 1
+  username: string
+  password: string
+}
+
+function loadRememberedLogin(): LoginFormValues {
+  try {
+    const raw = localStorage.getItem(REMEMBERED_LOGIN_KEY)
+    if (!raw) return { username: 'admin', password: '', rememberPassword: false }
+    const payload = JSON.parse(raw) as Partial<RememberedLogin>
+    if (payload.v !== 1 || typeof payload.username !== 'string' || typeof payload.password !== 'string') {
+      localStorage.removeItem(REMEMBERED_LOGIN_KEY)
+      return { username: 'admin', password: '', rememberPassword: false }
+    }
+    return {
+      username: payload.username,
+      password: payload.password,
+      rememberPassword: true,
+    }
+  } catch {
+    return { username: 'admin', password: '', rememberPassword: false }
+  }
+}
+
+function saveRememberedLogin(values: LoginRequest) {
+  try {
+    localStorage.setItem(
+      REMEMBERED_LOGIN_KEY,
+      JSON.stringify({
+        v: 1,
+        username: values.username,
+        password: values.password,
+      } satisfies RememberedLogin),
+    )
+  } catch {
+    // localStorage can be disabled or full; login should still work.
+  }
+}
+
+function clearRememberedLogin() {
+  try {
+    localStorage.removeItem(REMEMBERED_LOGIN_KEY)
+  } catch {
+    // localStorage can be disabled; clearing remembered credentials is best-effort.
   }
 }
 
@@ -22,12 +76,18 @@ export function LoginPage() {
   const location = useLocation()
   const [messageApi, contextHolder] = message.useMessage()
   const setSession = useAuthStore((state) => state.setSession)
-  const [form] = Form.useForm<LoginRequest>()
-  const [lastUser, setLastUser] = useState('admin')
+  const [initialLogin] = useState<LoginFormValues>(() => loadRememberedLogin())
+  const [form] = Form.useForm<LoginFormValues>()
+  const [lastUser, setLastUser] = useState(initialLogin.username)
 
   const loginMutation = useMutation({
-    mutationFn: login,
-    onSuccess: (session) => {
+    mutationFn: ({ username, password }: LoginFormValues) => login({ username, password }),
+    onSuccess: (session, values) => {
+      if (values.rememberPassword) {
+        saveRememberedLogin(values)
+      } else {
+        clearRememberedLogin()
+      }
       setSession(session)
       const state = location.state as LoginLocationState | null
       const target = state?.from?.pathname ? `${state.from.pathname}${state.from.search ?? ''}` : '/'
@@ -60,7 +120,7 @@ export function LoginPage() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ username: lastUser }}
+          initialValues={initialLogin}
           onValuesChange={(_, values) => {
             if (values.username) setLastUser(values.username)
           }}
@@ -71,6 +131,9 @@ export function LoginPage() {
           </Form.Item>
           <Form.Item name="password" label={t('auth.password')} rules={[{ required: true, message: t('auth.passwordRequired') }]}>
             <Input.Password prefix={<LockKeyhole size={15} />} autoComplete="current-password" />
+          </Form.Item>
+          <Form.Item name="rememberPassword" valuePropName="checked" className="login-remember">
+            <Checkbox>{t('auth.rememberPassword')}</Checkbox>
           </Form.Item>
           <Button
             block

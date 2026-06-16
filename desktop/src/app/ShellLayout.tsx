@@ -4,18 +4,15 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Badge, Button, Empty, Popover, Segmented, Select, Tooltip, message } from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
-  ActivitySquare,
   BarChart3,
   Bell,
-  Box,
   CheckCheck,
-  FileSpreadsheet,
-  FileSearch,
+  FileText,
+  Clock,
   FolderOpen,
   Languages,
   LayoutDashboard,
   LogOut,
-  Menu,
   Send,
   RefreshCw,
   RotateCcw,
@@ -26,6 +23,10 @@ import {
   TriangleAlert,
   UserRound,
   Workflow,
+  LayoutGrid,
+  PieChart,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 import { openExternal, openLogs, restartSidecar } from '@/shared/desktop/desktopBridge'
 import { createSsoTicket, logout } from '@/features/auth/api'
@@ -37,10 +38,10 @@ import { languageCode } from '@/shared/i18n/language'
 import { queryClient } from './queryClient'
 
 const navItems = [
-  { path: '/', key: 'station', icon: ActivitySquare, permissions: ['view_realtime'] },
-  { path: '/model-cockpit', key: 'modelCockpit', icon: Box, permissions: ['view_realtime'] },
-  { path: '/history', key: 'history', icon: FileSearch, permissions: ['view_history'] },
-  { path: '/reports', key: 'reports', icon: FileSpreadsheet, permissions: ['view_history'] },
+  { path: '/', key: 'station', icon: LayoutGrid, permissions: ['view_realtime'] },
+  { path: '/model-cockpit', key: 'modelCockpit', icon: PieChart, permissions: ['view_realtime'] },
+  { path: '/history', key: 'history', icon: Clock, permissions: ['view_history'] },
+  { path: '/reports', key: 'reports', icon: FileText, permissions: ['view_history'] },
   { path: '/notifications', key: 'notifications', icon: Bell, permissions: ['view_realtime', 'view_history', 'system_settings'] },
   { path: '/alarms', key: 'alarms', icon: TriangleAlert, permissions: ['view_realtime'] },
   { path: '/variables', key: 'variables', icon: SlidersHorizontal, permissions: ['manage_variables'] },
@@ -64,7 +65,7 @@ export function ShellLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const [messageApi, contextHolder] = message.useMessage()
-  const [collapsed, setCollapsed] = useState(false)
+  const [stationExpanded, setStationExpanded] = useState(true)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const [notificationUnreadFilter, setNotificationUnreadFilter] = useState<'all' | 'unread'>('all')
   const [notificationTypeFilter, setNotificationTypeFilter] = useState<string>()
@@ -100,6 +101,7 @@ export function ShellLayout() {
   })
 
   const stationProjects = projectsQuery.data ?? []
+  const activeProjectId = new URLSearchParams(location.search).get('project_id')
   const visibleNavItems = navItems.filter((item) => hasAnyPermission(item.permissions))
   const displayProjectName = (project: Pick<Project, 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) => {
     const currentLanguage = languageCode(i18n.resolvedLanguage)
@@ -304,72 +306,84 @@ export function ShellLayout() {
   return (
     <div className="workbench-shell">
       {contextHolder}
-      <aside className={collapsed ? 'workbench-sidebar collapsed' : 'workbench-sidebar'}>
+      <aside className="workbench-sidebar">
         <div className="workbench-brand">
           <span className="brand-mark">
             <Server aria-hidden="true" />
           </span>
-          {!collapsed && (
-            <div>
-              <h1 className="brand-title">{t('app.title')}</h1>
-              <p className="brand-subtitle">{t('app.subtitle')}</p>
-            </div>
-          )}
+          <div>
+            <h1 className="brand-title">{t('app.title')}</h1>
+            <p className="brand-subtitle">{t('app.subtitle')}</p>
+          </div>
         </div>
 
         <nav className="workbench-nav" aria-label={t('nav.main')}>
-          {visibleNavItems.map((item) => (
-            <div className="nav-group" key={item.path}>
-              <NavLink
-                to={item.path}
-                end={item.path === '/'}
-                className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
-                title={collapsed ? t(`nav.${item.key}`) : undefined}
-              >
-                <item.icon size={18} />
-                {!collapsed && <span>{t(`nav.${item.key}`)}</span>}
-              </NavLink>
-              {item.key === 'station' && !collapsed && stationProjects.length > 0 ? (
-                <div className="nav-subtree">
-                  {stationProjects.map((project) => {
-                    const search = `?project_id=${project.id}`
-                    const active = location.pathname === '/' && location.search === search
-                    const projectName = displayProjectName(project)
-                    return (
-                      <Link
-                        className={active ? 'nav-sublink active' : 'nav-sublink'}
-                        key={project.id}
-                        to={{ pathname: '/', search }}
-                        title={projectName}
-                      >
-                        <span>{projectName}</span>
-                      </Link>
-                    )
-                  })}
-                </div>
-              ) : null}
-            </div>
-          ))}
+          {visibleNavItems.map((item) => {
+            const isStationNav = item.key === 'station'
+            const stationActive = isStationNav && (location.pathname === '/' || location.pathname === '/station')
+
+            return (
+              <div className="nav-group" key={item.path}>
+                {isStationNav ? (
+                  <button
+                    className={stationActive ? 'nav-link nav-button active' : 'nav-link nav-button'}
+                    type="button"
+                    onClick={() => setStationExpanded((value) => !value)}
+                    aria-expanded={stationExpanded}
+                  >
+                    <item.icon size={18} />
+                    <span>{t(`nav.${item.key}`)}</span>
+                    {stationProjects.length > 0 ? (
+                      <span className="nav-expand-icon">
+                        {stationExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </span>
+                    ) : null}
+                  </button>
+                ) : (
+                  <NavLink
+                    to={item.path}
+                    end={item.path === '/'}
+                    className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+                  >
+                    <item.icon size={18} />
+                    <span>{t(`nav.${item.key}`)}</span>
+                  </NavLink>
+                )}
+                {isStationNav && stationExpanded && stationProjects.length > 0 ? (
+                  <div className="nav-subtree">
+                    {stationProjects.map((project) => {
+                      const search = `?project_id=${project.id}`
+                      const active = stationActive && activeProjectId === String(project.id)
+                      const projectName = displayProjectName(project)
+                      return (
+                        <Link
+                          className={active ? 'nav-sublink active' : 'nav-sublink'}
+                          key={project.id}
+                          to={{ pathname: '/', search }}
+                          title={projectName}
+                        >
+                          <span>{projectName}</span>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
         </nav>
 
         <div className="workbench-sidebar-footer">
           <span className="status-dot" />
-          {!collapsed && (
-            <span>
-              {user?.username ?? t('auth.guest')} · {time}
-            </span>
-          )}
+          <span>
+            {user?.username ?? t('auth.guest')} · {time}
+          </span>
         </div>
       </aside>
 
       <section className="workbench-main">
         <header className="app-header">
           <div className="header-left">
-            <Button
-              className="icon-button"
-              icon={<Menu size={16} />}
-              onClick={() => setCollapsed((value) => !value)}
-            />
             <span className="header-section">
               <BarChart3 size={15} />
               {t('app.workspace')}

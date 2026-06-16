@@ -669,19 +669,37 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err != nil || len(gotStandard.Items) != 2 {
 		t.Fatalf("get standard got=%+v err=%v", gotStandard, err)
 	}
+	createdHash := gotStandard.ConfigHash
+	if createdHash == "" {
+		t.Fatal("expected detection standard config_hash after create")
+	}
+	computedHash, err := repo.ComputeDetectionStandardHash(standard.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdHash != computedHash {
+		t.Fatalf("expected stored hash to match computed hash, stored=%s computed=%s", createdHash, computedHash)
+	}
 	gotStandard, err = repo.ReplaceDetectionStandardItems(standard.ID, []models.DetectionStandardItem{{VarID: 100, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true, CheckOnStart: true}})
 	if err != nil || gotStandard.Version != 2 || len(gotStandard.Items) != 1 {
 		t.Fatalf("replace standard items got=%+v err=%v", gotStandard, err)
 	}
+	replacedHash := gotStandard.ConfigHash
+	if replacedHash == "" || replacedHash == createdHash {
+		t.Fatalf("expected replace items to refresh config hash, before=%s after=%s", createdHash, replacedHash)
+	}
 	if gotStandard.Items[0].CheckMethod != models.CheckMethodNumericRange || gotStandard.Items[0].QualityPolicy != models.QualityPolicyIgnoreBad {
 		t.Fatalf("expected standard item defaults, got %+v", gotStandard.Items[0])
 	}
-	gotStandard, err = repo.UpdateDetectionStandard(standard.ID, map[string]interface{}{"display_name": "检测标准"})
-	if err != nil || gotStandard.DisplayName != "检测标准" {
+	gotStandard, err = repo.UpdateDetectionStandard(standard.ID, map[string]interface{}{"display_name": "检测标准", "config_hash": "external"})
+	if err != nil || gotStandard.DisplayName != "检测标准" || gotStandard.Version != 3 {
 		t.Fatalf("update standard got=%+v err=%v", gotStandard, err)
 	}
+	if gotStandard.ConfigHash == "" || gotStandard.ConfigHash == replacedHash || gotStandard.ConfigHash == "external" {
+		t.Fatalf("expected update standard to recompute managed config hash, before=%s after=%s", replacedHash, gotStandard.ConfigHash)
+	}
 	limitCheck := true
-	task, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-1", Mode: "standard", StandardID: &standard.ID, LimitCheckEnabled: &limitCheck, EndPolicy: models.DetectionEndPolicyFixedDuration, DurationSec: 60, StartedByUserID: 1})
+	task, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: Project.ID, TestNo: "T-1", FactoryNo: "F-T-1", Mode: "standard", StandardID: &standard.ID, LimitCheckEnabled: &limitCheck, EndPolicy: models.DetectionEndPolicyFixedDuration, DurationSec: 60, StartedByUserID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,6 +815,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	customTask, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{
 		ProjectID:         Project.ID,
 		TestNo:            "T-CUSTOM",
+		FactoryNo:         "F-T-CUSTOM",
 		Mode:              "custom",
 		LimitCheckEnabled: &limitCheck,
 		EndPolicy:         models.DetectionEndPolicyManual,
@@ -881,6 +900,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	reportTask, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{
 		ProjectID: Project.ID,
 		TestNo:    "T-REPORT",
+		FactoryNo: "F-T-REPORT",
 		Mode:      "custom",
 		CustomItems: []models.DetectionStandardItem{
 			{VarID: 100, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
@@ -1173,7 +1193,7 @@ func TestDetectionStandardItemsFreezeVariableDisplaySnapshot(t *testing.T) {
 	if _, err := repo.ReplaceDetectionStandardItems(standard.ID, []models.DetectionStandardItem{{VarID: tag.VarID, VarName: tag.VarName, QualityPolicy: "bad"}}); err == nil {
 		t.Fatal("expected invalid quality_policy to be rejected")
 	}
-	task, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: project.ID, TestNo: "SNAP-1", Mode: "standard", StandardID: &standard.ID})
+	task, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: project.ID, TestNo: "SNAP-1", FactoryNo: "F-SNAP-1", Mode: "standard", StandardID: &standard.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1219,11 +1239,14 @@ func TestRepositoryStationViewEffectiveSelectionAndBindings(t *testing.T) {
 	if defaultView.Template.TemplateCode != "STATION-DEFAULT" || len(defaultView.Regions) != 2 {
 		t.Fatalf("default view not seeded: %+v", defaultView)
 	}
-	if got := strings.Join(defaultView.WSSubscription.VarIDs, ","); got != "11,22" {
-		t.Fatalf("default view should only subscribe current project tags, got %s", got)
+	if len(defaultView.Items) != 0 {
+		t.Fatalf("default view should not auto-expand station items, got %+v", defaultView.Items)
 	}
-	if !defaultView.HTTPCompanion.CurrentRunRequired || len(defaultView.Warnings) == 0 {
-		t.Fatalf("default view should require current run and warn when absent: %+v warnings=%v", defaultView.HTTPCompanion, defaultView.Warnings)
+	if got := strings.Join(defaultView.WSSubscription.VarIDs, ","); got != "" {
+		t.Fatalf("default view should not subscribe variables before station items are configured, got %s", got)
+	}
+	if defaultView.HTTPCompanion.CurrentRunRequired || len(defaultView.Warnings) != 0 {
+		t.Fatalf("default view should not require current run without configured items: %+v warnings=%v", defaultView.HTTPCompanion, defaultView.Warnings)
 	}
 	if _, err := repo.GetEffectiveStationView(project.ID, "edge-b"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("edge mismatch should be not found, got %v", err)
@@ -1301,6 +1324,86 @@ func TestRepositoryStationViewEffectiveSelectionAndBindings(t *testing.T) {
 	}
 	if got := strings.Join(effective.WSSubscription.VarIDs, ","); got != "11,33" {
 		t.Fatalf("effective ws var ids should include resolved card and run items, got %s", got)
+	}
+}
+
+func TestRepositoryListTagsFiltersByEdgeInstance(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	if err := repo.UpsertGatewaySeeds([]models.GatewayConfig{
+		{ID: 1, Name: "local", EdgeInstanceID: "edge-local", Broker: "tcp://127.0.0.1:1883", ClientID: "local", Topic: "topic", Enabled: true},
+		{ID: 2, Name: "other", EdgeInstanceID: "edge-other", Broker: "tcp://127.0.0.1:1884", ClientID: "other", Topic: "topic", Enabled: true},
+		{ID: 3, Name: "legacy", Broker: "tcp://127.0.0.1:1885", ClientID: "legacy", Topic: "topic", Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	localProject := &models.Project{ProjectCode: "AC-LOCAL", EdgeInstanceID: "edge-local", Name: "Local", Enabled: true}
+	otherProject := &models.Project{ProjectCode: "AC-OTHER", EdgeInstanceID: "edge-other", Name: "Other", Enabled: true}
+	legacyProject := &models.Project{ProjectCode: "AC-LEGACY", Name: "Legacy", Enabled: true}
+	for _, project := range []*models.Project{localProject, otherProject, legacyProject} {
+		if err := repo.CreateProject(project); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixtures := []models.TagConfig{
+		{VarID: 101, GatewayID: 1, SourcePath: "local-assigned", RawName: "local-assigned", ProjectID: &localProject.ID, ProjectCode: localProject.ProjectCode, VarName: "local_assigned", JSONPath: "local-assigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+		{VarID: 102, GatewayID: 2, SourcePath: "other-assigned", RawName: "other-assigned", ProjectID: &otherProject.ID, ProjectCode: otherProject.ProjectCode, VarName: "other_assigned", JSONPath: "other-assigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+		{VarID: 103, GatewayID: 3, SourcePath: "legacy-assigned", RawName: "legacy-assigned", ProjectID: &legacyProject.ID, ProjectCode: legacyProject.ProjectCode, VarName: "legacy_assigned", JSONPath: "legacy-assigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: true},
+		{VarID: 104, GatewayID: 1, SourcePath: "local-unassigned", RawName: "local-unassigned", VarName: "local_unassigned", JSONPath: "local-unassigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: false},
+		{VarID: 105, GatewayID: 2, SourcePath: "other-unassigned", RawName: "other-unassigned", VarName: "other_unassigned", JSONPath: "other-unassigned", DataType: "FLOAT", ScaleFactor: 1, Enabled: false},
+		{VarID: 106, GatewayID: 0, SourcePath: "virtual-unassigned", SourceType: models.TagSourceVirtual, RawName: "virtual-unassigned", VarName: "virtual_unassigned", JSONPath: "virtual-unassigned", DataType: "STRING", ScaleFactor: 1, Enabled: false},
+	}
+	for i := range fixtures {
+		if err := repo.CreateTag(&fixtures[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	localTags, err := repo.ListTags(TagFilter{EdgeInstanceID: "edge-local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]bool{}
+	for _, tag := range localTags {
+		got[tag.VarID] = true
+	}
+	for _, want := range []int64{101, 103, 104, 106} {
+		if !got[want] {
+			t.Fatalf("expected edge-local list to include var_id=%d, got %+v", want, localTags)
+		}
+	}
+	for _, forbidden := range []int64{102, 105} {
+		if got[forbidden] {
+			t.Fatalf("edge-local list leaked other edge var_id=%d: %+v", forbidden, localTags)
+		}
+	}
+
+	mismatchTags, err := repo.ListTags(TagFilter{ProjectID: &otherProject.ID, EdgeInstanceID: "edge-local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mismatchTags) != 0 {
+		t.Fatalf("project_id + edge_instance_id mismatch should return no variables, got %+v", mismatchTags)
+	}
+
+	unassigned := false
+	unassignedPage, total, limit, offset, err := repo.ListTagsPage(TagFilter{EdgeInstanceID: "edge-local", Assigned: &unassigned, Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || limit != 1 || offset != 1 || len(unassignedPage) != 1 {
+		t.Fatalf("unexpected unassigned page total=%d limit=%d offset=%d items=%+v", total, limit, offset, unassignedPage)
+	}
+	if unassignedPage[0].ProjectID != nil {
+		t.Fatalf("assigned=false page should only return unassigned variables: %+v", unassignedPage)
+	}
+	assigned := true
+	assignedPage, total, _, _, err := repo.ListTagsPage(TagFilter{EdgeInstanceID: "edge-local", Assigned: &assigned, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(assignedPage) != 2 {
+		t.Fatalf("assigned=true page should include local and legacy assigned variables, total=%d items=%+v", total, assignedPage)
 	}
 }
 

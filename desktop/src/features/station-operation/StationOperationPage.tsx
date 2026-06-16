@@ -25,7 +25,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Button, Form, Input, InputNumber, Modal, Segmented, Select, Table, Tag, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Table, Tag, message } from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
@@ -35,8 +35,6 @@ import {
   History,
   Power,
   Play,
-  Save,
-  Settings,
   Square,
   Thermometer,
   Volume2,
@@ -68,7 +66,6 @@ import { useAuthStore } from '@/features/auth/authStore'
 import {
   abnormalStopDetectionRun,
   getActiveDetectionRuns,
-  getCurrentDetectionRun,
   getDetectionRun,
   getDetectionRunReportRequests,
   getDetectionRunStorageRoutes,
@@ -97,6 +94,7 @@ type TrendPoint = {
 
 type MetricCard = {
   id: string
+  itemUid?: string
   label: string
   unit: string
   color: string
@@ -108,10 +106,19 @@ type MetricCard = {
   trend: TrendPoint[]
 }
 
+type StationViewBindingWithItem = StationViewResolvedBinding & {
+  item_uid?: string
+  pinned?: boolean
+}
+
 type StartDetectionFormValues = {
   project_id: number
-  test_no: string
+  factory_no: string
+  customer_name?: string
+  device_model?: string
+  test_no?: string
   mode: string
+  config_enabled: boolean
   standard_id?: number
   report_requests?: ReportRequestFormRow[]
   duration_min?: number
@@ -125,71 +132,24 @@ type ReportRequestFormRow = {
   params_json?: string
 }
 
-type StationViewPreference = {
-  cardOrder?: string[]
-  pinnedRows?: string[]
-}
-
-const stationViewPreferenceStorageKey = 'spindle.station.operation.preferences.v1'
-const emptyStationPreferenceList: string[] = []
 const stationMetricCardLimit = 12
 const stationLayoutAreaCardPool = 'card_pool'
 const stationLayoutAreaListLayout = 'list_layout'
-
-function stationViewPreferenceScope(projectId?: number, edgeInstanceId?: string) {
-  if (!projectId) return ''
-  return `${edgeInstanceId?.trim() || 'auto'}:${projectId}`
-}
-
-function stringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  return value.filter((item): item is string => typeof item === 'string')
-}
-
-function normalizeStationViewPreference(value: unknown): StationViewPreference {
-  if (!value || typeof value !== 'object') return {}
-  const record = value as Record<string, unknown>
-  return {
-    cardOrder: stringArray(record.cardOrder),
-    pinnedRows: stringArray(record.pinnedRows),
-  }
-}
-
-function readStationViewPreferences(): Record<string, StationViewPreference> {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = window.localStorage.getItem(stationViewPreferenceStorageKey)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object') return {}
-    return Object.fromEntries(
-      Object.entries(parsed as Record<string, unknown>).map(([key, value]) => [
-        key,
-        normalizeStationViewPreference(value),
-      ]),
-    )
-  } catch {
-    return {}
-  }
-}
-
-function writeStationViewPreferences(preferences: Record<string, StationViewPreference>) {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(stationViewPreferenceStorageKey, JSON.stringify(preferences))
-  } catch {
-    // Local UI preference persistence is best-effort and must not block station operation.
-  }
-}
 
 function stationBindingDefaultOrder(binding: StationViewResolvedBinding, fallback: number) {
   return Number.isFinite(binding.sort_order) ? binding.sort_order : fallback
 }
 
-function sortStationBindingsByDefaultOrder(bindings: StationViewResolvedBinding[]) {
+function stationBindingPinned(binding: StationViewResolvedBinding) {
+  return (binding as StationViewResolvedBinding & { pinned?: boolean }).pinned === true
+}
+
+function sortStationBindingsByDefaultOrder<T extends StationViewResolvedBinding>(bindings: T[]): T[] {
   return bindings
     .map((binding, index) => ({ binding, index }))
     .sort((a, b) => {
+      const pinnedDiff = Number(stationBindingPinned(b.binding)) - Number(stationBindingPinned(a.binding))
+      if (pinnedDiff !== 0) return pinnedDiff
       const orderDiff = stationBindingDefaultOrder(a.binding, a.index) - stationBindingDefaultOrder(b.binding, b.index)
       if (orderDiff !== 0) return orderDiff
       return a.index - b.index
@@ -197,43 +157,18 @@ function sortStationBindingsByDefaultOrder(bindings: StationViewResolvedBinding[
     .map((item) => item.binding)
 }
 
-function uniqueStrings(values: Array<string | undefined>) {
-  const seen = new Set<string>()
-  const result: string[] = []
-  values.forEach((value) => {
-    const next = value?.trim()
-    if (!next || seen.has(next)) return
-    seen.add(next)
-    result.push(next)
-  })
-  return result
-}
-
-function stationViewVarNamesFromItems(items: StationViewItem[], layoutArea: string) {
-  return uniqueStrings(
-    items
-      .filter((item) => item.layout_area === layoutArea && item.visible !== false)
-      .flatMap((item) => {
-        if (item.binding_type === 'var_name') return [item.binding_key]
-        return (item.resolved_bindings ?? []).map((binding) => binding.var_name)
-      }),
-  )
-}
-
-function stationViewItemUID(layoutArea: string, varName: string, index: number) {
-  const safeName = varName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || `item_${index + 1}`
-  return `${layoutArea}_${safeName}_${index + 1}`
-}
-
-function buildStationViewItemPayload(layoutArea: typeof stationLayoutAreaCardPool | typeof stationLayoutAreaListLayout, varName: string, index: number): StationViewItemPayload {
+function stationViewItemPayloadFromItem(item: StationViewItem): StationViewItemPayload {
   return {
-    item_uid: stationViewItemUID(layoutArea, varName, index),
-    layout_area: layoutArea,
-    item_type: layoutArea === stationLayoutAreaCardPool ? 'metric_card' : 'inspection_row',
-    binding_type: 'var_name',
-    binding_key: varName,
-    sort_order: (index + 1) * 10,
-    visible: true,
+    item_uid: item.item_uid,
+    layout_area: item.layout_area,
+    item_type: item.item_type,
+    binding_type: item.binding_type,
+    binding_key: item.binding_key,
+    binding_json: item.binding_json,
+    display_json: item.display_json,
+    sort_order: item.sort_order,
+    pinned: item.pinned,
+    visible: item.visible,
   }
 }
 
@@ -297,6 +232,8 @@ const cardColors = ['#c2410c', '#0f766e', '#2563eb', '#b45309', '#7c3aed', '#158
 
 type StationTableRow = {
   key: string
+  itemUid?: string
+  pinned: boolean
   name: string
   standard: string
   value: string
@@ -351,43 +288,6 @@ function bindingKey(binding: StationViewResolvedBinding, index: number) {
 
 function snapshotKey(snapshot: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
   return String(snapshot.var_id_text ?? snapshot.var_id)
-}
-
-function runBindingFromStandardItem(item: DetectionRunStandardItem): StationViewResolvedBinding {
-  return {
-    source: 'detection_item',
-    var_id: item.var_id,
-    var_id_text: item.var_id_text,
-    var_name: item.var_name,
-    display_name: item.display_name,
-    display_name_en: item.display_name_en,
-    display_name_ja: item.display_name_ja,
-    unit: item.unit,
-    decimal_places: item.decimal_places,
-    limit_ll: item.limit_ll,
-    limit_l: item.limit_l,
-    limit_h: item.limit_h,
-    limit_hh: item.limit_hh,
-    check_enabled: item.check_enabled,
-    alarm_enabled: item.alarm_enabled,
-    sort_order: item.sort_order,
-  }
-}
-
-function tableBindingFromSnapshot(variable: TagSnapshot, index: number): StationViewResolvedBinding {
-  return {
-    source: 'project_variable',
-    var_id: variable.var_id,
-    var_id_text: variable.var_id_text,
-    var_name: variable.var_name,
-    var_group: variable.var_group,
-    display_name: variable.display_name,
-    display_name_en: variable.display_name_en,
-    display_name_ja: variable.display_name_ja,
-    unit: '',
-    decimal_places: 2,
-    sort_order: index + 1,
-  }
 }
 
 function bindingLimits(binding: StationViewResolvedBinding) {
@@ -563,9 +463,10 @@ function displayProjectName(
 }
 
 function standardDisplayName(
-  standard: { standard_code: string; display_name?: string; display_name_en?: string; display_name_ja?: string; name?: string },
+  standard: { standard_code: string; display_name?: string; display_name_en?: string; display_name_ja?: string; name?: string } | undefined,
   language?: string,
 ) {
+  if (!standard) return ''
   const currentLanguage = languageCode(language)
   if (currentLanguage === 'en') return standard.display_name_en || standard.standard_code
   if (currentLanguage === 'ja') return standard.display_name_ja || standard.standard_code
@@ -579,12 +480,12 @@ export function StationOperationPage() {
   const queryClient = useQueryClient()
   const [messageApi, messageContext] = message.useMessage()
   const [startForm] = Form.useForm<StartDetectionFormValues>()
+  const configEnabled = Form.useWatch('config_enabled', startForm)
   const [startModalOpen, setStartModalOpen] = useState(false)
   const [alarmModalOpen, setAlarmModalOpen] = useState(false)
   const [pidModalOpen, setPIDModalOpen] = useState(false)
-  const [stationConfigOpen, setStationConfigOpen] = useState(false)
-  const [stationCardConfigVarNames, setStationCardConfigVarNames] = useState<string[]>([])
-  const [stationListConfigVarNames, setStationListConfigVarNames] = useState<string[]>([])
+  const [previewCardOrder, setPreviewCardOrder] = useState<string[]>([])
+  const [previewPinnedRows, setPreviewPinnedRows] = useState<Record<string, boolean>>({})
   const [pidVarGroup, setPIDVarGroup] = useState('')
   const [pidWriteValues, setPIDWriteValues] = useState<Record<string, string>>({})
   const [pidWriteStates, setPIDWriteStates] = useState<Record<string, PIDWriteState>>({})
@@ -594,7 +495,6 @@ export function StationOperationPage() {
   const hasPermission = useAuthStore((state) => state.hasPermission)
   const canStartDetection = hasPermission('start_detection')
   const canStopDetection = hasPermission('stop_detection')
-  const canManageStationView = hasPermission('system_settings')
   const selectedProjectId = Number(searchParams.get('project_id'))
   const validSelectedProjectId = Number.isFinite(selectedProjectId) && selectedProjectId > 0 ? selectedProjectId : undefined
   const selectedEdgeInstanceId = searchParams.get('edge_instance_id') || undefined
@@ -614,7 +514,7 @@ export function StationOperationPage() {
   const stationViewItemsQuery = useQuery({
     queryKey: ['station', 'view-items', validSelectedProjectId],
     queryFn: () => getStationViewItems({ project_id: validSelectedProjectId! }),
-    enabled: stationConfigOpen && validSelectedProjectId !== undefined,
+    enabled: validSelectedProjectId !== undefined,
     retry: false,
   })
   const variablesQuery = useQuery({
@@ -635,13 +535,6 @@ export function StationOperationPage() {
       }),
     enabled: pidModalOpen && validSelectedProjectId !== undefined,
     staleTime: 10000,
-    retry: false,
-  })
-  const currentRunQuery = useQuery({
-    queryKey: ['station', 'current-run', validSelectedProjectId],
-    queryFn: () => getCurrentDetectionRun(validSelectedProjectId!),
-    enabled: validSelectedProjectId !== undefined && stationViewQuery.data?.http_companion.current_run_required === true,
-    refetchInterval: stationViewQuery.data?.http_companion.current_run_required ? 5000 : false,
     retry: false,
   })
   const activeRunsQuery = useQuery({
@@ -742,17 +635,6 @@ export function StationOperationPage() {
         : variables,
     [validSelectedProjectId, variables],
   )
-  const stationVariableOptions = useMemo(() => {
-    const seen = new Set<string>()
-    return stationVariables.flatMap((variable) => {
-      if (!variable.var_name || seen.has(variable.var_name)) return []
-      seen.add(variable.var_name)
-      return [{
-        label: `${alarmDisplayName(variable, i18n.resolvedLanguage)} / ${variable.var_name}`,
-        value: variable.var_name,
-      }]
-    })
-  }, [i18n.resolvedLanguage, stationVariables])
   const activeRun = validSelectedProjectId
     ? activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId)
     : activeRunsQuery.data?.[0]
@@ -794,30 +676,6 @@ export function StationOperationPage() {
     if (currentLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.project_code
     return selectedProject.display_name || selectedProject.name || selectedProject.project_code
   }, [i18n.resolvedLanguage, selectedProject])
-  const stationPreferenceKey = useMemo(
-    () => stationViewPreferenceScope(validSelectedProjectId, selectedEdgeInstanceId),
-    [selectedEdgeInstanceId, validSelectedProjectId],
-  )
-  const [stationPreferences, setStationPreferences] = useState<Record<string, StationViewPreference>>(
-    readStationViewPreferences,
-  )
-  const currentStationPreference = stationPreferenceKey ? stationPreferences[stationPreferenceKey] : undefined
-  const manualCardOrder = currentStationPreference?.cardOrder ?? emptyStationPreferenceList
-  const pinnedRows = currentStationPreference?.pinnedRows ?? emptyStationPreferenceList
-  const updateStationPreference = useCallback(
-    (updater: (current: StationViewPreference) => StationViewPreference) => {
-      if (!stationPreferenceKey) return
-      setStationPreferences((preferences) => {
-        const next = {
-          ...preferences,
-          [stationPreferenceKey]: updater(preferences[stationPreferenceKey] ?? {}),
-        }
-        writeStationViewPreferences(next)
-        return next
-      })
-    },
-    [stationPreferenceKey],
-  )
   const [isStatusCollapsed, setStatusCollapsed] = useState(false)
   const snapshotsByVarID = useMemo(() => {
     const result = new Map<string, TagSnapshot>()
@@ -834,12 +692,20 @@ export function StationOperationPage() {
     }
     return result
   }, [pidSubscriptionKey, pidWsSnapshotState, snapshotsByVarID])
-  const templateMetricBindings = useMemo(
+  const rawStationViewItems = stationViewItemsQuery.data?.items ?? []
+  const templateMetricBindings = useMemo<StationViewBindingWithItem[]>(
     () =>
       (stationViewQuery.data?.items ?? [])
         .filter((item) => item.layout_area === stationLayoutAreaCardPool && item.visible !== false)
-        .flatMap((item) => item.resolved_bindings ?? []),
-    [stationViewQuery.data],
+        .flatMap((item) =>
+          (item.resolved_bindings ?? []).map((binding) => ({
+            ...binding,
+            item_uid: item.item_uid,
+            pinned: previewPinnedRows[item.item_uid] ?? item.pinned,
+            sort_order: item.sort_order,
+          })),
+        ),
+    [previewPinnedRows, stationViewQuery.data],
   )
   const metricBindings = useMemo(
     () =>
@@ -847,15 +713,18 @@ export function StationOperationPage() {
     [templateMetricBindings],
   )
   const defaultCardIds = useMemo(() => metricBindings.map((binding, index) => bindingKey(binding, index)), [metricBindings])
+  useEffect(() => {
+    setPreviewCardOrder([])
+  }, [selectedEdgeInstanceId, validSelectedProjectId, stationViewQuery.data?.template.template_uid])
   const cardOrder = useMemo(() => {
-    const next = manualCardOrder.filter((id) => defaultCardIds.includes(id))
+    const next = previewCardOrder.filter((id) => defaultCardIds.includes(id))
     for (const id of defaultCardIds) {
       if (!next.includes(id)) next.push(id)
     }
-    return next
-  }, [defaultCardIds, manualCardOrder])
+    return next.length > 0 ? next : defaultCardIds
+  }, [defaultCardIds, previewCardOrder])
   const bindingByCardId = useMemo(() => {
-    const result = new Map<string, StationViewResolvedBinding>()
+    const result = new Map<string, StationViewBindingWithItem>()
     metricBindings.forEach((binding, index) => result.set(bindingKey(binding, index), binding))
     return result
   }, [metricBindings])
@@ -871,6 +740,7 @@ export function StationOperationPage() {
           const Icon = iconForBinding(binding)
           return {
             id,
+            itemUid: binding.item_uid,
             label: bindingDisplayName(binding, i18n.resolvedLanguage),
             unit: binding.unit ?? '',
             color: cardColors[index % cardColors.length],
@@ -886,28 +756,23 @@ export function StationOperationPage() {
     [bindingByCardId, cardOrder, i18n.resolvedLanguage, snapshotsByVarID],
   )
 
-  const runBindings = useMemo(
-    () => (currentRunQuery.data?.standard_items ?? []).map(runBindingFromStandardItem),
-    [currentRunQuery.data],
-  )
-  const templateTableBindings = useMemo(
+  const templateTableBindings = useMemo<StationViewBindingWithItem[]>(
     () =>
       (stationViewQuery.data?.items ?? [])
         .filter((item) => item.layout_area === stationLayoutAreaListLayout && item.visible !== false)
-        .flatMap((item) => item.resolved_bindings ?? []),
+        .flatMap((item) =>
+          (item.resolved_bindings ?? []).map((binding) => ({
+            ...binding,
+            item_uid: item.item_uid,
+            pinned: item.pinned,
+            sort_order: item.sort_order,
+          })),
+        ),
     [stationViewQuery.data],
   )
-  const fallbackTableBindings = useMemo(
-    () => stationVariables.map(tableBindingFromSnapshot),
-    [stationVariables],
-  )
   const tableBindings = useMemo(
-    () => {
-      if (runBindings.length > 0) return sortStationBindingsByDefaultOrder(runBindings)
-      if (templateTableBindings.length > 0) return sortStationBindingsByDefaultOrder(templateTableBindings)
-      return sortStationBindingsByDefaultOrder(fallbackTableBindings)
-    },
-    [fallbackTableBindings, runBindings, templateTableBindings],
+    () => sortStationBindingsByDefaultOrder(templateTableBindings),
+    [templateTableBindings],
   )
   const stationRows = useMemo<StationTableRow[]>(
     () =>
@@ -917,6 +782,8 @@ export function StationOperationPage() {
         const value = numericSnapshotValue(snapshot)
         return {
           key,
+          itemUid: binding.item_uid,
+          pinned: binding.pinned === true,
           name: bindingDisplayName(binding, i18n.resolvedLanguage),
           standard: formatStandardRange(binding),
           value: formatMetricValue(value, binding.unit ?? '', binding.decimal_places ?? 2),
@@ -925,18 +792,7 @@ export function StationOperationPage() {
       }),
     [i18n.resolvedLanguage, snapshotsByVarID, tableBindings],
   )
-  const sortedStationRows = useMemo(
-    () =>
-      [...stationRows].sort((a, b) => {
-        const aIndex = pinnedRows.indexOf(a.key)
-        const bIndex = pinnedRows.indexOf(b.key)
-        if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex
-        if (aIndex !== -1) return -1
-        if (bIndex !== -1) return 1
-        return 0
-      }),
-    [pinnedRows, stationRows],
-  )
+  const sortedStationRows = stationRows
   const alarmOn = stationRows.some((row) => !row.ok)
 
   const refreshRuns = async () => {
@@ -949,47 +805,62 @@ export function StationOperationPage() {
     ])
   }
 
-  useEffect(() => {
-    if (!stationConfigOpen || !stationViewItemsQuery.data) return
-    setStationCardConfigVarNames(
-      stationViewVarNamesFromItems(stationViewItemsQuery.data.items, stationLayoutAreaCardPool).slice(0, stationMetricCardLimit),
-    )
-    setStationListConfigVarNames(
-      stationViewVarNamesFromItems(stationViewItemsQuery.data.items, stationLayoutAreaListLayout),
-    )
-  }, [stationConfigOpen, stationViewItemsQuery.data])
-
   const saveStationViewItemsMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (items: StationViewItemPayload[]) => {
       const templateUID = stationViewItemsQuery.data?.template_uid ?? stationViewQuery.data?.template.template_uid
       if (!templateUID) throw new Error(t('station.config.noTemplate'))
-      const cardItems = stationCardConfigVarNames
-        .slice(0, stationMetricCardLimit)
-        .map((varName, index) => buildStationViewItemPayload(stationLayoutAreaCardPool, varName, index))
-      const listItems = stationListConfigVarNames
-        .map((varName, index) => buildStationViewItemPayload(stationLayoutAreaListLayout, varName, index))
-      return replaceStationViewItems({ template_uid: templateUID, items: [...cardItems, ...listItems] })
+      return replaceStationViewItems({ template_uid: templateUID, items })
     },
     onSuccess: async () => {
-      messageApi.success(t('station.config.saveSuccess'))
-      setStationConfigOpen(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['station', 'view-effective'] }),
         queryClient.invalidateQueries({ queryKey: ['station', 'view-items'] }),
       ])
+      setPreviewPinnedRows({})
     },
     onError: (error) => {
+      setPreviewPinnedRows({})
       messageApi.error(error instanceof Error ? error.message : t('station.config.saveFailed'))
     },
   })
 
+  function saveStationViewItems(items: StationViewItem[]) {
+    saveStationViewItemsMutation.mutate(items.map(stationViewItemPayloadFromItem))
+  }
+
+  function persistCardOrder(ids: string[]) {
+    if (rawStationViewItems.length === 0) return
+    const itemUIDsByCardID = new Map<string, string>(
+      cards.flatMap((card): Array<[string, string]> => (card.itemUid ? [[card.id, card.itemUid]] : [])),
+    )
+    const orderedItemUIDs = ids.map((id) => itemUIDsByCardID.get(id)).filter((value): value is string => Boolean(value))
+    if (orderedItemUIDs.length === 0) return
+    const nextItems = rawStationViewItems.map((item) => {
+      if (item.layout_area !== stationLayoutAreaCardPool) return item
+      const orderIndex = orderedItemUIDs.indexOf(item.item_uid)
+      if (orderIndex === -1) return item
+      return { ...item, sort_order: (orderIndex + 1) * 10 }
+    })
+    saveStationViewItems(nextItems)
+  }
+
   const startRunMutation = useMutation({
     mutationFn: (values: StartDetectionFormValues) => {
+      const selectedStandard = availableStandards.find((standard) => standard.id === values.standard_id)
+      const configEnabled = values.config_enabled === true
       const payload: DetectionRunStartPayload = {
         project_id: values.project_id,
-        test_no: values.test_no.trim(),
+        factory_no: values.factory_no.trim(),
+        customer_name: values.customer_name?.trim() || undefined,
+        device_model: values.device_model?.trim() || undefined,
+        test_no: values.test_no?.trim() || undefined,
         mode: values.mode,
-        standard_id: values.standard_id,
+        standard_id: configEnabled ? values.standard_id : undefined,
+        config_enabled: configEnabled,
+        config_code: configEnabled ? selectedStandard?.standard_code : undefined,
+        config_name: configEnabled ? standardDisplayName(selectedStandard, i18n.resolvedLanguage) : undefined,
+        config_version: configEnabled ? selectedStandard?.version : undefined,
+        config_hash: configEnabled ? selectedStandard?.config_hash : undefined,
         report_request: buildReportRequest(values),
         duration_sec: values.duration_min ? values.duration_min * 60 : undefined,
         operator_note: values.operator_note?.trim() || undefined,
@@ -1122,23 +993,29 @@ export function StationOperationPage() {
     if (failed > 0) messageApi.error(t('station.pid.writeFailed'))
   }
 
-  function togglePinnedRow(key: string) {
-    updateStationPreference((preference) => {
-      const rows = preference.pinnedRows ?? []
-      return {
-        ...preference,
-        pinnedRows: rows.includes(key) ? rows.filter((row) => row !== key) : [...rows, key],
-      }
+  function togglePinnedRow(row: StationTableRow) {
+    if (!row.itemUid || rawStationViewItems.length === 0 || saveStationViewItemsMutation.isPending) return
+    const nextPinned = !row.pinned
+    setPreviewPinnedRows((current) => ({ ...current, [row.itemUid!]: nextPinned }))
+    const nextItems = rawStationViewItems.map((item) => {
+      if (item.item_uid !== row.itemUid) return item
+      return { ...item, pinned: nextPinned }
     })
+    saveStationViewItems(nextItems)
   }
 
   function openStartModal() {
     const targetProject = selectedProject ?? projects[0]
+    const defaultStandard = availableStandards[0]
     startForm.setFieldsValue({
       project_id: targetProject?.id,
-      test_no: `RUN-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}`,
-      mode: availableStandards[0]?.mode ?? 'standard',
-      standard_id: availableStandards[0]?.id,
+      factory_no: '',
+      customer_name: '',
+      device_model: '',
+      test_no: '',
+      mode: defaultStandard?.mode ?? 'standard',
+      config_enabled: Boolean(defaultStandard),
+      standard_id: defaultStandard?.id,
       report_requests: [{ template_id: reportTemplates[0]?.id, var_ids: [], params_json: '{\n  "inlet_area_m2": 1.25\n}' }],
       duration_min: 60,
     })
@@ -1445,12 +1322,8 @@ export function StationOperationPage() {
       <div className="station-grid">
         <SortableMetricGrid
           cards={cards}
-          onOrderChange={(ids) =>
-            updateStationPreference((preference) => ({
-              ...preference,
-              cardOrder: ids,
-            }))
-          }
+          onOrderPreview={setPreviewCardOrder}
+          onOrderCommit={persistCardOrder}
           t={t}
           warnings={stationViewQuery.data?.warnings ?? []}
         />
@@ -1509,13 +1382,6 @@ export function StationOperationPage() {
           </section>
 
           <div className="station-actions">
-            <Button
-              icon={<Settings size={15} />}
-              disabled={!validSelectedProjectId || !canManageStationView}
-              onClick={() => setStationConfigOpen(true)}
-            >
-              {t('station.actions.config')}
-            </Button>
             <Button icon={<Gauge size={15} />} disabled={!validSelectedProjectId} onClick={() => setPIDModalOpen(true)}>
               {t('station.actions.pid')}
             </Button>
@@ -1601,12 +1467,12 @@ export function StationOperationPage() {
                     </tr>
                   ) : (
                     sortedStationRows.map((row) => {
-                      const pinned = pinnedRows.includes(row.key)
                       return (
                         <tr
-                          className={pinned ? 'station-row pinned' : 'station-row'}
+                          className={row.pinned ? 'station-row pinned' : 'station-row'}
                           key={row.key}
-                          onClick={() => togglePinnedRow(row.key)}
+                          title={row.name}
+                          onClick={() => togglePinnedRow(row)}
                         >
                           <td>
                             <span className="pin-indicator" />
@@ -1638,70 +1504,6 @@ export function StationOperationPage() {
         <span>{t('station.template.assignments')}: {stationViewTemplatesQuery.isFetching ? '...' : enabledAssignments}</span>
       </div>
       <Modal
-        className="station-alarm-modal station-config-modal"
-        title={t('station.config.title')}
-        open={stationConfigOpen}
-        onCancel={() => setStationConfigOpen(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setStationConfigOpen(false)}>{t('actions.cancel')}</Button>,
-          <Button
-            key="submit"
-            type="primary"
-            icon={<Save size={15} />}
-            loading={saveStationViewItemsMutation.isPending}
-            onClick={() => saveStationViewItemsMutation.mutate()}
-          >
-            {t('actions.save')}
-          </Button>,
-        ]}
-        centered
-        width="min(860px, calc(100vw - 48px))"
-        destroyOnHidden
-      >
-        <div className="station-config-body">
-          <div className="station-config-context">
-            <span>{selectedProjectName ?? statusProjectCode}</span>
-            <Tag>{effectiveTemplate?.template_code ?? stationViewItemsQuery.data?.template_uid ?? '--'}</Tag>
-          </div>
-          <section className="station-config-section">
-            <div className="station-config-section-head">
-              <strong>{t('station.config.cardPool')}</strong>
-              <span>{t('station.config.cardHint', { count: stationMetricCardLimit })}</span>
-            </div>
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              maxTagCount="responsive"
-              optionFilterProp="label"
-              loading={stationViewItemsQuery.isFetching || variablesQuery.isFetching}
-              value={stationCardConfigVarNames}
-              placeholder={t('station.config.variablePlaceholder')}
-              options={stationVariableOptions}
-              onChange={(next) => setStationCardConfigVarNames(next.slice(0, stationMetricCardLimit))}
-            />
-          </section>
-          <section className="station-config-section">
-            <div className="station-config-section-head">
-              <strong>{t('station.config.listLayout')}</strong>
-              <span>{t('station.config.listHint')}</span>
-            </div>
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              maxTagCount="responsive"
-              optionFilterProp="label"
-              loading={stationViewItemsQuery.isFetching || variablesQuery.isFetching}
-              value={stationListConfigVarNames}
-              placeholder={t('station.config.variablePlaceholder')}
-              options={stationVariableOptions}
-              onChange={setStationListConfigVarNames}
-            />
-          </section>
-        </div>
-      </Modal>
-      <Modal
         className="station-run-modal"
         title={t('station.run.startTitle')}
         open={startModalOpen}
@@ -1725,8 +1527,17 @@ export function StationOperationPage() {
                     }))}
                   />
                 </Form.Item>
-                <Form.Item name="test_no" label={t('station.run.testNo')} rules={[{ required: true }]}>
+                <Form.Item name="factory_no" label={t('station.run.factoryNo')} rules={[{ required: true }]}>
                   <Input />
+                </Form.Item>
+                <Form.Item name="customer_name" label={t('station.run.customerName')}>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="device_model" label={t('station.run.deviceModel')}>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="test_no" label={t('station.run.testNo')}>
+                  <Input placeholder={t('station.run.testNoAuto')} />
                 </Form.Item>
                 <Form.Item name="mode" label={t('station.run.mode')} rules={[{ required: true }]}>
                   <Select
@@ -1747,12 +1558,16 @@ export function StationOperationPage() {
                 <span>{t('station.run.standardAndTemplate')}</span>
               </div>
               <div className="station-run-form-grid station-run-form-grid-compact">
-                <Form.Item name="standard_id" label={t('station.run.standard')}>
+                <Form.Item name="config_enabled" label={t('station.run.configEnabled')} valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item name="standard_id" label={t('station.run.configName')}>
                   <Select
                     allowClear
+                    disabled={!configEnabled}
                     loading={standardsQuery.isFetching}
                     options={availableStandards.map((standard) => ({
-                      label: `${standardDisplayName(standard, i18n.resolvedLanguage)} / ${standard.standard_code}`,
+                      label: `${standardDisplayName(standard, i18n.resolvedLanguage)} / ${standard.standard_code} / v${standard.version}`,
                       value: standard.id,
                     }))}
                   />
@@ -2089,12 +1904,14 @@ export function StationOperationPage() {
 
 function SortableMetricGrid({
   cards,
-  onOrderChange,
+  onOrderPreview,
+  onOrderCommit,
   t,
   warnings,
 }: {
   cards: MetricCard[]
-  onOrderChange: (ids: string[]) => void
+  onOrderPreview: (ids: string[]) => void
+  onOrderCommit: (ids: string[]) => void
   t: (key: string) => string
   warnings: string[]
 }) {
@@ -2136,7 +1953,7 @@ function SortableMetricGrid({
     const oldIndex = cards.findIndex((item) => item.id === active)
     const newIndex = cards.findIndex((item) => item.id === over)
     if (oldIndex === -1 || newIndex === -1) return
-    onOrderChange(arrayMove(cards, oldIndex, newIndex).map((item) => item.id))
+    onOrderPreview(arrayMove(cards, oldIndex, newIndex).map((item) => item.id))
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -2149,9 +1966,11 @@ function SortableMetricGrid({
   }
 
   function handleDragEnd(event: DragEndEvent) {
+    const finalIds = cards.map((item) => item.id)
     setActiveId(null)
     setDroppingId(event.active.id)
     window.setTimeout(() => setDroppingId(null), 500)
+    onOrderCommit(finalIds)
   }
 
   const dropAnimation = {

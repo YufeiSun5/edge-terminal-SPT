@@ -181,6 +181,7 @@ type DetectionRunFilter struct {
 	ProjectID *uint
 	Status    string
 	TestNo    string
+	FactoryNo string
 	Start     *time.Time
 	End       *time.Time
 	Limit     int
@@ -333,6 +334,9 @@ func (q *StationViewQuery) ListDetectionRuns(filter DetectionRunFilter, edgeInst
 	}
 	if strings.TrimSpace(filter.TestNo) != "" {
 		stmt = stmt.Where("sys_detection_tasks.test_no = ?", strings.TrimSpace(filter.TestNo))
+	}
+	if strings.TrimSpace(filter.FactoryNo) != "" {
+		stmt = stmt.Where("sys_detection_tasks.factory_no = ?", strings.TrimSpace(filter.FactoryNo))
 	}
 	if filter.Start != nil {
 		stmt = stmt.Where("sys_detection_tasks.started_at >= ?", *filter.Start)

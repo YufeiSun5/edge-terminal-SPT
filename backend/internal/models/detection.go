@@ -9,13 +9,24 @@ import (
 type DetectionTask struct {
 	ID                    uint                        `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
 	TestNo                string                      `gorm:"column:test_no;size:128;uniqueIndex;not null" json:"test_no"`
+	FactoryNo             string                      `gorm:"column:factory_no;size:128;index" json:"factory_no"`
+	CustomerName          string                      `gorm:"column:customer_name;size:128" json:"customer_name"`
+	DeviceModel           string                      `gorm:"column:device_model;size:128" json:"device_model"`
 	ProjectID             uint                        `gorm:"column:project_id;index;not null" json:"project_id"`
 	ProjectCode           string                      `gorm:"column:project_code;size:64;index" json:"project_code"`
+	EdgeInstanceID        string                      `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
 	Mode                  string                      `gorm:"column:mode;size:64;not null" json:"mode"`
 	Status                string                      `gorm:"column:status;size:32;index;not null" json:"status"`
 	StandardID            *uint                       `gorm:"column:standard_id;index" json:"standard_id,omitempty"`
 	StandardCode          string                      `gorm:"column:standard_code;size:64" json:"standard_code"`
 	StandardVer           int                         `gorm:"column:standard_version;default:0" json:"standard_version"`
+	ConfigEnabled         bool                        `gorm:"column:config_enabled;default:false;index" json:"config_enabled"`
+	ConfigStatus          string                      `gorm:"column:config_status;size:32;default:disabled;index" json:"config_status"`
+	ConfigCode            string                      `gorm:"column:config_code;size:64;index" json:"config_code"`
+	ConfigName            string                      `gorm:"column:config_name;size:128" json:"config_name"`
+	ConfigVersion         int                         `gorm:"column:config_version;default:0" json:"config_version"`
+	ConfigHash            string                      `gorm:"column:config_hash;size:64" json:"config_hash"`
+	CurrentConfigRevision int                         `gorm:"column:current_config_revision;default:1" json:"current_config_revision"`
 	StartedAt             *time.Time                  `gorm:"column:started_at" json:"started_at,omitempty"`
 	EndedAt               *time.Time                  `gorm:"column:ended_at" json:"ended_at,omitempty"`
 	LimitCheckEnabled     bool                        `gorm:"column:limit_check_enabled;default:true" json:"limit_check_enabled"`
@@ -49,12 +60,20 @@ func (DetectionTask) TableName() string {
 type ActiveTask struct {
 	ID              uint                                 `json:"id"`
 	TestNo          string                               `json:"test_no"`
+	FactoryNo       string                               `json:"factory_no"`
 	ProjectID       uint                                 `json:"project_id"`
 	ProjectCode     string                               `json:"project_code"`
 	Mode            string                               `json:"mode"`
 	StandardID      *uint                                `json:"standard_id,omitempty"`
 	StandardCode    string                               `json:"standard_code"`
 	StandardVersion int                                  `json:"standard_version"`
+	ConfigEnabled   bool                                 `json:"config_enabled"`
+	ConfigStatus    string                               `json:"config_status"`
+	ConfigCode      string                               `json:"config_code"`
+	ConfigName      string                               `json:"config_name"`
+	ConfigVersion   int                                  `json:"config_version"`
+	ConfigHash      string                               `json:"config_hash"`
+	ConfigRevision  int                                  `json:"config_revision"`
 	StandardItems   map[int64]DetectionRunStandardItem   `json:"-"`
 	StorageRoutes   map[int64][]DetectionRunStorageRoute `json:"-"`
 }
@@ -86,7 +105,12 @@ type DetectionStandard struct {
 	Mode             string                  `gorm:"column:mode;size:64;index" json:"mode"`
 	ReportTemplateID *uint                   `gorm:"column:report_template_id;index" json:"report_template_id,omitempty"`
 	Version          int                     `gorm:"column:version;default:1;not null" json:"version"`
+	ConfigHash       string                  `gorm:"column:config_hash;size:64" json:"config_hash"`
 	Enabled          bool                    `gorm:"column:enabled;default:true;index" json:"enabled"`
+	SyncScope        string                  `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID   string                  `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode    string                  `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser    string                  `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
 	Remark           string                  `gorm:"column:remark;size:255" json:"remark"`
 	CreatedAt        time.Time               `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt        time.Time               `gorm:"column:updated_at" json:"updated_at"`
@@ -151,6 +175,10 @@ type DetectionStandardItem struct {
 	Unit            string    `gorm:"column:unit;size:32" json:"unit"`
 	DecimalPlaces   int       `gorm:"column:decimal_places;default:2" json:"decimal_places"`
 	SortOrder       int       `gorm:"column:sort_order;default:0" json:"sort_order"`
+	SyncScope       string    `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID  string    `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode   string    `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser   string    `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
 	CreatedAt       time.Time `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt       time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
@@ -171,44 +199,47 @@ func (i DetectionStandardItem) MarshalJSON() ([]byte, error) {
 }
 
 type DetectionRunStandardItem struct {
-	ID                             uint      `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	TaskID                         uint      `gorm:"column:task_id;index;not null" json:"task_id"`
-	TestNo                         string    `gorm:"column:test_no;size:128;index" json:"test_no"`
-	StandardID                     uint      `gorm:"column:standard_id;index;not null" json:"standard_id"`
-	StandardItemID                 uint      `gorm:"column:standard_item_id;index;not null" json:"standard_item_id"`
-	VarID                          int64     `gorm:"column:var_id;index;not null" json:"var_id"`
-	VarName                        string    `gorm:"column:var_name;size:128;not null" json:"var_name"`
-	DisplayName                    string    `gorm:"column:display_name;size:128" json:"display_name"`
-	DisplayNameEN                  string    `gorm:"column:display_name_en;size:128" json:"display_name_en"`
-	DisplayNameJA                  string    `gorm:"column:display_name_ja;size:128" json:"display_name_ja"`
-	CheckEnabled                   bool      `gorm:"column:check_enabled;default:true;index" json:"check_enabled"`
-	AlarmEnabled                   bool      `gorm:"column:alarm_enabled;default:true;index" json:"alarm_enabled"`
-	StoreEnabled                   bool      `gorm:"column:store_enabled;default:true;index" json:"store_enabled"`
-	CheckCycleMS                   int       `gorm:"column:check_cycle_ms;default:0" json:"check_cycle_ms"`
-	CheckOnStart                   bool      `gorm:"column:check_on_start" json:"check_on_start"`
-	Required                       bool      `gorm:"column:required;default:false" json:"required"`
-	CheckMethod                    string    `gorm:"column:check_method;size:32;default:numeric_range;not null" json:"check_method"`
-	TargetValue                    string    `gorm:"column:target_value;size:255" json:"target_value"`
-	LimitLL                        *float64  `gorm:"column:limit_ll" json:"limit_ll,omitempty"`
-	LimitL                         *float64  `gorm:"column:limit_l" json:"limit_l,omitempty"`
-	LimitH                         *float64  `gorm:"column:limit_h" json:"limit_h,omitempty"`
-	LimitHH                        *float64  `gorm:"column:limit_hh" json:"limit_hh,omitempty"`
-	LimitDeadband                  float64   `gorm:"column:limit_deadband;default:0" json:"limit_deadband"`
-	ViolationHoldMS                int       `gorm:"column:violation_hold_ms;default:0" json:"violation_hold_ms"`
-	RecoverHoldMS                  int       `gorm:"column:recover_hold_ms;default:0" json:"recover_hold_ms"`
-	QualityPolicy                  string    `gorm:"column:quality_policy;size:32;default:ignore_bad;not null" json:"quality_policy"`
-	VariableDefaultAlarmEnabled    bool      `gorm:"column:variable_default_alarm_enabled;default:false" json:"variable_default_alarm_enabled"`
-	VariableDefaultLimitLL         *float64  `gorm:"column:variable_default_limit_ll" json:"variable_default_limit_ll,omitempty"`
-	VariableDefaultLimitL          *float64  `gorm:"column:variable_default_limit_l" json:"variable_default_limit_l,omitempty"`
-	VariableDefaultLimitH          *float64  `gorm:"column:variable_default_limit_h" json:"variable_default_limit_h,omitempty"`
-	VariableDefaultLimitHH         *float64  `gorm:"column:variable_default_limit_hh" json:"variable_default_limit_hh,omitempty"`
-	VariableDefaultLimitDeadband   float64   `gorm:"column:variable_default_limit_deadband;default:0" json:"variable_default_limit_deadband"`
-	VariableDefaultViolationHoldMS int       `gorm:"column:variable_default_violation_hold_ms;default:0" json:"variable_default_violation_hold_ms"`
-	VariableDefaultRecoverHoldMS   int       `gorm:"column:variable_default_recover_hold_ms;default:0" json:"variable_default_recover_hold_ms"`
-	Unit                           string    `gorm:"column:unit;size:32" json:"unit"`
-	DecimalPlaces                  int       `gorm:"column:decimal_places;default:2" json:"decimal_places"`
-	SortOrder                      int       `gorm:"column:sort_order;default:0" json:"sort_order"`
-	CreatedAt                      time.Time `gorm:"column:created_at" json:"created_at"`
+	ID                             uint       `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	TaskID                         uint       `gorm:"column:task_id;index;not null" json:"task_id"`
+	TestNo                         string     `gorm:"column:test_no;size:128;index" json:"test_no"`
+	StandardID                     uint       `gorm:"column:standard_id;index;not null" json:"standard_id"`
+	StandardItemID                 uint       `gorm:"column:standard_item_id;index;not null" json:"standard_item_id"`
+	ConfigRevision                 int        `gorm:"column:config_revision;default:1;index" json:"config_revision"`
+	VarID                          int64      `gorm:"column:var_id;index;not null" json:"var_id"`
+	VarName                        string     `gorm:"column:var_name;size:128;not null" json:"var_name"`
+	DisplayName                    string     `gorm:"column:display_name;size:128" json:"display_name"`
+	DisplayNameEN                  string     `gorm:"column:display_name_en;size:128" json:"display_name_en"`
+	DisplayNameJA                  string     `gorm:"column:display_name_ja;size:128" json:"display_name_ja"`
+	CheckEnabled                   bool       `gorm:"column:check_enabled;default:true;index" json:"check_enabled"`
+	AlarmEnabled                   bool       `gorm:"column:alarm_enabled;default:true;index" json:"alarm_enabled"`
+	StoreEnabled                   bool       `gorm:"column:store_enabled;default:true;index" json:"store_enabled"`
+	CheckCycleMS                   int        `gorm:"column:check_cycle_ms;default:0" json:"check_cycle_ms"`
+	CheckOnStart                   bool       `gorm:"column:check_on_start" json:"check_on_start"`
+	Required                       bool       `gorm:"column:required;default:false" json:"required"`
+	CheckMethod                    string     `gorm:"column:check_method;size:32;default:numeric_range;not null" json:"check_method"`
+	TargetValue                    string     `gorm:"column:target_value;size:255" json:"target_value"`
+	LimitLL                        *float64   `gorm:"column:limit_ll" json:"limit_ll,omitempty"`
+	LimitL                         *float64   `gorm:"column:limit_l" json:"limit_l,omitempty"`
+	LimitH                         *float64   `gorm:"column:limit_h" json:"limit_h,omitempty"`
+	LimitHH                        *float64   `gorm:"column:limit_hh" json:"limit_hh,omitempty"`
+	LimitDeadband                  float64    `gorm:"column:limit_deadband;default:0" json:"limit_deadband"`
+	ViolationHoldMS                int        `gorm:"column:violation_hold_ms;default:0" json:"violation_hold_ms"`
+	RecoverHoldMS                  int        `gorm:"column:recover_hold_ms;default:0" json:"recover_hold_ms"`
+	QualityPolicy                  string     `gorm:"column:quality_policy;size:32;default:ignore_bad;not null" json:"quality_policy"`
+	VariableDefaultAlarmEnabled    bool       `gorm:"column:variable_default_alarm_enabled;default:false" json:"variable_default_alarm_enabled"`
+	VariableDefaultLimitLL         *float64   `gorm:"column:variable_default_limit_ll" json:"variable_default_limit_ll,omitempty"`
+	VariableDefaultLimitL          *float64   `gorm:"column:variable_default_limit_l" json:"variable_default_limit_l,omitempty"`
+	VariableDefaultLimitH          *float64   `gorm:"column:variable_default_limit_h" json:"variable_default_limit_h,omitempty"`
+	VariableDefaultLimitHH         *float64   `gorm:"column:variable_default_limit_hh" json:"variable_default_limit_hh,omitempty"`
+	VariableDefaultLimitDeadband   float64    `gorm:"column:variable_default_limit_deadband;default:0" json:"variable_default_limit_deadband"`
+	VariableDefaultViolationHoldMS int        `gorm:"column:variable_default_violation_hold_ms;default:0" json:"variable_default_violation_hold_ms"`
+	VariableDefaultRecoverHoldMS   int        `gorm:"column:variable_default_recover_hold_ms;default:0" json:"variable_default_recover_hold_ms"`
+	Unit                           string     `gorm:"column:unit;size:32" json:"unit"`
+	DecimalPlaces                  int        `gorm:"column:decimal_places;default:2" json:"decimal_places"`
+	SortOrder                      int        `gorm:"column:sort_order;default:0" json:"sort_order"`
+	EffectiveFrom                  *time.Time `gorm:"column:effective_from;index" json:"effective_from,omitempty"`
+	EffectiveTo                    *time.Time `gorm:"column:effective_to;index" json:"effective_to,omitempty"`
+	CreatedAt                      time.Time  `gorm:"column:created_at" json:"created_at"`
 }
 
 func (i DetectionRunStandardItem) MarshalJSON() ([]byte, error) {

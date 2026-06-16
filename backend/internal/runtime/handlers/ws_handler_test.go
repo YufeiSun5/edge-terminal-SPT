@@ -151,7 +151,7 @@ func TestRealtimeWSHandlerDetectionCommands(t *testing.T) {
 		Type:      "command.detection.start",
 		RequestID: "req-start",
 		CommandID: "cmd-start",
-		Payload:   []byte(`{"project_id":` + itoaHandler(uint64(Project.ID)) + `,"test_no":"WS-H-1","mode":"standard"}`),
+		Payload:   []byte(`{"project_id":` + itoaHandler(uint64(Project.ID)) + `,"factory_no":"F-WS-H-1","test_no":"WS-H-1","mode":"standard"}`),
 	}, principal)
 	if len(responses) != 1 || responses[0].Type != services.WSTypeCommandAck {
 		t.Fatalf("unexpected start response: %+v", responses)
@@ -181,7 +181,7 @@ func TestRealtimeWSHandlerDetectionCommands(t *testing.T) {
 		Type:      "command.detection.start",
 		RequestID: "req-forbidden",
 		CommandID: "cmd-forbidden",
-		Payload:   []byte(`{"project_id":` + itoaHandler(uint64(Project.ID)) + `,"test_no":"WS-H-2","mode":"standard"}`),
+		Payload:   []byte(`{"project_id":` + itoaHandler(uint64(Project.ID)) + `,"factory_no":"F-WS-H-2","test_no":"WS-H-2","mode":"standard"}`),
 	}, auth.Principal{AuthType: "user", UserID: 2, Role: auth.RoleGuest})
 	if len(responses) != 1 || responses[0].Error == nil || responses[0].Error.Code != "forbidden" {
 		t.Fatalf("unexpected forbidden response: %+v", responses)

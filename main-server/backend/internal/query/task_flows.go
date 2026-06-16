@@ -24,6 +24,11 @@ type TaskFlow struct {
 	HoldMS             int           `gorm:"column:hold_ms" json:"hold_ms"`
 	ScheduleIntervalMS int           `gorm:"column:schedule_interval_ms" json:"schedule_interval_ms"`
 	Priority           int           `gorm:"column:priority" json:"priority"`
+	Version            int           `gorm:"column:version" json:"version"`
+	SyncScope          string        `gorm:"column:sync_scope" json:"sync_scope"`
+	EdgeInstanceID     string        `gorm:"column:edge_instance_id" json:"edge_instance_id"`
+	UpdatedByNode      string        `gorm:"column:updated_by_node" json:"updated_by_node"`
+	UpdatedByUser      string        `gorm:"column:updated_by_user" json:"updated_by_user"`
 	Remark             string        `gorm:"column:remark" json:"remark"`
 	Vars               []TaskFlowVar `gorm:"foreignKey:FlowID;references:ID" json:"vars,omitempty"`
 	CreatedAt          time.Time     `gorm:"column:created_at" json:"created_at"`
@@ -33,13 +38,18 @@ type TaskFlow struct {
 func (TaskFlow) TableName() string { return "sys_task_flows" }
 
 type TaskFlowVar struct {
-	ID        uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	FlowID    uint64    `gorm:"column:flow_id" json:"flow_id"`
-	ProjectID uint      `gorm:"column:project_id" json:"project_id"`
-	VarID     int64     `gorm:"column:var_id" json:"var_id"`
-	VarName   string    `gorm:"column:var_name" json:"var_name"`
-	Role      string    `gorm:"column:role" json:"role"`
-	CreatedAt time.Time `gorm:"column:created_at" json:"created_at"`
+	ID             uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	FlowID         uint64    `gorm:"column:flow_id" json:"flow_id"`
+	ProjectID      uint      `gorm:"column:project_id" json:"project_id"`
+	VarID          int64     `gorm:"column:var_id" json:"var_id"`
+	VarName        string    `gorm:"column:var_name" json:"var_name"`
+	Role           string    `gorm:"column:role" json:"role"`
+	SyncScope      string    `gorm:"column:sync_scope" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user" json:"updated_by_user"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (TaskFlowVar) TableName() string { return "sys_task_flow_vars" }

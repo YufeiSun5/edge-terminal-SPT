@@ -60,6 +60,11 @@ type TaskFlow struct {
 	HoldMS             int           `gorm:"column:hold_ms;default:0" json:"hold_ms"`
 	ScheduleIntervalMS int           `gorm:"column:schedule_interval_ms;default:0" json:"schedule_interval_ms"`
 	Priority           int           `gorm:"column:priority;default:0;index" json:"priority"`
+	Version            int           `gorm:"column:version;default:1;not null" json:"version"`
+	SyncScope          string        `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID     string        `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode      string        `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser      string        `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
 	Remark             string        `gorm:"column:remark;size:255" json:"remark"`
 	Vars               []TaskFlowVar `gorm:"foreignKey:FlowID;references:ID" json:"vars,omitempty"`
 	CreatedAt          time.Time     `gorm:"column:created_at" json:"created_at"`
@@ -71,13 +76,18 @@ func (TaskFlow) TableName() string {
 }
 
 type TaskFlowVar struct {
-	ID        uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	FlowID    uint64    `gorm:"column:flow_id;index;not null" json:"flow_id"`
-	ProjectID uint      `gorm:"column:project_id;index;not null" json:"project_id"`
-	VarID     int64     `gorm:"column:var_id;index;not null" json:"var_id"`
-	VarName   string    `gorm:"column:var_name;size:128" json:"var_name"`
-	Role      string    `gorm:"column:role;size:32;default:watch;index" json:"role"`
-	CreatedAt time.Time `gorm:"column:created_at" json:"created_at"`
+	ID             uint64    `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	FlowID         uint64    `gorm:"column:flow_id;index;not null" json:"flow_id"`
+	ProjectID      uint      `gorm:"column:project_id;index;not null" json:"project_id"`
+	VarID          int64     `gorm:"column:var_id;index;not null" json:"var_id"`
+	VarName        string    `gorm:"column:var_name;size:128" json:"var_name"`
+	Role           string    `gorm:"column:role;size:32;default:watch;index" json:"role"`
+	SyncScope      string    `gorm:"column:sync_scope;size:32;default:global;index" json:"sync_scope"`
+	EdgeInstanceID string    `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	UpdatedByNode  string    `gorm:"column:updated_by_node;size:64;index" json:"updated_by_node"`
+	UpdatedByUser  string    `gorm:"column:updated_by_user;size:128" json:"updated_by_user"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (TaskFlowVar) TableName() string {
@@ -96,25 +106,26 @@ func (v TaskFlowVar) MarshalJSON() ([]byte, error) {
 }
 
 type TaskFlowRun struct {
-	ID            uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	FlowID        uint64     `gorm:"column:flow_id;index;not null" json:"flow_id"`
-	FlowCode      string     `gorm:"column:flow_code;size:128;index" json:"flow_code"`
-	ProjectID     uint       `gorm:"column:project_id;index;not null" json:"project_id"`
-	TriggerType   string     `gorm:"column:trigger_type;size:32;index" json:"trigger_type"`
-	TriggerVarID  int64      `gorm:"column:trigger_var_id;index" json:"trigger_var_id"`
-	OriginFlowID  uint64     `gorm:"column:origin_flow_id;index;default:0" json:"origin_flow_id"`
-	OriginRunID   uint64     `gorm:"column:origin_run_id;index;default:0" json:"origin_run_id"`
-	Depth         int        `gorm:"column:depth;default:0" json:"depth"`
-	Status        string     `gorm:"column:status;size:32;index;not null" json:"status"`
-	StartedAt     time.Time  `gorm:"column:started_at;index" json:"started_at"`
-	FinishedAt    *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
-	DurationMS    int64      `gorm:"column:duration_ms" json:"duration_ms"`
-	InputSnapshot string     `gorm:"column:input_snapshot;type:text" json:"input_snapshot"`
-	ResultJSON    string     `gorm:"column:result_json;type:text" json:"result_json"`
-	ErrorMessage  string     `gorm:"column:error_message;size:1024" json:"error_message"`
-	ScriptLogs    string     `gorm:"column:script_logs;type:text" json:"script_logs"`
-	CreatedAt     time.Time  `gorm:"column:created_at" json:"created_at"`
-	UpdatedAt     time.Time  `gorm:"column:updated_at" json:"updated_at"`
+	ID             uint64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	FlowID         uint64     `gorm:"column:flow_id;index;not null" json:"flow_id"`
+	FlowCode       string     `gorm:"column:flow_code;size:128;index" json:"flow_code"`
+	ProjectID      uint       `gorm:"column:project_id;index;not null" json:"project_id"`
+	EdgeInstanceID string     `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
+	TriggerType    string     `gorm:"column:trigger_type;size:32;index" json:"trigger_type"`
+	TriggerVarID   int64      `gorm:"column:trigger_var_id;index" json:"trigger_var_id"`
+	OriginFlowID   uint64     `gorm:"column:origin_flow_id;index;default:0" json:"origin_flow_id"`
+	OriginRunID    uint64     `gorm:"column:origin_run_id;index;default:0" json:"origin_run_id"`
+	Depth          int        `gorm:"column:depth;default:0" json:"depth"`
+	Status         string     `gorm:"column:status;size:32;index;not null" json:"status"`
+	StartedAt      time.Time  `gorm:"column:started_at;index" json:"started_at"`
+	FinishedAt     *time.Time `gorm:"column:finished_at" json:"finished_at,omitempty"`
+	DurationMS     int64      `gorm:"column:duration_ms" json:"duration_ms"`
+	InputSnapshot  string     `gorm:"column:input_snapshot;type:text" json:"input_snapshot"`
+	ResultJSON     string     `gorm:"column:result_json;type:text" json:"result_json"`
+	ErrorMessage   string     `gorm:"column:error_message;size:1024" json:"error_message"`
+	ScriptLogs     string     `gorm:"column:script_logs;type:text" json:"script_logs"`
+	CreatedAt      time.Time  `gorm:"column:created_at" json:"created_at"`
+	UpdatedAt      time.Time  `gorm:"column:updated_at" json:"updated_at"`
 }
 
 func (TaskFlowRun) TableName() string {

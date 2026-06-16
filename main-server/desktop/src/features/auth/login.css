@@ -108,6 +108,15 @@
   box-shadow: 0 8px 22px rgba(31, 95, 139, 0.2);
 }
 
+.login-remember {
+  margin-bottom: 18px;
+}
+
+.login-remember .ant-checkbox-wrapper {
+  color: rgba(30, 27, 24, 0.66);
+  font-size: 12px;
+}
+
 .login-footer {
   display: flex;
   align-items: center;

@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Alert, Badge, Space, Table, Tag, Typography } from "antd";
+import { Alert, Badge, Space, Table, Tag, Typography, Input } from "antd";
 import type { TableProps } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -102,8 +102,27 @@ export function EdgeStatusPage() {
   const queueDepth = channels
     ? channels.logic + channels.discovery + channels.store
     : 0;
+  const [searchTerm, setSearchTerm] = useState("");
+
   const sidecarState = sidecarQuery.data?.state ?? "offline";
   const variables = variablesQuery.data ?? [];
+
+  const filteredAndSortedVariables = useMemo(() => {
+    let result = variables;
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      result = result.filter(v =>
+        (v.var_name && v.var_name.toLowerCase().includes(lowerSearch)) ||
+        (v.display_name && v.display_name.toLowerCase().includes(lowerSearch))
+      );
+    }
+    return [...result].sort((a, b) => {
+      const idA = String(a.var_id);
+      const idB = String(b.var_id);
+      return idA.localeCompare(idB);
+    });
+  }, [variables, searchTerm]);
+
   const activeRuns = activeRunsQuery.data ?? [];
   const mainServerStatus = mainServerStatusQuery.data;
   const backendRuntimeLabel = isMainServer ? t("metrics.backendRuntime") : t("metrics.sidecar");
@@ -241,18 +260,27 @@ export function EdgeStatusPage() {
             <Typography.Title level={2} className="panel-title">
               {t("panels.variables")}
             </Typography.Title>
-            <Tag color={variablesQuery.isFetching ? "processing" : "default"}>
-              {variablesQuery.isFetching
-                ? t("actions.refresh")
-                : `${variables.length}`}
-            </Tag>
+            <Space>
+              <Input.Search
+                placeholder={t("actions.search") || "Search"}
+                allowClear
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ width: 200 }}
+                size="small"
+              />
+              <Tag color={variablesQuery.isFetching ? "processing" : "default"}>
+                {variablesQuery.isFetching
+                  ? t("actions.refresh")
+                  : `${filteredAndSortedVariables.length} / ${variables.length}`}
+              </Tag>
+            </Space>
           </div>
           <div className="panel-body">
             <Table
               rowKey="var_id"
               size="small"
               columns={tableColumns}
-              dataSource={variables.slice(0, 80)}
+              dataSource={filteredAndSortedVariables.slice(0, 80)}
               pagination={{ pageSize: 12, size: "small" }}
               locale={{ emptyText: t("messages.noData") }}
               scroll={{ x: 780 }}

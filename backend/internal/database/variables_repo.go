@@ -24,53 +24,108 @@ func (r *Repository) LoadTags(edgeInstanceID string) ([]models.TagConfig, error)
 }
 
 type TagFilter struct {
-	GatewayID   *int
-	ProjectID   *uint
-	Enabled     *bool
-	Discovered  *bool
-	Writable    *bool
-	SourceType  string
-	ProjectCode string
-	VarGroup    string
-	Keyword     string
+	GatewayID      *int
+	ProjectID      *uint
+	Assigned       *bool
+	Enabled        *bool
+	Discovered     *bool
+	Writable       *bool
+	SourceType     string
+	ProjectCode    string
+	VarGroup       string
+	Keyword        string
+	EdgeInstanceID string
+	Limit          int
+	Offset         int
 }
 
 func (r *Repository) ListTags(filter TagFilter) ([]models.TagConfig, error) {
 	var tags []models.TagConfig
+	query := r.listTagsQuery(filter)
+	err := query.Order("sys_tags.gateway_id asc, sys_tags.source_path asc").Find(&tags).Error
+	return tags, err
+}
+
+func (r *Repository) ListTagsPage(filter TagFilter) ([]models.TagConfig, int64, int, int, error) {
+	limit := normalizeTagListLimit(filter.Limit)
+	offset := normalizeTagListOffset(filter.Offset)
+	query := r.listTagsQuery(filter)
+	var total int64
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, limit, offset, err
+	}
+	var tags []models.TagConfig
+	err := query.Order("sys_tags.gateway_id asc, sys_tags.source_path asc").Limit(limit).Offset(offset).Find(&tags).Error
+	return tags, total, limit, offset, err
+}
+
+func (r *Repository) listTagsQuery(filter TagFilter) *gorm.DB {
 	query := r.db.Model(&models.TagConfig{})
+	if edgeInstanceID := strings.TrimSpace(filter.EdgeInstanceID); edgeInstanceID != "" {
+		query = query.
+			Joins("LEFT JOIN sys_projects p ON p.id = sys_tags.project_id").
+			Joins("LEFT JOIN sys_gateways g ON g.id = sys_tags.gateway_id").
+			Where(`(
+				(sys_tags.project_id IS NOT NULL AND (p.edge_instance_id = ? OR p.edge_instance_id = '' OR p.edge_instance_id IS NULL)) OR
+				(sys_tags.project_id IS NULL AND (sys_tags.gateway_id = 0 OR g.edge_instance_id = ? OR g.edge_instance_id = '' OR g.edge_instance_id IS NULL))
+			)`, edgeInstanceID, edgeInstanceID)
+	}
 	if filter.GatewayID != nil {
-		query = query.Where("gateway_id = ?", *filter.GatewayID)
+		query = query.Where("sys_tags.gateway_id = ?", *filter.GatewayID)
 	}
 	if filter.ProjectID != nil {
-		query = query.Where("project_id = ?", *filter.ProjectID)
+		query = query.Where("sys_tags.project_id = ?", *filter.ProjectID)
+	}
+	if filter.Assigned != nil {
+		if *filter.Assigned {
+			query = query.Where("sys_tags.project_id IS NOT NULL")
+		} else {
+			query = query.Where("sys_tags.project_id IS NULL")
+		}
 	}
 	if filter.Enabled != nil {
-		query = query.Where("enabled = ?", *filter.Enabled)
+		query = query.Where("sys_tags.enabled = ?", *filter.Enabled)
 	}
 	if filter.Discovered != nil {
-		query = query.Where("discovered = ?", *filter.Discovered)
+		query = query.Where("sys_tags.discovered = ?", *filter.Discovered)
 	}
 	if filter.Writable != nil {
-		query = query.Where("writable = ?", *filter.Writable)
+		query = query.Where("sys_tags.writable = ?", *filter.Writable)
 	}
 	if filter.SourceType != "" {
-		query = query.Where("source_type = ?", filter.SourceType)
+		query = query.Where("sys_tags.source_type = ?", filter.SourceType)
 	}
 	if filter.ProjectCode != "" {
-		query = query.Where("project_code = ?", strings.TrimSpace(filter.ProjectCode))
+		query = query.Where("sys_tags.project_code = ?", strings.TrimSpace(filter.ProjectCode))
 	}
 	if filter.VarGroup != "" {
-		query = query.Where("var_group = ?", strings.TrimSpace(filter.VarGroup))
+		query = query.Where("sys_tags.var_group = ?", strings.TrimSpace(filter.VarGroup))
 	}
 	if filter.Keyword != "" {
 		keyword := "%" + strings.TrimSpace(filter.Keyword) + "%"
 		query = query.Where(
-			"raw_name LIKE ? OR var_name LIKE ? OR display_name LIKE ? OR display_name_en LIKE ? OR display_name_ja LIKE ? OR source_path LIKE ?",
+			"sys_tags.raw_name LIKE ? OR sys_tags.var_name LIKE ? OR sys_tags.display_name LIKE ? OR sys_tags.display_name_en LIKE ? OR sys_tags.display_name_ja LIKE ? OR sys_tags.source_path LIKE ?",
 			keyword, keyword, keyword, keyword, keyword, keyword,
 		)
 	}
-	err := query.Order("gateway_id asc, source_path asc").Find(&tags).Error
-	return tags, err
+	return query
+}
+
+func normalizeTagListLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func normalizeTagListOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 func (r *Repository) CreateTag(tag *models.TagConfig) error {

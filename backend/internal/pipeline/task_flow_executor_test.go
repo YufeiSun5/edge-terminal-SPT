@@ -881,7 +881,7 @@ func TestTaskFlowStringPayloadWritesPLCBeforeStartingDetection(t *testing.T) {
 	channels := NewChannels()
 	tags := NewTagManager()
 	tasks := NewTaskManager()
-	project := &models.Project{ProjectCode: "AC-15", Name: "Project 15", Enabled: true}
+	project := &models.Project{ProjectCode: "UNIT-PLC-OK", Name: "Unit PLC OK", Enabled: true}
 	if err := repo.CreateProject(project); err != nil {
 		t.Fatal(err)
 	}
@@ -1048,7 +1048,7 @@ func TestTaskFlowStringPayloadStopsDetectionWhenPLCParamMissing(t *testing.T) {
 	channels := NewChannels()
 	tags := NewTagManager()
 	tasks := NewTaskManager()
-	project := &models.Project{ProjectCode: "AC-16", Name: "Project 16", Enabled: true}
+	project := &models.Project{ProjectCode: "UNIT-PLC-MISSING", Name: "Unit PLC Missing", Enabled: true}
 	if err := repo.CreateProject(project); err != nil {
 		t.Fatal(err)
 	}
@@ -1197,7 +1197,7 @@ func TestTaskFlowStringPayloadStopsDetectionWhenPLCWriteFails(t *testing.T) {
 	channels := NewChannels()
 	tags := NewTagManager()
 	tasks := NewTaskManager()
-	project := &models.Project{ProjectCode: "AC-17", Name: "Project 17", Enabled: true}
+	project := &models.Project{ProjectCode: "UNIT-PLC-FAIL", Name: "Unit PLC Fail", Enabled: true}
 	if err := repo.CreateProject(project); err != nil {
 		t.Fatal(err)
 	}
@@ -1710,7 +1710,7 @@ func TestTaskFlowWriteVariableRejectsPhysicalVariables(t *testing.T) {
 		JSONPath:      "physical",
 		DataType:      "FLOAT",
 		ProjectID:     &projectID,
-		ProjectCode:   "AC-13",
+		ProjectCode:   "UNIT-PHYSICAL",
 		Enabled:       true,
 		ScaleFactor:   1,
 		Writable:      true,
@@ -1816,7 +1816,7 @@ func TestTaskFlowDetectionLifecycleTriggersProjectFlows(t *testing.T) {
 	channels := NewChannels()
 	tags := NewTagManager()
 	tasks := NewTaskManager()
-	project := &models.Project{ProjectCode: "AC-14", Name: "Project 14", Enabled: true}
+	project := &models.Project{ProjectCode: "UNIT-LIFECYCLE", Name: "Unit Lifecycle", Enabled: true}
 	if err := repo.CreateProject(project); err != nil {
 		t.Fatal(err)
 	}
