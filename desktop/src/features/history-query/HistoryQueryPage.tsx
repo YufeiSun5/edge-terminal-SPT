@@ -11,10 +11,14 @@ import { HistoryGanttView } from './components/HistoryGanttView'
 import { buildTaskLanes, formatHistoryTime } from './model'
 import './history-query.css'
 
-export function HistoryQueryPage() {
+type HistoryQueryPageProps = {
+  initialView?: 'gantt' | 'table'
+}
+
+export function HistoryQueryPage({ initialView = 'gantt' }: HistoryQueryPageProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const [viewMode, setViewMode] = useState<'gantt' | 'table'>('gantt')
+  const [viewMode, setViewMode] = useState<'gantt' | 'table'>(initialView)
 
   const runsQuery = useQuery({
     queryKey: ['history', 'detection-runs'],

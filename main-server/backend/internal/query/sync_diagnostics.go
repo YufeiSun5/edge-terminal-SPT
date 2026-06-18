@@ -36,6 +36,7 @@ func (q *StationViewQuery) SyncDiagnostics() SyncDiagnostics {
 		{name: "sys_project_members", latestColumn: "updated_at"},
 		{name: "sys_users", latestColumn: "updated_at"},
 		{name: "sys_tags", latestColumn: "updated_at"},
+		{name: "sys_detection_plans", latestColumn: "updated_at"},
 		{name: "sys_detection_tasks", latestColumn: "updated_at"},
 		{name: "sys_detection_standards", latestColumn: "updated_at"},
 		{name: "sys_detection_standard_items", latestColumn: "updated_at"},

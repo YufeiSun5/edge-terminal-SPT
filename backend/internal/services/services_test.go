@@ -248,8 +248,8 @@ func TestVariablesServiceBulkRemapKIOProjectsRejectsOutsideTestRange(t *testing.
 	repo := database.NewRepository(db)
 	service := NewVariablesService(repo, pipeline.NewTagManager())
 
-	if _, err := service.BulkRemapKIOProjects(BulkRemapKIOProjectsInput{ProjectCount: 13}); err == nil {
-		t.Fatal("expected project_count above AC-01..AC-12 test range to be rejected")
+	if _, err := service.BulkRemapKIOProjects(BulkRemapKIOProjectsInput{ProjectCount: 9}); err == nil {
+		t.Fatal("expected project_count above AC-01..AC-08 test range to be rejected")
 	}
 	if projects, err := repo.ListProjects(); err != nil || len(projects) != 0 {
 		t.Fatalf("rejected bulk remap should not create projects len=%d err=%v", len(projects), err)
@@ -682,6 +682,75 @@ func TestDetectionRunsServiceStartSnapshotsAndInitialAlarm(t *testing.T) {
 	}
 }
 
+func TestDetectionRunsServiceQualifiedHoldGuardStopsRun(t *testing.T) {
+	db := newServiceTestDB(t)
+	repo := database.NewRepository(db)
+	tags := pipeline.NewTagManager()
+	taskManager := pipeline.NewTaskManager()
+	service := NewDetectionRunsService(repo, taskManager, DetectionRunsRuntimeDeps{Tags: tags})
+	project := createServiceProject(t, repo)
+
+	tag := models.TagConfig{
+		VarID:       901,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "qualified_temp",
+		RawName:     "qualified_temp",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		VarName:     "qualified_temp",
+		JSONPath:    "qualified_temp",
+		DataType:    "FLOAT",
+		ScaleFactor: 1,
+		Enabled:     true,
+	}
+	if err := repo.CreateTag(&tag); err != nil {
+		t.Fatal(err)
+	}
+	tags.Load([]models.TagConfig{tag})
+	runtimeTag, ok := tags.Get(tag.VarID)
+	if !ok {
+		t.Fatal("expected runtime tag")
+	}
+	runtimeTag.UpdateNumeric(50, time.Now(), 1)
+
+	limitL := 0.0
+	limitH := 100.0
+	standard := &models.DetectionStandard{StandardCode: "STD-SVC-HOLD", Name: "Hold Standard", ProjectID: &project.ID, ProjectCode: project.ProjectCode, Enabled: true}
+	if err := repo.CreateDetectionStandard(standard, []models.DetectionStandardItem{{
+		VarID:         tag.VarID,
+		VarName:       tag.VarName,
+		CheckEnabled:  true,
+		AlarmEnabled:  true,
+		CheckMethod:   models.CheckMethodNumericRange,
+		QualityPolicy: models.QualityPolicyIgnoreBad,
+		LimitL:        &limitL,
+		LimitH:        &limitH,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := service.Start(database.StartDetectionOptions{ProjectID: project.ID, TestNo: "T-SVC-HOLD", FactoryNo: "F-T-SVC-HOLD", Mode: "standard", StandardID: &standard.ID, EndPolicy: models.DetectionEndPolicyQualifiedHold, QualifiedHoldMS: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := repo.GetDetectionTask(task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status == models.DetectionStatusStopped {
+			if got.EndType != models.DetectionEndQualifiedHold {
+				t.Fatalf("expected qualified hold end type, got %+v", got)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected qualified hold guard to stop task %d", task.ID)
+}
+
 func TestReportTemplatesService(t *testing.T) {
 	db := newServiceTestDB(t)
 	repo := database.NewRepository(db)
@@ -733,6 +802,112 @@ func TestSystemConfigServiceDatabaseConfig(t *testing.T) {
 	badPort := 70000
 	if _, err := service.UpdateDatabaseConfig(DatabaseConfigUpdate{Port: &badPort}); err == nil {
 		t.Fatal("expected invalid port error")
+	}
+}
+
+func TestDetectionPlansServiceStartsRunAndMarksPlan(t *testing.T) {
+	db := newServiceTestDB(t)
+	repo := database.NewRepository(db)
+	project := createServiceProject(t, repo)
+	if err := repo.CreateTag(&models.TagConfig{VarID: 1001, GatewayID: 1, SourceTopic: "topic", SourcePath: "supply_air", RawName: "supply_air", ProjectID: &project.ID, ProjectCode: project.ProjectCode, VarName: "supply_air", JSONPath: "supply_air", DataType: "FLOAT", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	standard := &models.DetectionStandard{StandardCode: "STD-PLAN", Name: "Plan Standard", ProjectID: &project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Enabled: true}
+	if err := repo.CreateDetectionStandard(standard, []models.DetectionStandardItem{
+		{VarID: 1001, VarName: "supply_air", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true, CheckOnStart: true, CheckMethod: models.CheckMethodNumericRange, QualityPolicy: models.QualityPolicyIgnoreBad},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan := &models.DetectionPlan{
+		PlanNo:            "PLAN-SVC-1",
+		SourceSystem:      "mes",
+		ExternalPlanID:    "MES-SVC-1",
+		FactoryNo:         "FAC-SVC-1",
+		DeviceModel:       "MODEL-A",
+		Mode:              "standard",
+		StandardCode:      standard.StandardCode,
+		ReportRequestJSON: `{"enabled":true,"reports":[{"template_code":"PLAN-SVC-TPL","report_name":"计划报表","variables":[{"var_id":"1001"}],"params":{"operator":"tester","end_policy":"qualified_hold","qualified_hold_minutes":"10"}}]}`,
+		Status:            models.DetectionPlanStatusPending,
+	}
+	if err := db.Create(plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	tags := pipeline.NewTagManager()
+	tasks := pipeline.NewTaskManager()
+	flows := pipeline.NewTaskFlowExecutor(repo, tags, tasks, pipeline.NewChannels())
+	requestVarID := int64(990001)
+	tags.Load([]models.TagConfig{{
+		VarID:       requestVarID,
+		SourceType:  models.TagSourceVirtual,
+		VarName:     "task_request",
+		RawName:     "task_request",
+		JSONPath:    "task_request",
+		DataType:    "STRING",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+	}})
+	flowSteps, err := json.Marshal([]map[string]any{{
+		"code":   "start",
+		"module": models.TaskFlowActionBuiltinStartDetectionRun,
+		"params": map[string]any{
+			"project_id":        map[string]any{"source": "trigger_param", "key": "project_id"},
+			"factory_no":        map[string]any{"source": "trigger_param", "key": "factory_no", "optional": true},
+			"customer_name":     map[string]any{"source": "trigger_param", "key": "customer_name", "optional": true},
+			"device_model":      map[string]any{"source": "trigger_param", "key": "device_model", "optional": true},
+			"test_no":           map[string]any{"source": "trigger_param", "key": "test_no"},
+			"standard_id":       map[string]any{"source": "trigger_param", "key": "standard_id"},
+			"config_enabled":    map[string]any{"source": "trigger_param", "key": "config_enabled"},
+			"config_code":       map[string]any{"source": "trigger_param", "key": "config_code"},
+			"config_name":       map[string]any{"source": "trigger_param", "key": "config_name"},
+			"config_version":    map[string]any{"source": "trigger_param", "key": "config_version"},
+			"config_hash":       map[string]any{"source": "trigger_param", "key": "config_hash"},
+			"process_params":    map[string]any{"source": "trigger_param", "key": "process_params", "optional": true},
+			"report_request":    map[string]any{"source": "trigger_param", "key": "report_request", "optional": true},
+			"end_policy":        map[string]any{"source": "trigger_param", "key": "end_policy", "optional": true},
+			"qualified_hold_ms": map[string]any{"source": "trigger_param", "key": "qualified_hold_ms", "optional": true},
+			"operator_note":     map[string]any{"source": "trigger_param", "key": "operator_note", "optional": true},
+			"enable_storage":    true,
+			"enable_alarm":      true,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flows.Load([]models.TaskFlow{{
+		ID:              910001,
+		ProjectID:       project.ID,
+		FlowCode:        "plan-request-start-detection",
+		Name:            "Plan Request Start Detection",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerDataChange,
+		ConditionScript: `task_params.command === "start_detection"`,
+		StepsJSON:       string(flowSteps),
+		TimeoutMS:       3000,
+		Vars:            []models.TaskFlowVar{{FlowID: 910001, ProjectID: project.ID, VarID: requestVarID, VarName: "task_request", Role: models.TaskFlowVarRoleWatch}},
+	}})
+	flows.Start(1)
+	variables := NewVariableWriteService(repo, tags, nil, flows)
+	detection := NewDetectionRunsService(repo, tasks)
+	plans := NewDetectionPlansService(repo, detection, "edge-local", variables)
+	result, err := plans.Start(StartDetectionPlanInput{PlanID: plan.ID, ProjectID: project.ID, RequestVarName: "task_request", WaitTaskTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Task == nil || result.Task.FactoryNo != plan.FactoryNo || result.Task.StandardID == nil || *result.Task.StandardID != standard.ID {
+		t.Fatalf("unexpected started task: %+v", result.Task)
+	}
+	if result.Task.EndPolicy != models.DetectionEndPolicyQualifiedHold || result.Task.QualifiedHoldMS != 10*60*1000 {
+		t.Fatalf("expected imported plan to start a 10 minute qualified-hold task, got policy=%s hold_ms=%d", result.Task.EndPolicy, result.Task.QualifiedHoldMS)
+	}
+	if result.Plan.Status != models.DetectionPlanStatusStarted || result.Plan.StartedTaskID == nil || *result.Plan.StartedTaskID != result.Task.ID {
+		t.Fatalf("unexpected started plan: %+v", result.Plan)
+	}
+	if len(result.Task.ReportRequests) != 1 || result.Task.ReportRequests[0].ReportName != "计划报表" || result.Task.ReportRequests[0].TemplateCode != "PLAN-SVC-TPL" || !strings.Contains(result.Task.ReportRequests[0].ParamsJSON, `"operator":"tester"`) {
+		t.Fatalf("expected plan report request snapshot to be frozen, got %+v", result.Task.ReportRequests)
+	}
+	if _, err := plans.Start(StartDetectionPlanInput{PlanID: plan.ID, ProjectID: project.ID}); !errors.Is(err, database.ErrDetectionPlanNotPending) {
+		t.Fatalf("expected not pending on duplicate start, got %v", err)
 	}
 }
 

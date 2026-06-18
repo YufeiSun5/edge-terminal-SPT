@@ -110,6 +110,7 @@ import {
   updateStorageRoute,
   updateVariable,
 } from '@/features/edge-status/api'
+import { detectionStandardScopeColor, detectionStandardScopeLabel } from '@/shared/detection/standardScope'
 import './settings.css'
 
 type GatewayFormValues = GatewayConfigPayload
@@ -828,7 +829,7 @@ export function SettingsPage() {
     mutationFn: ({ values, dryRun }: { values: KioProjectRemapFormValues; dryRun: boolean }) =>
       bulkRemapKioProjects({
         ...values,
-        project_count: values.project_count ?? 12,
+        project_count: values.project_count ?? 8,
         remap_var_name: values.remap_var_name ?? true,
         enable: values.enable ?? true,
         dry_run: dryRun,
@@ -901,6 +902,7 @@ export function SettingsPage() {
       const payload: DetectionStandardPayload = {
         ...values,
         project_code: project?.project_code ?? values.project_code ?? '',
+        project_group: values.project_group || project?.project_group || '',
         mode: values.mode || 'standard',
         version: editingStandard?.version ?? 1,
         enabled: values.enabled ?? true,
@@ -1294,7 +1296,7 @@ export function SettingsPage() {
 
   function openKioRemapModal() {
     kioRemapForm.setFieldsValue({
-      project_count: 12,
+      project_count: 8,
       project_code_prefix: 'AC',
       project_display_prefix: '项目',
       project_en_prefix: 'Project ',
@@ -1327,6 +1329,7 @@ export function SettingsPage() {
         display_name_ja: detail.display_name_ja,
         project_id: standardProjectId(detail),
         project_code: standardProjectCode(detail),
+        project_group: detail.project_group,
         mode: detail.mode,
         version: detail.version,
         enabled: detail.enabled,
@@ -1358,6 +1361,9 @@ export function SettingsPage() {
     } else {
       standardForm.setFieldsValue({
         standard_code: `STD-${Date.now().toString().slice(-6)}`,
+        project_id: undefined,
+        project_code: '',
+        project_group: '',
         mode: 'standard',
         version: 1,
         enabled: true,
@@ -1900,11 +1906,15 @@ export function SettingsPage() {
       ),
     },
     {
-      title: t('settings.variables.project'),
+      title: t('settings.standards.scope'),
       dataIndex: 'project_code',
       key: 'project_code',
-      width: 150,
-      render: (_, record) => standardProjectId(record) ? standardProjectCode(record) : <Tag>{t('settings.standards.global')}</Tag>,
+      width: 170,
+      render: (_, record) => (
+        <Tag color={detectionStandardScopeColor(record)}>
+          {detectionStandardScopeLabel(record, t)}
+        </Tag>
+      ),
     },
     { title: t('settings.standards.mode'), dataIndex: 'mode', key: 'mode', width: 110 },
     { title: t('settings.standards.version'), dataIndex: 'version', key: 'version', width: 90 },
@@ -3193,6 +3203,9 @@ export function SettingsPage() {
           <Form.Item name="model_name" label={t('settings.groups.model')}>
             <Input />
           </Form.Item>
+          <Form.Item name="project_group" label={t('settings.groups.projectGroup')}>
+            <Input />
+          </Form.Item>
           <div className="settings-form-actions">
             <Button type="primary" htmlType="submit" icon={<Save size={15} />} loading={createProjectMutation.isPending}>
               {t('settings.groups.create')}
@@ -3267,7 +3280,7 @@ export function SettingsPage() {
         <Form form={kioRemapForm} layout="vertical">
           <div className="settings-form-grid modal-grid">
             <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}>
-              <InputNumber min={1} max={12} />
+              <InputNumber min={1} max={8} />
             </Form.Item>
             <Form.Item name="project_code_prefix" label={t('settings.variables.kioProjectCodePrefix')}>
               <Input />
@@ -3650,7 +3663,14 @@ export function SettingsPage() {
               <Select
                 allowClear
                 options={projects.map((project) => ({ label: `${displayProjectName(project)} · ${project.project_code}`, value: project.id }))}
+                onChange={(projectId) => {
+                  const project = projects.find((item) => item.id === projectId)
+                  standardForm.setFieldValue('project_group', project?.project_group || '')
+                }}
               />
+            </Form.Item>
+            <Form.Item name="project_group" label={t('settings.groups.projectGroup')}>
+              <Input />
             </Form.Item>
             <Form.Item name="mode" label={t('settings.standards.mode')}>
               <Input />

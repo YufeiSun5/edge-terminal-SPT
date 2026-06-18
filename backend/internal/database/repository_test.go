@@ -516,14 +516,14 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Project := &models.Project{ProjectCode: "AC-01", Name: "Project", DisplayName: "设备", DisplayNameEN: "Project", DisplayNameJA: "設備", Enabled: true}
+	Project := &models.Project{ProjectCode: "AC-01", Name: "Project", DisplayName: "设备", DisplayNameEN: "Project", DisplayNameJA: "設備", ProjectGroup: "AC", Enabled: true}
 	if err := repo.CreateProject(Project); err != nil {
 		t.Fatal(err)
 	}
 	if Projects, err := repo.ListProjects(); err != nil || len(Projects) != 1 || Projects[0].DisplayNameEN != "Project" {
 		t.Fatalf("list Projects len=%d err=%v", len(Projects), err)
 	}
-	legacyProject := &models.Project{ProjectCode: "AC-02", Name: "Legacy Project", Enabled: true}
+	legacyProject := &models.Project{ProjectCode: "AC-02", Name: "Legacy Project", ProjectGroup: "AC", Enabled: true}
 	if err := repo.CreateProject(legacyProject); err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +655,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}
 
 	limitH := 30.0
-	standard := &models.DetectionStandard{StandardCode: "STD-1", Name: "Standard", ProjectID: &Project.ID, ProjectCode: Project.ProjectCode, Mode: "standard", Enabled: true}
+	standard := &models.DetectionStandard{StandardCode: "STD-1", Name: "Standard", ProjectID: &Project.ID, ProjectCode: Project.ProjectCode, ProjectGroup: Project.ProjectGroup, Mode: "standard", Enabled: true}
 	if err := repo.CreateDetectionStandard(standard, []models.DetectionStandardItem{
 		{VarID: 100, VarName: "temp", DisplayName: "温度", CheckEnabled: true, StoreEnabled: true, Required: true, LimitH: &limitH, Unit: "C", DecimalPlaces: 1},
 		{VarID: 102, VarName: "label", CheckEnabled: false, StoreEnabled: false},
@@ -721,6 +721,39 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}
 	if !db.Migrator().HasTable(ProjectWideTableName(Project.ID)) || !db.Migrator().HasColumn(ProjectWideTableName(Project.ID), "temp") {
 		t.Fatal("expected Project wide table and dynamic column for routes")
+	}
+	project2 := legacyProject
+	project2LimitH := 35.0
+	if err := repo.CreateTag(&models.TagConfig{VarID: 200, GatewayID: 1, SourceTopic: "topic-2", SourcePath: "temp-2", RawName: "temp", ProjectID: &project2.ID, ProjectCode: project2.ProjectCode, VarName: "temp", DisplayName: "温度-2", JSONPath: "temp", DataType: "FLOAT", Unit: "C", DecimalPlaces: 1, Enabled: true, DefaultAlarmEnabled: true, DefaultLimitH: &project2LimitH}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateStorageRoute(&models.StorageRoute{RouteCode: "route-temp-2", ProjectID: project2.ID, VarID: 200, Enabled: true, StoreOnStart: true, TriggerMode: "on_cycle", CycleMS: 3000, StorageTarget: models.StorageTargetWideTable, StorageTable: ProjectWideTableName(project2.ID), ColumnName: "temp", ColumnType: "DOUBLE"}); err != nil {
+		t.Fatal(err)
+	}
+	enabledStandard := true
+	commonStandards, err := repo.ListDetectionStandards(DetectionStandardFilter{ProjectID: &project2.ID, Enabled: &enabledStandard})
+	if err != nil || len(commonStandards) == 0 {
+		t.Fatalf("expected same project_group standards to be visible for project2, len=%d err=%v", len(commonStandards), err)
+	}
+	task2, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: project2.ID, TestNo: "T-AC02", FactoryNo: "F-T-AC02", Mode: "standard", StandardID: &standard.ID, LimitCheckEnabled: &limitCheck})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task2.StandardItems) != 1 || task2.StandardItems[0].VarID != 200 || task2.StandardItems[0].DisplayName != "温度-2" {
+		t.Fatalf("expected shared standard to remap snapshot to project2 variable, got %+v", task2.StandardItems)
+	}
+	hasProject2Route := false
+	for _, route := range task2.StorageRoutes {
+		if route.VarID == 200 && route.StorageTable == ProjectWideTableName(project2.ID) {
+			hasProject2Route = true
+			break
+		}
+	}
+	if !hasProject2Route {
+		t.Fatalf("expected remapped storage route for project2, got %+v", task2.StorageRoutes)
+	}
+	if _, err := repo.StopDetectionTask(task2.ID, "done"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := repo.StartDetectionTask(Project.ID, "T-2", "standard", nil); err == nil {
 		t.Fatal("expected duplicate running task error")
@@ -867,7 +900,8 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if err != nil || len(templates) != 0 {
 		t.Fatalf("unexpected templates len=%d err=%v", len(templates), err)
 	}
-	template := &models.ReportTemplate{TemplateCode: "RPT-1", Name: "Report", FileRef: "reports/rpt-1.xlsx", Enabled: true}
+	longTemplateRef := "templates/RPT-1/v1/793023e85279b502e84041beba2a31806298b589e86e94bad9bd39109b3eabdd/rpt-1.xlsx"
+	template := &models.ReportTemplate{TemplateCode: "RPT-1", Name: "Report", FileRef: longTemplateRef, Enabled: true}
 	if err := repo.CreateReportTemplate(template); err != nil {
 		t.Fatal(err)
 	}
@@ -898,10 +932,11 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	reportTask, err := repo.StartDetectionTaskWithOptions(StartDetectionOptions{
-		ProjectID: Project.ID,
-		TestNo:    "T-REPORT",
-		FactoryNo: "F-T-REPORT",
-		Mode:      "custom",
+		ProjectID:        Project.ID,
+		TestNo:           "T-REPORT",
+		FactoryNo:        "F-T-REPORT",
+		Mode:             "custom",
+		ReportTemplateID: &template.ID,
 		CustomItems: []models.DetectionStandardItem{
 			{VarID: 100, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
 			{VarID: reportTag.VarID, VarName: reportTag.VarName, CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
@@ -921,6 +956,9 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	}
 	if len(reportTask.ReportRequests) != 1 || reportTask.ReportRequests[0].TemplateID == nil || *reportTask.ReportRequests[0].TemplateID != template.ID || reportTask.ReportRequests[0].TemplateCode != template.TemplateCode || !strings.Contains(reportTask.ReportRequests[0].VariablesJSON, `"humidity"`) || !strings.Contains(reportTask.ReportRequests[0].ParamsJSON, `"inlet_area_m2":1.25`) {
 		t.Fatalf("unexpected report request row: %+v", reportTask.ReportRequests)
+	}
+	if reportTask.TemplateRef != longTemplateRef {
+		t.Fatalf("expected long template ref to be frozen without truncation, got %q", reportTask.TemplateRef)
 	}
 	if _, err := repo.StopDetectionTask(reportTask.ID, "report done"); err != nil {
 		t.Fatal(err)

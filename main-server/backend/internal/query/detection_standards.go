@@ -18,6 +18,7 @@ type DetectionStandard struct {
 	DisplayNameJA    string                  `gorm:"column:display_name_ja" json:"display_name_ja"`
 	ProjectID        *uint                   `gorm:"column:project_id" json:"project_id,omitempty"`
 	ProjectCode      string                  `gorm:"column:project_code" json:"project_code"`
+	ProjectGroup     string                  `gorm:"column:project_group" json:"project_group"`
 	Mode             string                  `gorm:"column:mode" json:"mode"`
 	ReportTemplateID *uint                   `gorm:"column:report_template_id" json:"report_template_id,omitempty"`
 	Version          int                     `gorm:"column:version" json:"version"`
@@ -107,25 +108,37 @@ type DetectionStandardRecent struct {
 func (DetectionStandardRecent) TableName() string { return "sys_detection_standard_recents" }
 
 type DetectionStandardFilter struct {
-	ProjectID   *uint
-	ProjectCode string
-	Mode        string
-	Enabled     *bool
-	Keyword     string
+	ProjectID    *uint
+	ProjectCode  string
+	ProjectGroup string
+	Mode         string
+	Enabled      *bool
+	Keyword      string
 }
 
 func (q *StationViewQuery) ListDetectionStandards(filter DetectionStandardFilter, edgeInstanceID string) ([]DetectionStandard, error) {
+	var project Project
 	if filter.ProjectID != nil {
-		if _, err := q.projectForEdge(*filter.ProjectID, edgeInstanceID); err != nil {
+		var err error
+		project, err = q.projectForEdge(*filter.ProjectID, edgeInstanceID)
+		if err != nil {
 			return nil, err
 		}
 	}
 	stmt := q.detectionStandardsForEdge(edgeInstanceID)
 	if filter.ProjectID != nil {
-		stmt = stmt.Where("sys_detection_standards.project_id = ?", *filter.ProjectID)
+		projectGroup := strings.TrimSpace(project.ProjectGroup)
+		if projectGroup != "" {
+			stmt = stmt.Where("(sys_detection_standards.project_id = ? OR sys_detection_standards.project_group = ? OR (sys_detection_standards.project_id IS NULL AND sys_detection_standards.project_group = ''))", *filter.ProjectID, projectGroup)
+		} else {
+			stmt = stmt.Where("(sys_detection_standards.project_id = ? OR (sys_detection_standards.project_id IS NULL AND sys_detection_standards.project_group = ''))", *filter.ProjectID)
+		}
 	}
 	if strings.TrimSpace(filter.ProjectCode) != "" {
 		stmt = stmt.Where("sys_detection_standards.project_code = ?", strings.TrimSpace(filter.ProjectCode))
+	}
+	if strings.TrimSpace(filter.ProjectGroup) != "" {
+		stmt = stmt.Where("sys_detection_standards.project_group = ?", strings.TrimSpace(filter.ProjectGroup))
 	}
 	if strings.TrimSpace(filter.Mode) != "" {
 		stmt = stmt.Where("sys_detection_standards.mode = ?", strings.TrimSpace(filter.Mode))

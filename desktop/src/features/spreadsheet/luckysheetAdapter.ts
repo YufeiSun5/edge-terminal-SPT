@@ -1,3 +1,5 @@
+import ExcelJS from 'exceljs'
+
 export type SpreadsheetMountOptions = {
   containerId: string
   data?: unknown
@@ -78,6 +80,236 @@ function normalizeWorkbook(data: unknown) {
   }
 
   return { sheets, images }
+}
+
+function cellDisplayValue(value: ExcelJS.CellValue) {
+  if (value === null || value === undefined) return ''
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value !== 'object') return value
+  if ('formula' in value) return (value.result ?? `=${value.formula}`) as string | number | boolean
+  if ('richText' in value) return value.richText.map((part) => part.text).join('')
+  if ('text' in value) return value.text
+  if ('hyperlink' in value) return value.hyperlink
+  return String(value)
+}
+
+function excelFillToColor(fill: ExcelJS.Fill | undefined) {
+  if (!fill || fill.type !== 'pattern') return undefined
+  const argb = fill.fgColor?.argb
+  return argb ? `#${argb.slice(-6)}` : undefined
+}
+
+function excelFontColor(font: Partial<ExcelJS.Font> | undefined) {
+  const argb = font?.color?.argb
+  return argb ? `#${argb.slice(-6)}` : undefined
+}
+
+function bufferToBase64(buffer: ExcelJS.Image['buffer']) {
+  if (!buffer) return undefined
+  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer as ArrayBufferLike)
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  }
+  return btoa(binary)
+}
+
+function imageSource(workbook: ExcelJS.Workbook, imageId: string | number) {
+  const image = workbook.getImage(Number(imageId))
+  if (!image) return undefined
+  const base64 = image.base64 || bufferToBase64(image.buffer)
+  if (!base64) return undefined
+  const extension = image.extension === 'jpeg' ? 'jpeg' : image.extension || 'png'
+  return base64.startsWith('data:') ? base64 : `data:image/${extension};base64,${base64}`
+}
+
+const DEFAULT_COLUMN_WIDTH = 73
+const DEFAULT_ROW_HEIGHT = 19
+
+function excelColumnWidthToPixels(width: number | undefined) {
+  return width ? Math.round(width * 8) : DEFAULT_COLUMN_WIDTH
+}
+
+function excelRowHeightToPixels(height: number | undefined) {
+  return height ? Math.round(height * 1.35) : DEFAULT_ROW_HEIGHT
+}
+
+function sheetColumnPixelWidth(sheet: ExcelJS.Worksheet, columnIndex: number) {
+  return excelColumnWidthToPixels(sheet.getColumn(columnIndex + 1).width)
+}
+
+function sheetRowPixelHeight(sheet: ExcelJS.Worksheet, rowIndex: number) {
+  return excelRowHeightToPixels(sheet.getRow(rowIndex + 1).height)
+}
+
+function anchorPositionToPixels(sheet: ExcelJS.Worksheet, column: number, row: number) {
+  const wholeColumn = Math.floor(column)
+  const wholeRow = Math.floor(row)
+  const columnFraction = column - wholeColumn
+  const rowFraction = row - wholeRow
+  let left = 0
+  let top = 0
+
+  for (let index = 0; index < wholeColumn; index += 1) {
+    left += sheetColumnPixelWidth(sheet, index)
+  }
+  for (let index = 0; index < wholeRow; index += 1) {
+    top += sheetRowPixelHeight(sheet, index)
+  }
+
+  left += columnFraction * sheetColumnPixelWidth(sheet, wholeColumn)
+  top += rowFraction * sheetRowPixelHeight(sheet, wholeRow)
+
+  return {
+    left: Math.max(0, Math.round(left)),
+    top: Math.max(0, Math.round(top)),
+  }
+}
+
+function sheetImages(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet) {
+  const images: Record<string, Record<string, unknown>> = {}
+  sheet.getImages().forEach((item, index) => {
+    const src = imageSource(workbook, item.imageId)
+    if (!src) return
+    const tl = item.range.tl
+    const br = item.range.br
+    const start = anchorPositionToPixels(sheet, tl.col, tl.row)
+    const end = anchorPositionToPixels(sheet, br.col, br.row)
+    const left = start.left
+    const top = start.top
+    const width = Math.max(120, end.left - start.left)
+    const height = Math.max(80, end.top - start.top)
+    images[`image_${index}`] = {
+      type: '2',
+      src,
+      default: {
+        width,
+        height,
+        left,
+        top,
+      },
+      crop: {
+        width,
+        height,
+        offsetLeft: 0,
+        offsetTop: 0,
+      },
+      isFixedPos: false,
+      fixedLeft: left,
+      fixedTop: top,
+      border: {
+        width: 0,
+        radius: 0,
+        style: 'solid',
+        color: '#000',
+      },
+    }
+  })
+  return Object.keys(images).length ? images : undefined
+}
+
+function columnNameToNumber(columnName: string) {
+  return columnName.split('').reduce((total, char) => total * 26 + char.toUpperCase().charCodeAt(0) - 64, 0)
+}
+
+function decodeCellAddress(address: string) {
+  const match = /^([A-Z]+)(\d+)$/i.exec(address)
+  if (!match) return undefined
+  return {
+    column: columnNameToNumber(match[1]),
+    row: Number(match[2]),
+  }
+}
+
+function sheetMergeConfig(sheet: ExcelJS.Worksheet) {
+  const merges = ((sheet.model as ExcelJS.WorksheetModel & { merges?: string[] }).merges ?? []) as string[]
+  const merge: Record<string, { r: number; c: number; rs: number; cs: number }> = {}
+  const mergedCells = new Set<string>()
+  const masterCells = new Map<string, { r: number; c: number; rs: number; cs: number }>()
+
+  merges.forEach((range) => {
+    const [start, end] = range.split(':')
+    const startCell = decodeCellAddress(start)
+    const endCell = decodeCellAddress(end)
+    if (!startCell || !endCell) return
+    const r = startCell.row - 1
+    const c = startCell.column - 1
+    const rs = endCell.row - startCell.row + 1
+    const cs = endCell.column - startCell.column + 1
+    const mergeInfo = { r, c, rs, cs }
+    merge[`${r}_${c}`] = mergeInfo
+    masterCells.set(`${r}_${c}`, mergeInfo)
+    for (let row = r; row < r + rs; row += 1) {
+      for (let column = c; column < c + cs; column += 1) {
+        if (row !== r || column !== c) mergedCells.add(`${row}_${column}`)
+      }
+    }
+  })
+
+  return { merge, mergedCells, masterCells }
+}
+
+async function xlsxFileToLuckysheetData(file: File) {
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.load(await file.arrayBuffer())
+
+  const visibleWorksheets = workbook.worksheets.filter((sheet) => sheet.state !== 'hidden' && sheet.state !== 'veryHidden')
+  const sourceSheets = visibleWorksheets.length > 0 ? visibleWorksheets : workbook.worksheets
+
+  const sheets = sourceSheets.map((sheet, sheetIndex) => {
+    const celldata: Array<{ r: number; c: number; v: Record<string, unknown> }> = []
+    const columnlen: Record<number, number> = {}
+    const rowlen: Record<number, number> = {}
+    const { merge, mergedCells, masterCells } = sheetMergeConfig(sheet)
+
+    sheet.columns.forEach((column, index) => {
+      if (column.width) columnlen[index] = excelColumnWidthToPixels(column.width)
+    })
+
+    sheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      if (row.height) rowlen[rowNumber - 1] = excelRowHeightToPixels(row.height)
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        const cellKey = `${rowNumber - 1}_${colNumber - 1}`
+        if (mergedCells.has(cellKey)) return
+        const value = cellDisplayValue(cell.value)
+        const style: Record<string, unknown> = {
+          v: value,
+          m: value === undefined || value === null ? '' : String(value),
+          ct: { fa: 'General', t: typeof value === 'number' ? 'n' : 'g' },
+        }
+        const font = cell.font
+        if (font?.bold) style.bl = 1
+        if (font?.italic) style.it = 1
+        if (font?.underline) style.un = 1
+        if (font?.size) style.fs = font.size
+        const fontColor = excelFontColor(font)
+        if (fontColor) style.fc = fontColor
+        const background = excelFillToColor(cell.fill)
+        if (background) style.bg = background
+        if (cell.alignment?.horizontal) style.ht = cell.alignment.horizontal
+        if (cell.alignment?.vertical) style.vt = cell.alignment.vertical
+        const mergeInfo = masterCells.get(cellKey)
+        if (mergeInfo) style.mc = mergeInfo
+        celldata.push({ r: rowNumber - 1, c: colNumber - 1, v: style })
+      })
+    })
+
+    return {
+      name: sheet.name,
+      index: String(sheetIndex),
+      status: sheetIndex === 0 ? 1 : 0,
+      order: sheetIndex,
+      images: sheetImages(workbook, sheet),
+      celldata,
+      config: {
+        columnlen,
+        rowlen,
+        merge,
+      },
+    }
+  })
+  return { sheets }
 }
 
 export function createLuckysheetAdapter(): SpreadsheetAdapter {
@@ -168,8 +400,26 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
       luckyWindow = undefined
       mountedContainer = undefined
     },
-    async importFile() {
-      throw new Error('Luckysheet file import needs the future report-template API and is not enabled in the static screen.')
+    async importFile(file) {
+      const container = mountedContainer
+      if (!container) throw new Error('Luckysheet has not been mounted.')
+      const data = await xlsxFileToLuckysheetData(file)
+      const workbook = normalizeWorkbook(data)
+      const luckysheet = luckyWindow?.luckysheet
+      if (!luckysheet?.create) throw new Error('Luckysheet vendor assets are not ready.')
+      luckysheet.destroy?.()
+      luckysheet.create({
+        container: 'luckysheet-root',
+        lang: 'zh',
+        data: workbook.sheets,
+        images: workbook.images,
+        showinfobar: false,
+        showtoolbar: false,
+        showsheetbar: true,
+        allowEdit: false,
+        enableAddRow: false,
+        enableAddBackTop: false,
+      })
     },
     async exportFile() {
       const file = luckyWindow?.luckysheet?.getLuckysheetfile?.() ?? []

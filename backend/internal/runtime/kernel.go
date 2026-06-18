@@ -243,6 +243,7 @@ func (k *Kernel) mountRoutes() {
 	realtimeWSService := services.NewRealtimeWSService(k.tags, k.tasks)
 	kioWriteService := services.NewKIOWriteService(k.mqtt)
 	variableWriteService := services.NewVariableWriteService(k.repo, k.tags, kioWriteService, k.flows)
+	detectionPlansService := services.NewDetectionPlansService(k.repo, detectionRunsService, k.cfg.Auth.EdgeInstanceID, variableWriteService)
 	k.flows.SetVariableWriter(func(ctx context.Context, input pipeline.TaskFlowVariableWriteInput) (map[string]any, error) {
 		result, err := variableWriteService.Write(ctx, services.VariableWriteInput{
 			VarID:          input.VarID,
@@ -282,7 +283,7 @@ func (k *Kernel) mountRoutes() {
 	})
 
 	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).WithNotificationHub(k.notify).Register(v1, k.auth)
-	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).WithRuntimeSettings(runtimeSettingsService).WithNotificationHub(k.notify).Register(v1, k.auth)
+	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).WithRuntimeSettings(runtimeSettingsService).WithNotificationHub(k.notify).WithDetectionPlans(detectionPlansService).Register(v1, k.auth)
 	handlers.NewEdgeRealtimeHandler(variablesService).Register(v1, k.auth)
 	gatewaysHandler := handlers.NewGatewaysHandler(k.repo, k.mqtt, k.channels, k.notify)
 	taskFlowsHandler := handlers.NewTaskFlowsHandler(k.repo, k.flows)
@@ -298,6 +299,7 @@ func (k *Kernel) mountRoutes() {
 	gatewaysHandler.Register(protected, k.auth)
 	handlers.NewReportTemplatesHandler(reportTemplatesService).Register(protected, k.auth)
 	handlers.NewDetectionRunsHandler(detectionRunsService).Register(protected, k.auth)
+	handlers.NewDetectionPlansHandler(detectionPlansService).Register(protected, k.auth)
 	handlers.NewSystemConfigHandler(systemConfigService).Register(protected, k.auth)
 	handlers.NewRuntimeSettingsHandler(runtimeSettingsService).Register(protected, k.auth)
 	handlers.NewAuditLogsHandler(k.repo).Register(protected, k.auth)

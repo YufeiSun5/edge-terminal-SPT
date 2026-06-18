@@ -40,7 +40,7 @@ type DetectionTask struct {
 	StopReason            string                      `gorm:"column:stop_reason;size:255" json:"stop_reason"`
 	OperatorNote          string                      `gorm:"column:operator_note;size:512" json:"operator_note"`
 	CustomConfigJSON      string                      `gorm:"column:custom_config_json;type:text" json:"custom_config_json,omitempty"`
-	TemplateRef           string                      `gorm:"column:template_ref;size:128" json:"template_ref"`
+	TemplateRef           string                      `gorm:"column:template_ref;size:512" json:"template_ref"`
 	ReportTemplateID      *uint                       `gorm:"column:report_template_id;index" json:"report_template_id,omitempty"`
 	ReportTemplateCode    string                      `gorm:"column:report_template_code;size:64" json:"report_template_code"`
 	ReportTemplateVersion int                         `gorm:"column:report_template_version;default:0" json:"report_template_version"`
@@ -102,6 +102,7 @@ type DetectionStandard struct {
 	DisplayNameJA    string                  `gorm:"column:display_name_ja;size:128" json:"display_name_ja"`
 	ProjectID        *uint                   `gorm:"column:project_id;index" json:"project_id,omitempty"`
 	ProjectCode      string                  `gorm:"column:project_code;size:64;index" json:"project_code"`
+	ProjectGroup     string                  `gorm:"column:project_group;size:64;index" json:"project_group"`
 	Mode             string                  `gorm:"column:mode;size:64;index" json:"mode"`
 	ReportTemplateID *uint                   `gorm:"column:report_template_id;index" json:"report_template_id,omitempty"`
 	Version          int                     `gorm:"column:version;default:1;not null" json:"version"`

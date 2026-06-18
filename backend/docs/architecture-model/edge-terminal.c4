@@ -1,0 +1,352 @@
+specification {
+  element actor
+  element system
+  element container
+  element component
+  element database
+  element queue
+  element storage
+  element external
+}
+
+model {
+  operator = actor '现场操作员 / 桌面用户' {
+    description '通过桌面端查看实时数据、启动检测、查看历史记录、维护报表设置。'
+  }
+
+  mainUser = actor '主服务器用户' {
+    description '通过主服务器模式界面查看跨边缘端历史、计划、报表，并发起受控操作。'
+  }
+
+  externalPlanSystem = external '外部计划系统' {
+    description '把外部下发的检测计划写入可同步的数据表。'
+  }
+
+  mqttKio = external 'MQTT / KingIOT KIO' {
+    description '现场采集数据来源，也是 KIO 写回控制的协议通道。'
+  }
+
+  databaseSync = external '数据库同步软件' {
+    description '外部数据库同步软件。让主/边数据库表短时延迟后最终一致；只同步数据表，不同步文件、实时内存或控制命令，应用层不实现也不等待同步。'
+  }
+
+  edgeTerminal = system 'Edge Terminal 边缘端' {
+    description '现场边缘端桌面和后端。负责采集、实时内存、本地控制、检测执行、本地持久化、登录、SSO 跳转和 sidecar 运行。'
+
+    desktop = container 'Electron + React 桌面壳' {
+      description '渲染层只能通过统一 API 封装和 WebSocket 客户端访问后端；不能直接访问 MySQL、RabbitMQ、文件系统或 sidecar 内部。'
+    }
+
+    edgeBackend = container 'Go 边缘后端' {
+      description 'Go sidecar，监听 127.0.0.1:18080。负责现场运行态、本地 API、任务执行和 edge-control service-token 接口。'
+
+      httpWs = component 'HTTP / WS 处理器' {
+        description 'Gin 路由入口，负责权限检查、状态码映射、DTO 边界和 WebSocket 命令入口。'
+      }
+
+      runtimeKernel = component 'Runtime Kernel 运行内核' {
+        description '启动时装配 repository、MQTT、worker、service、route、认证、健康检查和运行诊断。'
+      }
+
+      mqttManager = component 'MQTT Manager 网关管理' {
+        description '连接网关、订阅 topic、发布 KIO 写入命令，并把采集消息放入队列。'
+      }
+
+      logicQueue = queue 'Logic Channel 实时队列' {
+        description '实时热路径队列。MQTT 回调只能入队，不能直接写 MySQL。'
+      }
+
+      discoveryQueue = queue 'Discovery Channel 变量发现队列' {
+        description '首次完整快照的变量发现队列，用于发现未启用的候选变量。'
+      }
+
+      cleaningPipeline = component 'Runtime Cleaning Pipeline 运行态清洗' {
+        description '负责类型转换、比例/偏移、质量归一化、可疑值过滤、防抖、死区和首帧处理。'
+      }
+
+      tagManager = component 'TagManager / ProjectRealtimeView 实时视图' {
+        description '内存优先的实时值 map 和项目变量索引。只有已启用且已分配项目的变量进入运行态。'
+      }
+
+      taskManager = component 'TaskManager / ProjectRunContext 检测上下文' {
+        description '内存中的活动检测上下文，包含冻结后的检测项、存储路由、报警状态机、暂停状态和运行态。'
+      }
+
+      storageBus = component 'StorageBus' {
+        description '按项目、表、时间桶批量写历史数据，落到 rt_history_data 和项目宽表。'
+      }
+
+      alarmWorker = component 'Alarm Worker 报警写入' {
+        description '持久化限值报警的进入、恢复、等级变化记录，并发出通知事件。'
+      }
+
+      notificationDispatcher = component 'Notification Dispatcher / Hub 通知分发' {
+        description '持久化通知，并把在线 WebSocket 通知事件扇出给客户端。'
+      }
+
+      taskFlowExecutor = component 'TaskFlowExecutor' {
+        description '通过 var_id 反向索引、内置模块、JavaScript 和运行记录执行配置好的任务流。'
+      }
+
+      detectionRuns = component 'DetectionRunsService' {
+        description '检测任务运行的唯一业务入口：创建、停止、暂停、恢复、应用配置、冻结快照、更新运行上下文。'
+      }
+
+      detectionPlans = component 'DetectionPlansService' {
+        description '把 sys_detection_plans 从 pending 推到 starting，解析 standard_code/report_request_json，写 watched STRING 任务请求变量，并等待任务流创建真实任务；不直接兜底调用 DetectionRunsService.Start。'
+      }
+
+      taskRequestEntry = component 'Watched STRING Task Request 任务请求入口' {
+        description '正式开工入口。工位手工开工、计划开工和主服务器命令都写入启用 data_change 任务流监听的 STRING 虚变量，例如 task_request 或现场别名。'
+      }
+
+      standardScope = component 'Detection Standard Scope 标准作用域解析' {
+        description '检测标准可按全局、project_group 或单项目生效。启动具体 Project 时按业务 var_name 重映射到目标项目变量，再冻结检测项。'
+      }
+
+      variableWrite = component 'VariableWriteService / KIOWriteService' {
+        description '校验可写变量，写入虚变量，或执行带审计和 ack 等待的 KIO 下写控制。'
+      }
+
+      repositories = component 'Repository / GORM 数据访问边界' {
+        description '统一数据库访问边界，负责模型、事务、查询 helper 和持久化约束。'
+      }
+    }
+
+    edgeDb = database 'Edge MySQL' {
+      description '边缘端本地事实来源，保存配置、历史、检测运行记录、报警、任务流运行、审计日志和可同步表。'
+    }
+  }
+
+  mainServer = system 'Main Server 主服务器' {
+    description '跨边缘端聚合桥、统一登录/权限入口、报表 worker 和受控操作门面。主服务器不直接执行现场逻辑。'
+
+    mainFrontend = container '主服务器模式 React UI' {
+      description '复用同一套桌面渲染层，但配置为调用主服务器 API。'
+    }
+
+    mainBackend = container 'Go 主服务器后端' {
+      description '监听 19080。读取镜像库，通过 service token 把实时/控制路由到边缘端，并负责报表 artifact。'
+
+      authFacade = component 'Auth / Permission Facade 认证权限门面' {
+        description '处理主服务器 JWT、同步用户、通过边缘 service-token 校验 SSO ticket、路由权限。'
+      }
+
+      syncedQuery = component 'Synchronized Query Layer 同步查询层' {
+        description '从镜像库读取项目、变量、历史、报警、任务流运行、检测任务、报表请求和计划。'
+      }
+
+      edgeRouter = component 'Edge Routing / Context Resolver 边缘路由' {
+        description '把 project_id、task_id、var_id 或明确的 edge_instance_id 解析到目标边缘端；拒绝歧义或不匹配的控制请求。'
+      }
+
+      edgeControlClient = component 'edge-control HTTP/WS Client 边缘控制客户端' {
+        description '使用 service token 调用边缘 /api/v1/edge-control/* 读取和命令接口，并注入 command_id 和操作人上下文。'
+      }
+
+      reportService = component 'Report Service 报表服务' {
+        description '主服务器报表能力总入口。它编排模板资产、计划导入、readiness、job worker、ReportPackage、Excel/PNG 生成、通知和 artifact。'
+      }
+
+      reportTemplateAssets = component 'Report Template Assets 模板资产' {
+        description '对应 main-server/backend/internal/reports/templates.go。负责上传客户 xlsx、校验 workbook、保存 artifact_key/file_sha256/file_size、更新 sys_report_templates.params_schema_json.cell_mapping。'
+      }
+
+      reportPlanImport = component 'Report Plan Import 计划导入' {
+        description '对应 main-server/backend/internal/reports/plan_import.go。解析计划 xlsx，匹配项目/变量/模板，解析上下限，确认后创建检测配置和 sys_detection_plans，并生成 report_request_json。'
+      }
+
+      syncConfigWriter = component 'Syncable Config Writer 同步配置写入' {
+        description '主服务器低频配置/计划写入边界。复用 CreateDetectionStandard/CreateDetectionPlan 写带 project_group 作用域的 sys_detection_standards/items 和 sys_detection_plans；不能写 sys_detection_tasks 运行态。'
+      }
+
+      reportReadiness = component 'Report Readiness 同步就绪检查' {
+        description '对应 main-server/backend/internal/query/report_readiness.go。检查任务、报表请求、规则快照、存储路由、历史采样、特征值、报警和模板元数据是否已同步到主服务器。'
+      }
+
+      reportJobWorker = component 'Report Job Worker 报表队列' {
+        description '对应 ReportService.EnqueueTask/RunDueOnce/ProcessJob。自动发现已停止且有报表请求但无 job 的任务，驱动 pending/waiting_for_sync/generating/succeeded/failed 状态。'
+      }
+
+      reportRegeneration = component 'Report Regeneration 报表重生成' {
+        description '对应 RegenerateJobWithParams 和 POST /main-server/report-jobs/:id/regenerate。用 parent_job_id/generation_type/params_override_json 生成新一代 job，不覆盖原始请求参数或旧 artifact。'
+      }
+
+      reportPackageBuilder = component 'ReportPackage Builder 报表业务包' {
+        description '对应 main-server/backend/internal/reports/package.go。一次 detection_run_report_requests 生成一份 Excel，装配任务身份、变量指标、上下限快照、连续合格两小时窗口、params 和 cell_mapping。'
+      }
+
+      reportExcelRenderer = component 'Excel / PNG Renderer Excel 与曲线生成' {
+        description '对应 ReportService.writeArtifacts/writeExcel/writeReportChartImages。用 excelize 打开模板，隐藏内部追溯 sheet，写客户模板单元格，并按 cell_mapping.chart_sheet/chart_cell 把曲线图插入业务 sheet。'
+      }
+
+      reportNotifications = component 'Report Notifications 报表通知' {
+        description '对应 main-server/backend/internal/reports/notifications.go。把 job started/succeeded/failed 事件写入 main_report_notifications，并提供未读、已读和跳转 payload。'
+      }
+
+      artifactStore = storage 'Report ArtifactStore 报表文件存储' {
+        description '主服务器本地磁盘 Afero 存储。保存模板 source.xlsx、计划导入原文件、生成的 xlsx、manifest JSON 和曲线 PNG；业务代码只使用 artifact_key。数据下载 zip 当前同步返回，不落状态表。'
+      }
+
+      downloadPackages = component 'Download Packages 数据下载打包' {
+        description '对应 BuildDownloadPackage 和 POST /main-server/download-packages。按 task_id/keys 同步返回 zip，包含 manifest、任务/配置/历史/事件/报警快照和已成功报表 job 的 xlsx artifact；缺失报表不伪造半成品。'
+      }
+    }
+
+    mirrorDb = database 'Main Mirror DB 主服务器镜像库' {
+      description '由边缘表同步来的数据库，预期与边缘库短时延迟后内容一致。用于历史和配置读取，不作为现场控制写入来源。'
+    }
+
+    mainOwnedDb = database 'Main-owned Tables 主服务器自有表' {
+      description '保存 main_report_jobs、事件、报表通知、已读覆盖信息和报表资产元数据。'
+    }
+  }
+
+  operator -> edgeTerminal.desktop '使用本地桌面'
+  mainUser -> mainServer.mainFrontend '使用主服务器模式界面'
+  edgeTerminal.desktop -> edgeTerminal.edgeBackend 'HTTP / WS /api/v1'
+  mainServer.mainFrontend -> mainServer.mainBackend 'HTTP / WS /api/v1'
+
+  mqttKio -> edgeTerminal.edgeBackend.mqttManager 'MQTT 快照和变化数据'
+  edgeTerminal.edgeBackend.mqttManager -> edgeTerminal.edgeBackend.logicQueue '实时消息入队'
+  edgeTerminal.edgeBackend.mqttManager -> edgeTerminal.edgeBackend.discoveryQueue '首次完整快照入队'
+  edgeTerminal.edgeBackend.logicQueue -> edgeTerminal.edgeBackend.cleaningPipeline 'worker 消费'
+  edgeTerminal.edgeBackend.cleaningPipeline -> edgeTerminal.edgeBackend.tagManager '更新运行态实时值'
+  edgeTerminal.edgeBackend.tagManager -> edgeTerminal.edgeBackend.taskManager '驱动运行中检测判断'
+  edgeTerminal.edgeBackend.taskManager -> edgeTerminal.edgeBackend.storageBus '仅检测运行期间存储'
+  edgeTerminal.edgeBackend.taskManager -> edgeTerminal.edgeBackend.alarmWorker '限值报警事件'
+  edgeTerminal.edgeBackend.alarmWorker -> edgeTerminal.edgeBackend.notificationDispatcher '通知事件'
+  edgeTerminal.edgeBackend.tagManager -> edgeTerminal.edgeBackend.taskFlowExecutor 'var_id 反向索引触发'
+  edgeTerminal.edgeBackend.taskRequestEntry -> edgeTerminal.edgeBackend.taskFlowExecutor 'data_change 任务流命中'
+  edgeTerminal.edgeBackend.taskFlowExecutor -> edgeTerminal.edgeBackend.detectionRuns 'builtin.start_detection_run 创建真实任务'
+  edgeTerminal.edgeBackend.taskFlowExecutor -> edgeTerminal.edgeBackend.variableWrite '受控写入模块'
+  edgeTerminal.edgeBackend.detectionPlans -> edgeTerminal.edgeBackend.variableWrite '写任务请求变量并等待任务落库'
+  edgeTerminal.edgeBackend.variableWrite -> edgeTerminal.edgeBackend.taskRequestEntry '写 watched STRING 虚变量'
+  edgeTerminal.edgeBackend.detectionRuns -> edgeTerminal.edgeBackend.standardScope '启动时解析标准作用域'
+  edgeTerminal.edgeBackend.standardScope -> edgeTerminal.edgeDb '读取 project_group、标准和目标项目变量'
+  edgeTerminal.edgeBackend.detectionRuns -> edgeTerminal.edgeDb '冻结 detection_run_report_requests'
+  edgeTerminal.edgeBackend.variableWrite -> edgeTerminal.edgeBackend.mqttManager 'KIO 写入发布和 ack 等待'
+  edgeTerminal.edgeBackend.repositories -> edgeTerminal.edgeDb 'GORM 事务'
+  edgeTerminal.edgeBackend.storageBus -> edgeTerminal.edgeDb '批量历史写入'
+  edgeTerminal.edgeBackend.alarmWorker -> edgeTerminal.edgeDb '报警生命周期写入'
+  edgeTerminal.edgeBackend.notificationDispatcher -> edgeTerminal.edgeDb '通知持久化'
+
+  edgeTerminal.edgeDb -> databaseSync '复制边缘拥有的历史/运行/配置表'
+  mainServer.mirrorDb -> databaseSync '低频配置和待检测计划参与最终一致'
+  databaseSync -> edgeTerminal.edgeDb '同步 sys_detection_standards / sys_detection_plans 等配置表'
+  externalPlanSystem -> mainServer.mirrorDb '写入待检测计划或源配置'
+  databaseSync -> mainServer.mirrorDb '复制边缘端拥有的数据表，允许短时延迟'
+
+  mainServer.mainBackend.syncedQuery -> mainServer.mirrorDb '读取历史/配置镜像数据'
+  mainServer.mainBackend.reportService -> mainServer.mirrorDb '读取报表请求和就绪数据'
+  mainServer.mainBackend.reportService -> mainServer.mainOwnedDb '写入 job、事件、通知'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.artifactStore '读写 xlsx、manifest、模板文件'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.reportTemplateAssets '模板资产管理'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.reportPlanImport '计划导入解析/确认'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.reportReadiness '同步就绪判断'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.reportJobWorker '报表 job 编排'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.reportRegeneration '重生成入口'
+  mainServer.mainBackend.reportService -> mainServer.mainBackend.downloadPackages '历史数据下载打包'
+  mainServer.mainBackend.reportTemplateAssets -> mainServer.mainBackend.artifactStore '保存/读取模板 source.xlsx'
+  mainServer.mainBackend.reportTemplateAssets -> mainServer.mirrorDb '写/读 sys_report_templates 元数据和 mapping'
+  mainServer.mainBackend.reportPlanImport -> mainServer.mainBackend.artifactStore '保存计划导入原文件'
+  mainServer.mainBackend.reportPlanImport -> mainServer.mirrorDb '读取项目/变量/模板做匹配'
+  mainServer.mainBackend.reportPlanImport -> mainServer.mainBackend.syncConfigWriter '确认后创建检测配置和计划'
+  mainServer.mainBackend.syncConfigWriter -> mainServer.mirrorDb '写 project_group 标准、检测项和 sys_detection_plans'
+  mainServer.mainBackend.reportReadiness -> mainServer.mirrorDb '读任务、报表请求、快照、历史、特征、报警'
+  mainServer.mainBackend.reportJobWorker -> mainServer.mainBackend.reportReadiness '每次处理前重查 readiness'
+  mainServer.mainBackend.reportJobWorker -> mainServer.mainOwnedDb '写 main_report_jobs / events'
+  mainServer.mainBackend.reportRegeneration -> mainServer.mainOwnedDb '写 parent_job_id / generation_type / params_override_json'
+  mainServer.mainBackend.reportRegeneration -> mainServer.mainBackend.reportJobWorker '创建新一代 pending job'
+  mainServer.mainBackend.reportJobWorker -> mainServer.mainBackend.reportPackageBuilder '构造 ReportPackage'
+  mainServer.mainBackend.reportPackageBuilder -> mainServer.mirrorDb '读取同步后的业务事实数据'
+  mainServer.mainBackend.reportPackageBuilder -> mainServer.mainBackend.reportExcelRenderer '交付指标、上下限、params、cell_mapping'
+  mainServer.mainBackend.reportExcelRenderer -> mainServer.mirrorDb '读取 sys_report_templates 和 mapping'
+  mainServer.mainBackend.reportExcelRenderer -> mainServer.mainBackend.artifactStore '写 manifest.json / report.xlsx / chart PNG'
+  mainServer.mainBackend.reportJobWorker -> mainServer.mainBackend.reportNotifications 'started/succeeded/failed 事件转通知'
+  mainServer.mainBackend.reportNotifications -> mainServer.mainOwnedDb '写 main_report_notifications / recipients'
+  mainServer.mainBackend.downloadPackages -> mainServer.mirrorDb '读取任务、配置、历史、事件、报警快照'
+  mainServer.mainBackend.downloadPackages -> mainServer.mainOwnedDb '读取 report job 和 events'
+  mainServer.mainBackend.downloadPackages -> mainServer.mainBackend.artifactStore '读取已成功 xlsx artifact'
+  mainServer.mainFrontend -> mainServer.mainBackend.reportTemplateAssets '报表设置/模板管理'
+  mainServer.mainFrontend -> mainServer.mainBackend.reportPlanImport '报表设置/导入计划'
+  mainServer.mainFrontend -> mainServer.mainBackend.reportJobWorker '历史 Excel 报表查询/重试/下载 artifact'
+  mainServer.mainFrontend -> mainServer.mainBackend.reportRegeneration '选择 generation 并修改参数重生成'
+  mainServer.mainFrontend -> mainServer.mainBackend.downloadPackages '数据下载 POST download-packages'
+  mainServer.mainFrontend -> mainServer.mainBackend.reportNotifications '顶栏和通知中心读取报表通知'
+  mainServer.mainBackend.edgeRouter -> mainServer.mirrorDb '解析边缘端上下文'
+  mainServer.mainBackend.edgeControlClient -> edgeTerminal.edgeBackend.httpWs 'service-token 读取/命令'
+  mainServer.mainBackend.authFacade -> mainServer.mirrorDb '读取同步用户'
+
+  mainServer.mainBackend.edgeControlClient -> edgeTerminal.edgeBackend.detectionRuns '通过 edge-control 启停/应用配置'
+  mainServer.mainBackend.edgeControlClient -> edgeTerminal.edgeBackend.detectionPlans '通过 edge-control 启动计划'
+  mainServer.mainBackend.edgeControlClient -> edgeTerminal.edgeBackend.variableWrite '通过 edge-control 写变量'
+  mainServer.mainBackend.edgeControlClient -> edgeTerminal.edgeBackend.tagManager '通过服务接口读取实时快照'
+}
+
+views {
+  view index {
+    title '边缘端系统总览'
+    description '最高层职责边界：边缘端负责现场运行态和本地写入；主服务器读取最终一致的镜像数据，实时/控制通过 edge-control 调边缘端。'
+    include *
+  }
+
+  view reportLifecycle {
+    title '报表生成全链路'
+    description '从模板/计划导入，到边缘端通过任务请求变量开工并冻结 report_request，再到主服务器等待同步、生成/重生成 Excel artifact、通知和下载包。'
+    include externalPlanSystem
+    include databaseSync
+    include edgeTerminal.edgeBackend.detectionPlans
+    include edgeTerminal.edgeBackend.taskRequestEntry
+    include edgeTerminal.edgeBackend.taskFlowExecutor
+    include edgeTerminal.edgeBackend.detectionRuns
+    include edgeTerminal.edgeBackend.standardScope
+    include edgeTerminal.edgeBackend.storageBus
+    include edgeTerminal.edgeDb
+    include mainServer.mainFrontend
+    include mainServer.mainBackend.reportService
+    include mainServer.mainBackend.reportTemplateAssets
+    include mainServer.mainBackend.reportPlanImport
+    include mainServer.mainBackend.syncConfigWriter
+    include mainServer.mainBackend.reportReadiness
+    include mainServer.mainBackend.reportJobWorker
+    include mainServer.mainBackend.reportRegeneration
+    include mainServer.mainBackend.reportPackageBuilder
+    include mainServer.mainBackend.reportExcelRenderer
+    include mainServer.mainBackend.reportNotifications
+    include mainServer.mainBackend.downloadPackages
+    include mainServer.mainBackend.artifactStore
+    include mainServer.mirrorDb
+    include mainServer.mainOwnedDb
+  }
+
+  view of edgeTerminal {
+    title '边缘端容器职责'
+    description '展示桌面端、Go sidecar 和本地 MySQL 分别负责什么。'
+    include *
+  }
+
+  view of edgeTerminal.edgeBackend {
+    title '边缘后端组件边界'
+    description '新增边缘端接口前先看这里：优先复用 handlers -> services -> repository，以及已有运行态 manager。'
+    include *
+  }
+
+  view of mainServer {
+    title '主服务器容器职责'
+    description '主服务器负责认证权限门面、同步查询层、edge-control 客户端、报表服务、报表文件和主服务器自有表。'
+    include *
+  }
+
+  view of mainServer.mainBackend {
+    title '主服务器后端组件边界'
+    description '新增主服务器接口前先看这里：先判断是读镜像库、走 edge-control 实时/控制，还是归主服务器报表服务。'
+    include *
+  }
+
+  view of mainServer.mainBackend.reportService {
+    title '报表服务内部边界'
+    description '新增报表相关接口前先看这里：模板资产、计划导入、同步配置写入、readiness、job worker、重生成、ReportPackage、Excel/PNG、下载包、通知各有归属。'
+    include *
+  }
+}

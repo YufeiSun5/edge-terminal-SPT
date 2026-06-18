@@ -154,7 +154,7 @@ func TestVariablesHandlerBulkRemapKIOProjects(t *testing.T) {
 	handler := NewVariablesHandler(services.NewVariablesService(repo, tags))
 	fixtures := []models.TagConfig{
 		{VarID: 1001, GatewayID: 1, SourceTopic: "datachange", SourcePath: `Objs.#(N=="台1_39").1`, SourceType: models.TagSourceMQTT, RawName: "台1_39", VarName: "台1_39", JSONPath: `Objs.#(N=="台1_39").1`, DataType: "FLOAT", ScaleFactor: 1, Discovered: true, Enabled: false},
-		{VarID: 12042, GatewayID: 1, SourceTopic: "datachange", SourcePath: `Objs.#(N=="台12_42").1`, SourceType: models.TagSourceMQTT, RawName: "台12_42", VarName: "台12_42", JSONPath: `Objs.#(N=="台12_42").1`, DataType: "STRING", ScaleFactor: 1, Discovered: true, Enabled: false},
+		{VarID: 8042, GatewayID: 1, SourceTopic: "datachange", SourcePath: `Objs.#(N=="台8_42").1`, SourceType: models.TagSourceMQTT, RawName: "台8_42", VarName: "台8_42", JSONPath: `Objs.#(N=="台8_42").1`, DataType: "STRING", ScaleFactor: 1, Discovered: true, Enabled: false},
 		{VarID: 13001, GatewayID: 1, SourceTopic: "datachange", SourcePath: `Objs.#(N=="台13_1").1`, SourceType: models.TagSourceMQTT, RawName: "台13_1", VarName: "台13_1", JSONPath: `Objs.#(N=="台13_1").1`, DataType: "INT", ScaleFactor: 1, Discovered: true, Enabled: false},
 	}
 	for i := range fixtures {
@@ -171,7 +171,7 @@ func TestVariablesHandlerBulkRemapKIOProjects(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.CreatedProjects != 12 || result.Matched != 2 || result.Updated != 2 || result.Skipped != 1 {
+	if result.CreatedProjects != 8 || result.Matched != 2 || result.Updated != 2 || result.Skipped != 1 {
 		t.Fatalf("unexpected bulk result: %+v", result)
 	}
 	tag, err := repo.GetTag(1001)
@@ -894,12 +894,14 @@ func TestEdgeControlHandlerStartAndIdempotency(t *testing.T) {
 
 	tags := pipeline.NewTagManager()
 	tasks := pipeline.NewTaskManager()
+	flows := pipeline.NewTaskFlowExecutor(repo, tags, tasks, pipeline.NewChannels())
 	detection := services.NewDetectionRunsService(repo, tasks)
-	variables := services.NewVariableWriteService(repo, tags, nil, nil)
+	variables := services.NewVariableWriteService(repo, tags, nil, flows)
+	plans := services.NewDetectionPlansService(repo, detection, "edge-test", variables)
 	router := gin.New()
 	group := router.Group("/api/v1")
 	authService := auth.NewService(repo, auth.NewJWTManager("test-secret", time.Hour), auth.Options{EdgeInstanceID: "edge-test"})
-	NewEdgeControlHandler(repo, detection, variables).Register(group, authService)
+	NewEdgeControlHandler(repo, detection, variables).WithDetectionPlans(plans).Register(group, authService)
 
 	body := map[string]any{
 		"command_id":        "cmd-start-1",
@@ -935,6 +937,114 @@ func TestEdgeControlHandlerStartAndIdempotency(t *testing.T) {
 	var runningTasks int64
 	if err := db.Model(&models.DetectionTask{}).Where("project_id = ? AND test_no = ?", project.ID, "EC-001").Count(&runningTasks).Error; err != nil || runningTasks != 1 {
 		t.Fatalf("expected one detection task count=%d err=%v", runningTasks, err)
+	}
+
+	if _, err := detection.Stop(uint(project.ID), "finish direct edge-control start"); err != nil {
+		t.Fatal(err)
+	}
+	standard := models.DetectionStandard{
+		ProjectID:    &project.ID,
+		ProjectCode:  project.ProjectCode,
+		StandardCode: "EC-PLAN-STD",
+		Name:         "Plan standard",
+		DisplayName:  "Plan standard",
+		Mode:         "standard",
+		Version:      1,
+		Enabled:      true,
+	}
+	if err := db.Create(&standard).Error; err != nil {
+		t.Fatal(err)
+	}
+	plan := models.DetectionPlan{
+		PlanNo:         "EC-PLAN-001",
+		SourceSystem:   "mes",
+		ExternalPlanID: "MES-EC-PLAN-001",
+		FactoryNo:      "F-EC-PLAN",
+		DeviceModel:    "MODEL-PLAN",
+		Mode:           "standard",
+		StandardCode:   standard.StandardCode,
+		Status:         models.DetectionPlanStatusPending,
+	}
+	if err := db.Create(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestVarID := int64(990002)
+	tags.Load([]models.TagConfig{{
+		VarID:       requestVarID,
+		SourceType:  models.TagSourceVirtual,
+		VarName:     "task_request",
+		RawName:     "task_request",
+		JSONPath:    "task_request",
+		DataType:    "STRING",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+	}})
+	flowSteps, err := json.Marshal([]map[string]any{{
+		"code":   "start",
+		"module": models.TaskFlowActionBuiltinStartDetectionRun,
+		"params": map[string]any{
+			"project_id":        map[string]any{"source": "trigger_param", "key": "project_id"},
+			"factory_no":        map[string]any{"source": "trigger_param", "key": "factory_no", "optional": true},
+			"device_model":      map[string]any{"source": "trigger_param", "key": "device_model", "optional": true},
+			"test_no":           map[string]any{"source": "trigger_param", "key": "test_no"},
+			"standard_id":       map[string]any{"source": "trigger_param", "key": "standard_id"},
+			"config_enabled":    map[string]any{"source": "trigger_param", "key": "config_enabled"},
+			"config_code":       map[string]any{"source": "trigger_param", "key": "config_code"},
+			"config_name":       map[string]any{"source": "trigger_param", "key": "config_name"},
+			"config_version":    map[string]any{"source": "trigger_param", "key": "config_version"},
+			"config_hash":       map[string]any{"source": "trigger_param", "key": "config_hash"},
+			"report_request":    map[string]any{"source": "trigger_param", "key": "report_request", "optional": true},
+			"end_policy":        map[string]any{"source": "trigger_param", "key": "end_policy", "optional": true},
+			"qualified_hold_ms": map[string]any{"source": "trigger_param", "key": "qualified_hold_ms", "optional": true},
+			"operator_note":     map[string]any{"source": "trigger_param", "key": "operator_note", "optional": true},
+			"enable_storage":    true,
+			"enable_alarm":      true,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flows.Load([]models.TaskFlow{{
+		ID:              920001,
+		ProjectID:       project.ID,
+		FlowCode:        "edge-control-plan-request-start-detection",
+		Name:            "Edge Control Plan Request Start Detection",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerDataChange,
+		ConditionScript: `task_params.command === "start_detection"`,
+		StepsJSON:       string(flowSteps),
+		TimeoutMS:       3000,
+		Vars:            []models.TaskFlowVar{{FlowID: 920001, ProjectID: project.ID, VarID: requestVarID, VarName: "task_request", Role: models.TaskFlowVarRoleWatch}},
+	}})
+	flows.Start(1)
+	planResp := callRouterWithToken(t, router, http.MethodPost, "/api/v1/edge-control/detection-plans/"+strconv.FormatUint(uint64(plan.ID), 10)+"/start", map[string]any{
+		"command_id":        "cmd-plan-start-1",
+		"operator_id":       "main-user-1",
+		"operator_username": "admin",
+		"operator_name":     "Admin",
+		"payload": map[string]any{
+			"project_id":       project.ID,
+			"operator_note":    "from dispatched plan",
+			"request_var_name": "task_request",
+		},
+	}, serviceToken)
+	if planResp.Code != http.StatusOK {
+		t.Fatalf("plan start status=%d body=%s", planResp.Code, planResp.Body.String())
+	}
+	var updatedPlan models.DetectionPlan
+	if err := db.First(&updatedPlan, plan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updatedPlan.Status != models.DetectionPlanStatusStarted || updatedPlan.StartedTaskID == nil || updatedPlan.OwnerEdgeInstanceID != "edge-test" {
+		t.Fatalf("plan was not marked started: %+v", updatedPlan)
+	}
+	var planTask models.DetectionTask
+	if err := db.First(&planTask, *updatedPlan.StartedTaskID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if planTask.FactoryNo != plan.FactoryNo || planTask.ConfigCode != standard.StandardCode {
+		t.Fatalf("unexpected task from plan: %+v", planTask)
 	}
 }
 

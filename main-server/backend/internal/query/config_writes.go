@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,9 @@ func (q *StationViewQuery) CreateDetectionStandard(standard *DetectionStandard, 
 	normalizeDetectionStandard(standard, meta, now)
 	returned := DetectionStandard{}
 	err := q.db.Transaction(func(tx *gorm.DB) error {
+		if err := validateDetectionStandardDefinitionTx(tx, standard, items); err != nil {
+			return err
+		}
 		id, err := nextSyncID(tx, standard.TableName())
 		if err != nil {
 			return err
@@ -123,8 +127,17 @@ func (q *StationViewQuery) CreateDetectionStandard(standard *DetectionStandard, 
 				return err
 			}
 		}
-		hash := detectionStandardHash(*standard, items)
-		if err := tx.Model(&DetectionStandard{}).Where("id = ?", standard.ID).Update("config_hash", hash).Error; err != nil {
+		loaded := *standard
+		loaded.Items = items
+		hash, err := detectionStandardHash(loaded, items)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&DetectionStandard{}).Where("id = ?", standard.ID).Updates(map[string]any{
+			"version":     standard.Version,
+			"config_hash": hash,
+			"updated_at":  now,
+		}).Error; err != nil {
 			return err
 		}
 		returned, err = q.getDetectionStandardTx(tx, standard.ID)
@@ -141,8 +154,33 @@ func (q *StationViewQuery) UpdateDetectionStandard(id uint, updates map[string]a
 			return err
 		}
 		now := time.Now()
+		targetVersion := current.Version + 1
 		delete(updates, "id")
-		delete(updates, "version")
+		if rawProjectID, ok := updates["project_id"]; ok {
+			projectID, err := detectionStandardProjectIDValue(rawProjectID)
+			if err != nil {
+				return err
+			}
+			projectGroupRaw, projectGroupSet := updates["project_group"]
+			projectGroupEmpty := !projectGroupSet || projectGroupRaw == nil || strings.TrimSpace(fmt.Sprint(projectGroupRaw)) == ""
+			if projectID != nil && projectGroupEmpty {
+				var project Project
+				if err := tx.Select("id", "project_group").First(&project, "id = ?", *projectID).Error; err != nil {
+					return err
+				}
+				if strings.TrimSpace(project.ProjectGroup) != "" {
+					updates["project_group"] = strings.TrimSpace(project.ProjectGroup)
+				}
+			}
+		}
+		if rawVersion, ok := updates["version"]; ok {
+			parsed, err := detectionStandardVersionValue(rawVersion)
+			if err != nil {
+				return err
+			}
+			targetVersion = parsed
+			delete(updates, "version")
+		}
 		delete(updates, "config_hash")
 		updates["updated_at"] = now
 		updates["updated_by_node"] = normalizedUpdatedByNode(meta)
@@ -165,20 +203,39 @@ func (q *StationViewQuery) UpdateDetectionStandard(id uint, updates map[string]a
 					(*items)[i].ID = uint(ids[i])
 				}
 			}
+			currentAfterUpdate, err := q.getDetectionStandardTx(tx, id)
+			if err != nil {
+				return err
+			}
+			if err := validateDetectionStandardDefinitionTx(tx, &currentAfterUpdate, *items); err != nil {
+				return err
+			}
 			if len(*items) > 0 {
 				if err := tx.Create(items).Error; err != nil {
 					return err
 				}
+			}
+		} else {
+			currentAfterUpdate, err := q.getDetectionStandardTx(tx, id)
+			if err != nil {
+				return err
+			}
+			if err := validateDetectionStandardDefinitionTx(tx, &currentAfterUpdate, currentAfterUpdate.Items); err != nil {
+				return err
 			}
 		}
 		loaded, err := q.getDetectionStandardTx(tx, id)
 		if err != nil {
 			return err
 		}
-		hash := detectionStandardHash(loaded, loaded.Items)
+		loaded.Version = targetVersion
+		hash, err := detectionStandardHash(loaded, loaded.Items)
+		if err != nil {
+			return err
+		}
 		if err := tx.Model(&DetectionStandard{}).Where("id = ?", id).Updates(map[string]any{
 			"config_hash": hash,
-			"version":     gorm.Expr("version + ?", 1),
+			"version":     targetVersion,
 			"updated_at":  now,
 		}).Error; err != nil {
 			return err
@@ -379,12 +436,21 @@ func normalizeDetectionStandard(standard *DetectionStandard, meta SyncWriteMeta,
 	standard.StandardCode = strings.TrimSpace(standard.StandardCode)
 	standard.Name = firstNonEmptyString(strings.TrimSpace(standard.Name), strings.TrimSpace(standard.DisplayName), standard.StandardCode)
 	standard.DisplayName = firstNonEmptyString(strings.TrimSpace(standard.DisplayName), standard.Name)
+	standard.ProjectCode = strings.TrimSpace(standard.ProjectCode)
+	standard.ProjectGroup = strings.TrimSpace(standard.ProjectGroup)
 	standard.Mode = firstNonEmptyString(strings.TrimSpace(standard.Mode), "standard")
 	if standard.Version <= 0 {
 		standard.Version = 1
 	}
-	standard.SyncScope = normalizedSyncScope(meta)
-	standard.EdgeInstanceID = strings.TrimSpace(meta.EdgeInstanceID)
+	if strings.TrimSpace(meta.SyncScope) != "" {
+		standard.SyncScope = strings.TrimSpace(meta.SyncScope)
+	}
+	if strings.TrimSpace(meta.EdgeInstanceID) != "" {
+		standard.EdgeInstanceID = strings.TrimSpace(meta.EdgeInstanceID)
+	}
+	if strings.TrimSpace(standard.SyncScope) == "" {
+		standard.SyncScope = normalizedSyncScope(SyncWriteMeta{SyncScope: standard.SyncScope, EdgeInstanceID: standard.EdgeInstanceID})
+	}
 	standard.UpdatedByNode = normalizedUpdatedByNode(meta)
 	standard.UpdatedByUser = strings.TrimSpace(meta.UpdatedByUser)
 	standard.CreatedAt = now
@@ -453,13 +519,334 @@ func (q *StationViewQuery) getTaskFlowTx(tx *gorm.DB, id uint64) (TaskFlow, erro
 	return flow, err
 }
 
-func detectionStandardHash(standard DetectionStandard, items []DetectionStandardItem) string {
-	payload, _ := json.Marshal(struct {
-		Standard DetectionStandard       `json:"standard"`
-		Items    []DetectionStandardItem `json:"items"`
-	}{Standard: standard, Items: items})
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
+func validateDetectionStandardDefinitionTx(tx *gorm.DB, standard *DetectionStandard, items []DetectionStandardItem) error {
+	if standard == nil {
+		return errors.New("standard is required")
+	}
+	if strings.TrimSpace(standard.StandardCode) == "" {
+		return errors.New("standard_code is required")
+	}
+	if strings.TrimSpace(standard.Name) == "" {
+		return errors.New("name is required")
+	}
+	if standard.Version <= 0 {
+		return errors.New("version must be positive")
+	}
+	if !standard.Enabled {
+		return errors.New("enabled detection standard is required")
+	}
+	if len(items) == 0 {
+		return errors.New("detection standard items are required")
+	}
+	if standard.ProjectID != nil {
+		var project Project
+		if err := tx.First(&project, "id = ?", *standard.ProjectID).Error; err != nil {
+			return err
+		}
+		if !project.Enabled {
+			return errors.New("project is disabled")
+		}
+		if strings.TrimSpace(standard.ProjectCode) == "" {
+			standard.ProjectCode = project.ProjectCode
+		}
+		if strings.TrimSpace(standard.ProjectCode) != strings.TrimSpace(project.ProjectCode) {
+			return errors.New("project_code does not match project_id")
+		}
+		if strings.TrimSpace(standard.ProjectGroup) == "" {
+			standard.ProjectGroup = strings.TrimSpace(project.ProjectGroup)
+		}
+		projectEdge := strings.TrimSpace(project.EdgeInstanceID)
+		standardEdge := strings.TrimSpace(standard.EdgeInstanceID)
+		if projectEdge != "" && standardEdge != "" && projectEdge != standardEdge {
+			return ErrEdgeInstanceMismatch
+		}
+		if standardEdge == "" && projectEdge != "" {
+			standard.EdgeInstanceID = projectEdge
+		}
+		if strings.TrimSpace(standard.SyncScope) == "" && strings.TrimSpace(standard.EdgeInstanceID) != "" {
+			standard.SyncScope = "edge"
+		}
+	}
+	seen := make(map[int64]struct{}, len(items))
+	for i := range items {
+		item := &items[i]
+		normalizeDetectionStandardItemDefaults(item)
+		if item.VarID == 0 {
+			return errors.New("var_id is required")
+		}
+		if _, ok := seen[item.VarID]; ok {
+			return fmt.Errorf("duplicate var_id %d", item.VarID)
+		}
+		seen[item.VarID] = struct{}{}
+		if err := validateDetectionStandardItemValues(*item); err != nil {
+			return err
+		}
+		var tag TagConfig
+		if err := tx.First(&tag, "var_id = ?", item.VarID).Error; err != nil {
+			return fmt.Errorf("var_id %d does not exist: %w", item.VarID, err)
+		}
+		if !tag.Enabled {
+			return fmt.Errorf("var_id %d is disabled", item.VarID)
+		}
+		if standard.ProjectID != nil && (tag.ProjectID == nil || *tag.ProjectID != *standard.ProjectID) {
+			return fmt.Errorf("var_id %d does not belong to project_id %d", item.VarID, *standard.ProjectID)
+		}
+		item.VarName = strings.TrimSpace(tag.VarName)
+		if strings.TrimSpace(item.DisplayName) == "" {
+			item.DisplayName = tag.DisplayName
+		}
+		if strings.TrimSpace(item.DisplayNameEN) == "" {
+			item.DisplayNameEN = tag.DisplayNameEN
+		}
+		if strings.TrimSpace(item.DisplayNameJA) == "" {
+			item.DisplayNameJA = tag.DisplayNameJA
+		}
+		if strings.TrimSpace(item.Unit) == "" {
+			item.Unit = tag.Unit
+		}
+		if item.DecimalPlaces == 0 && tag.DecimalPlaces > 0 {
+			item.DecimalPlaces = tag.DecimalPlaces
+		}
+	}
+	return nil
+}
+
+func validateDetectionStandardItemValues(item DetectionStandardItem) error {
+	if item.CheckCycleMS < 0 {
+		return errors.New("check_cycle_ms must be non-negative")
+	}
+	if item.LimitDeadband < 0 {
+		return errors.New("limit_deadband must be non-negative")
+	}
+	if item.ViolationHoldMS < 0 || item.RecoverHoldMS < 0 {
+		return errors.New("hold times must be non-negative")
+	}
+	if err := validateDetectionLimitOrder(item.LimitLL, item.LimitL, item.LimitH, item.LimitHH); err != nil {
+		return err
+	}
+	if !validDetectionCheckMethod(item.CheckMethod) {
+		return errors.New("invalid check_method")
+	}
+	if !validDetectionQualityPolicy(item.QualityPolicy) {
+		return errors.New("invalid quality_policy")
+	}
+	return nil
+}
+
+func validateDetectionLimitOrder(ll *float64, l *float64, h *float64, hh *float64) error {
+	if ll != nil && l != nil && *ll > *l {
+		return errors.New("limit_ll must be less than or equal to limit_l")
+	}
+	if l != nil && h != nil && *l > *h {
+		return errors.New("limit_l must be less than or equal to limit_h")
+	}
+	if h != nil && hh != nil && *h > *hh {
+		return errors.New("limit_h must be less than or equal to limit_hh")
+	}
+	return nil
+}
+
+func validDetectionCheckMethod(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "numeric_range", "bool_equals", "string_equals", "regex":
+		return true
+	default:
+		return false
+	}
+}
+
+func validDetectionQualityPolicy(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "ignore_bad", "record_invalid", "fail_on_bad":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeDetectionStandardItemDefaults(item *DetectionStandardItem) {
+	item.VarName = strings.TrimSpace(item.VarName)
+	item.CheckMethod = firstNonEmptyString(strings.TrimSpace(item.CheckMethod), "numeric_range")
+	item.QualityPolicy = firstNonEmptyString(strings.TrimSpace(item.QualityPolicy), "ignore_bad")
+	if item.DecimalPlaces == 0 {
+		item.DecimalPlaces = 2
+	}
+}
+
+func detectionStandardVersionValue(value any) (int, error) {
+	switch typed := value.(type) {
+	case int:
+		if typed <= 0 {
+			return 0, errors.New("version must be positive")
+		}
+		return typed, nil
+	case int64:
+		if typed <= 0 {
+			return 0, errors.New("version must be positive")
+		}
+		return int(typed), nil
+	case float64:
+		if typed <= 0 || typed != float64(int(typed)) {
+			return 0, errors.New("version must be a positive integer")
+		}
+		return int(typed), nil
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil || parsed <= 0 {
+			return 0, errors.New("version must be a positive integer")
+		}
+		return int(parsed), nil
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err != nil || parsed <= 0 {
+			return 0, errors.New("version must be a positive integer")
+		}
+		return parsed, nil
+	default:
+		return 0, errors.New("version must be a positive integer")
+	}
+}
+
+func detectionStandardProjectIDValue(value any) (*uint, error) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, nil
+	case uint:
+		return &typed, nil
+	case *uint:
+		return typed, nil
+	case uint64:
+		parsed := uint(typed)
+		return &parsed, nil
+	case int:
+		if typed <= 0 {
+			return nil, errors.New("project_id must be positive")
+		}
+		parsed := uint(typed)
+		return &parsed, nil
+	case int64:
+		if typed <= 0 {
+			return nil, errors.New("project_id must be positive")
+		}
+		parsed := uint(typed)
+		return &parsed, nil
+	case float64:
+		if typed <= 0 || typed != float64(uint(typed)) {
+			return nil, errors.New("project_id must be a positive integer")
+		}
+		parsed := uint(typed)
+		return &parsed, nil
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil || parsed <= 0 {
+			return nil, errors.New("project_id must be a positive integer")
+		}
+		value := uint(parsed)
+		return &value, nil
+	default:
+		return nil, errors.New("project_id must be a positive integer")
+	}
+}
+
+func detectionStandardHash(standard DetectionStandard, items []DetectionStandardItem) (string, error) {
+	type hashItem struct {
+		VarID           int64    `json:"var_id"`
+		VarName         string   `json:"var_name"`
+		DisplayName     string   `json:"display_name"`
+		DisplayNameEN   string   `json:"display_name_en"`
+		DisplayNameJA   string   `json:"display_name_ja"`
+		CheckEnabled    bool     `json:"check_enabled"`
+		AlarmEnabled    bool     `json:"alarm_enabled"`
+		StoreEnabled    bool     `json:"store_enabled"`
+		CheckCycleMS    int      `json:"check_cycle_ms"`
+		CheckOnStart    bool     `json:"check_on_start"`
+		Required        bool     `json:"required"`
+		CheckMethod     string   `json:"check_method"`
+		TargetValue     string   `json:"target_value"`
+		LimitLL         *float64 `json:"limit_ll"`
+		LimitL          *float64 `json:"limit_l"`
+		LimitH          *float64 `json:"limit_h"`
+		LimitHH         *float64 `json:"limit_hh"`
+		LimitDeadband   float64  `json:"limit_deadband"`
+		ViolationHoldMS int      `json:"violation_hold_ms"`
+		RecoverHoldMS   int      `json:"recover_hold_ms"`
+		QualityPolicy   string   `json:"quality_policy"`
+		Unit            string   `json:"unit"`
+		DecimalPlaces   int      `json:"decimal_places"`
+		SortOrder       int      `json:"sort_order"`
+	}
+	payload := struct {
+		StandardCode     string     `json:"standard_code"`
+		Name             string     `json:"name"`
+		DisplayName      string     `json:"display_name"`
+		DisplayNameEN    string     `json:"display_name_en"`
+		DisplayNameJA    string     `json:"display_name_ja"`
+		ProjectCode      string     `json:"project_code"`
+		ProjectGroup     string     `json:"project_group"`
+		Mode             string     `json:"mode"`
+		ReportTemplateID *uint      `json:"report_template_id"`
+		Version          int        `json:"version"`
+		Enabled          bool       `json:"enabled"`
+		Items            []hashItem `json:"items"`
+	}{
+		StandardCode:     strings.TrimSpace(standard.StandardCode),
+		Name:             strings.TrimSpace(standard.Name),
+		DisplayName:      strings.TrimSpace(standard.DisplayName),
+		DisplayNameEN:    strings.TrimSpace(standard.DisplayNameEN),
+		DisplayNameJA:    strings.TrimSpace(standard.DisplayNameJA),
+		ProjectCode:      strings.TrimSpace(standard.ProjectCode),
+		ProjectGroup:     strings.TrimSpace(standard.ProjectGroup),
+		Mode:             strings.TrimSpace(standard.Mode),
+		ReportTemplateID: standard.ReportTemplateID,
+		Version:          standard.Version,
+		Enabled:          standard.Enabled,
+		Items:            make([]hashItem, 0, len(items)),
+	}
+	sorted := append([]DetectionStandardItem(nil), items...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].SortOrder != sorted[j].SortOrder {
+			return sorted[i].SortOrder < sorted[j].SortOrder
+		}
+		if sorted[i].VarID != sorted[j].VarID {
+			return sorted[i].VarID < sorted[j].VarID
+		}
+		return sorted[i].VarName < sorted[j].VarName
+	})
+	for _, item := range sorted {
+		normalizeDetectionStandardItemDefaults(&item)
+		payload.Items = append(payload.Items, hashItem{
+			VarID:           item.VarID,
+			VarName:         strings.TrimSpace(item.VarName),
+			DisplayName:     strings.TrimSpace(item.DisplayName),
+			DisplayNameEN:   strings.TrimSpace(item.DisplayNameEN),
+			DisplayNameJA:   strings.TrimSpace(item.DisplayNameJA),
+			CheckEnabled:    item.CheckEnabled,
+			AlarmEnabled:    item.AlarmEnabled,
+			StoreEnabled:    item.StoreEnabled,
+			CheckCycleMS:    item.CheckCycleMS,
+			CheckOnStart:    item.CheckOnStart,
+			Required:        item.Required,
+			CheckMethod:     strings.TrimSpace(item.CheckMethod),
+			TargetValue:     strings.TrimSpace(item.TargetValue),
+			LimitLL:         item.LimitLL,
+			LimitL:          item.LimitL,
+			LimitH:          item.LimitH,
+			LimitHH:         item.LimitHH,
+			LimitDeadband:   item.LimitDeadband,
+			ViolationHoldMS: item.ViolationHoldMS,
+			RecoverHoldMS:   item.RecoverHoldMS,
+			QualityPolicy:   strings.TrimSpace(item.QualityPolicy),
+			Unit:            strings.TrimSpace(item.Unit),
+			DecimalPlaces:   item.DecimalPlaces,
+			SortOrder:       item.SortOrder,
+		})
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func normalizedSyncScope(meta SyncWriteMeta) string {

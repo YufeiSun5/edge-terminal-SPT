@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"spindle-edge/backend/internal/database"
@@ -21,6 +22,8 @@ type DetectionRunsService struct {
 	tags     *pipeline.TagManager
 	channels *pipeline.Channels
 	flows    *pipeline.TaskFlowExecutor
+	guardMu  sync.Mutex
+	guards   map[string]struct{}
 }
 
 type AddNoteInput struct {
@@ -83,7 +86,7 @@ type DetectionRunsRuntimeDeps struct {
 }
 
 func NewDetectionRunsService(repo *database.Repository, tasks *pipeline.TaskManager, deps ...DetectionRunsRuntimeDeps) *DetectionRunsService {
-	service := &DetectionRunsService{repo: repo, tasks: tasks}
+	service := &DetectionRunsService{repo: repo, tasks: tasks, guards: make(map[string]struct{})}
 	if len(deps) > 0 {
 		service.tags = deps[0].Tags
 		service.channels = deps[0].Channels
@@ -106,7 +109,112 @@ func (s *DetectionRunsService) Start(opts database.StartDetectionOptions) (*mode
 	s.enqueueStartSnapshots(*task)
 	s.evaluateOnStart(*task)
 	s.triggerProjectLifecycle(models.TaskFlowTriggerProjectStart, *task)
+	s.scheduleEndPolicyGuard(*task)
 	return task, nil
+}
+
+func (s *DetectionRunsService) scheduleEndPolicyGuard(task models.DetectionTask) {
+	switch task.EndPolicy {
+	case models.DetectionEndPolicyFixedDuration:
+		if task.ExpectedEndAt != nil {
+			s.startFixedDurationGuard(task.ID)
+		}
+	case models.DetectionEndPolicyQualifiedHold:
+		if task.QualifiedHoldMS > 0 {
+			s.startQualifiedHoldGuard(task.ID, time.Duration(task.QualifiedHoldMS)*time.Millisecond, 500*time.Millisecond)
+		}
+	}
+}
+
+func (s *DetectionRunsService) markGuardStarted(key string) bool {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	if _, ok := s.guards[key]; ok {
+		return false
+	}
+	s.guards[key] = struct{}{}
+	return true
+}
+
+func (s *DetectionRunsService) clearGuard(key string) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	delete(s.guards, key)
+}
+
+func (s *DetectionRunsService) startFixedDurationGuard(taskID uint) {
+	key := fmt.Sprintf("detection-service-fixed:%d", taskID)
+	if !s.markGuardStarted(key) {
+		return
+	}
+	pipeline.GoRecovering("detection-service-fixed-duration-guard", func() {
+		defer s.clearGuard(key)
+		for {
+			task, err := s.repo.GetDetectionTask(taskID)
+			if err != nil || task.Status == models.DetectionStatusStopped {
+				return
+			}
+			if task.Status == models.DetectionStatusPaused {
+				time.Sleep(time.Second)
+				continue
+			}
+			if task.ExpectedEndAt == nil {
+				return
+			}
+			wait := time.Until(*task.ExpectedEndAt)
+			if wait > 0 {
+				if wait > time.Second {
+					wait = time.Second
+				}
+				time.Sleep(wait)
+				continue
+			}
+			_, _ = s.StopWithEndType(taskID, "fixed duration reached", models.DetectionEndFixedDuration)
+			return
+		}
+	})
+}
+
+func (s *DetectionRunsService) startQualifiedHoldGuard(taskID uint, hold time.Duration, interval time.Duration) {
+	if s.tags == nil || hold <= 0 {
+		return
+	}
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	key := fmt.Sprintf("detection-service-qualified:%d", taskID)
+	if !s.markGuardStarted(key) {
+		return
+	}
+	pipeline.GoRecovering("detection-service-qualified-hold-guard", func() {
+		defer s.clearGuard(key)
+		var since time.Time
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			task, err := s.repo.GetDetectionTask(taskID)
+			if err != nil || task.Status == models.DetectionStatusStopped {
+				return
+			}
+			if task.Status == models.DetectionStatusPaused {
+				since = time.Time{}
+				continue
+			}
+			if !s.tasks.ActiveTaskQualified(s.tags, taskID) {
+				since = time.Time{}
+				continue
+			}
+			now := time.Now()
+			if since.IsZero() {
+				since = now
+				continue
+			}
+			if now.Sub(since) >= hold {
+				_, _ = s.StopWithEndType(taskID, "qualified hold reached", models.DetectionEndQualifiedHold)
+				return
+			}
+		}
+	})
 }
 
 func (s *DetectionRunsService) enqueueStartSnapshots(task models.DetectionTask) {
@@ -615,7 +723,7 @@ func HTTPStatusForError(err error) int {
 	if typed, ok := err.(KIOServiceError); ok && typed.Status > 0 {
 		return typed.Status
 	}
-	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) || errors.Is(err, database.ErrEdgeInstanceMismatch) {
+	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) || errors.Is(err, database.ErrEdgeInstanceMismatch) || errors.Is(err, database.ErrDetectionPlanNotPending) {
 		return 409
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {

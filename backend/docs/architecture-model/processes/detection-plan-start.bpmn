@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_DetectionPlanStart" targetNamespace="https://spindle.local/architecture/detection-plan-start">
+  <bpmn:process id="Process_DetectionPlanStart" name="Detection plan becomes a real edge detection run" isExecutable="false">
+    <bpmn:startEvent id="Start_PlanAvailable" name="External plan is pending">
+      <bpmn:outgoing>Flow_Start_WritePlan</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:task id="Task_WritePlan" name="Write sys_detection_plans(status=pending)">
+      <bpmn:documentation>Main server report-plan-import confirm or an external system writes a pending plan. This is a plan handoff row, not a real detection run.</bpmn:documentation>
+      <bpmn:incoming>Flow_Start_WritePlan</bpmn:incoming>
+      <bpmn:outgoing>Flow_WritePlan_Sync</bpmn:outgoing>
+    </bpmn:task>
+    <bpmn:intermediateCatchEvent id="Event_DbSyncToEdge" name="Database sync copies plan to edge">
+      <bpmn:incoming>Flow_WritePlan_Sync</bpmn:incoming>
+      <bpmn:outgoing>Flow_Sync_Select</bpmn:outgoing>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:userTask id="Task_SelectPlan" name="Station or main-server user selects pending plan">
+      <bpmn:documentation>Station dialog calls edge GET /api/v1/detection-plans?status=pending. Main-server plan page reads mirror DB and starts through edge-control.</bpmn:documentation>
+      <bpmn:incoming>Flow_Sync_Select</bpmn:incoming>
+      <bpmn:outgoing>Flow_Select_Start</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:serviceTask id="Task_StartPlan" name="DetectionPlansService.Start">
+      <bpmn:documentation>Moves pending to starting, validates project_id, resolves local standard_code, and prepares normal detection start input.</bpmn:documentation>
+      <bpmn:incoming>Flow_Select_Start</bpmn:incoming>
+      <bpmn:outgoing>Flow_Start_ConfigGateway</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="Gateway_ConfigReady" name="Local detection config available?">
+      <bpmn:incoming>Flow_Start_ConfigGateway</bpmn:incoming>
+      <bpmn:outgoing>Flow_ConfigMissing</bpmn:outgoing>
+      <bpmn:outgoing>Flow_ConfigReady</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="Task_ResetPending" name="Reset plan to pending + error_message">
+      <bpmn:documentation>No plan-specific waiting worker is created. Existing config sync or config publish must make the standard available, then the user retries.</bpmn:documentation>
+      <bpmn:incoming>Flow_ConfigMissing</bpmn:incoming>
+      <bpmn:outgoing>Flow_Reset_EndRetry</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="End_RetryLater" name="Retry after config sync">
+      <bpmn:incoming>Flow_Reset_EndRetry</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:serviceTask id="Task_CreateRun" name="Reuse DetectionRunsService to create sys_detection_tasks">
+      <bpmn:documentation>This is the only path that creates the real running detection task. Do not create a parallel plan-specific run service.</bpmn:documentation>
+      <bpmn:incoming>Flow_ConfigReady</bpmn:incoming>
+      <bpmn:outgoing>Flow_CreateRun_ReportRequest</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Task_FreezeReportRequest" name="Freeze report_request_json into detection_run_report_requests">
+      <bpmn:documentation>If the plan carries report_request_json, pass it into the normal detection start path so history/report pages see the same frozen request model.</bpmn:documentation>
+      <bpmn:incoming>Flow_CreateRun_ReportRequest</bpmn:incoming>
+      <bpmn:outgoing>Flow_ReportRequest_MarkStarted</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Task_MarkStarted" name="Mark plan started + started_task_id + owner edge/project">
+      <bpmn:incoming>Flow_ReportRequest_MarkStarted</bpmn:incoming>
+      <bpmn:outgoing>Flow_MarkStarted_End</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="End_RunStarted" name="Real detection run started">
+      <bpmn:incoming>Flow_MarkStarted_End</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_Start_WritePlan" sourceRef="Start_PlanAvailable" targetRef="Task_WritePlan" />
+    <bpmn:sequenceFlow id="Flow_WritePlan_Sync" sourceRef="Task_WritePlan" targetRef="Event_DbSyncToEdge" />
+    <bpmn:sequenceFlow id="Flow_Sync_Select" sourceRef="Event_DbSyncToEdge" targetRef="Task_SelectPlan" />
+    <bpmn:sequenceFlow id="Flow_Select_Start" sourceRef="Task_SelectPlan" targetRef="Task_StartPlan" />
+    <bpmn:sequenceFlow id="Flow_Start_ConfigGateway" sourceRef="Task_StartPlan" targetRef="Gateway_ConfigReady" />
+    <bpmn:sequenceFlow id="Flow_ConfigMissing" name="No" sourceRef="Gateway_ConfigReady" targetRef="Task_ResetPending" />
+    <bpmn:sequenceFlow id="Flow_Reset_EndRetry" sourceRef="Task_ResetPending" targetRef="End_RetryLater" />
+    <bpmn:sequenceFlow id="Flow_ConfigReady" name="Yes" sourceRef="Gateway_ConfigReady" targetRef="Task_CreateRun" />
+    <bpmn:sequenceFlow id="Flow_CreateRun_ReportRequest" sourceRef="Task_CreateRun" targetRef="Task_FreezeReportRequest" />
+    <bpmn:sequenceFlow id="Flow_ReportRequest_MarkStarted" sourceRef="Task_FreezeReportRequest" targetRef="Task_MarkStarted" />
+    <bpmn:sequenceFlow id="Flow_MarkStarted_End" sourceRef="Task_MarkStarted" targetRef="End_RunStarted" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="Diagram_DetectionPlanStart">
+    <bpmndi:BPMNPlane id="Plane_DetectionPlanStart" bpmnElement="Process_DetectionPlanStart">
+      <bpmndi:BPMNShape id="Shape_Start_PlanAvailable" bpmnElement="Start_PlanAvailable"><dc:Bounds x="120" y="170" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_WritePlan" bpmnElement="Task_WritePlan"><dc:Bounds x="200" y="148" width="170" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Event_DbSyncToEdge" bpmnElement="Event_DbSyncToEdge"><dc:Bounds x="420" y="170" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_SelectPlan" bpmnElement="Task_SelectPlan"><dc:Bounds x="500" y="148" width="190" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_StartPlan" bpmnElement="Task_StartPlan"><dc:Bounds x="740" y="148" width="170" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Gateway_ConfigReady" bpmnElement="Gateway_ConfigReady" isMarkerVisible="true"><dc:Bounds x="960" y="163" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_ResetPending" bpmnElement="Task_ResetPending"><dc:Bounds x="930" y="300" width="170" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_RetryLater" bpmnElement="End_RetryLater"><dc:Bounds x="1150" y="322" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_CreateRun" bpmnElement="Task_CreateRun"><dc:Bounds x="1070" y="148" width="210" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_FreezeReportRequest" bpmnElement="Task_FreezeReportRequest"><dc:Bounds x="1330" y="148" width="230" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_MarkStarted" bpmnElement="Task_MarkStarted"><dc:Bounds x="1610" y="148" width="210" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_RunStarted" bpmnElement="End_RunStarted"><dc:Bounds x="1870" y="170" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_Flow_Start_WritePlan" bpmnElement="Flow_Start_WritePlan"><di:waypoint x="156" y="188" /><di:waypoint x="200" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_WritePlan_Sync" bpmnElement="Flow_WritePlan_Sync"><di:waypoint x="370" y="188" /><di:waypoint x="420" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Sync_Select" bpmnElement="Flow_Sync_Select"><di:waypoint x="456" y="188" /><di:waypoint x="500" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Select_Start" bpmnElement="Flow_Select_Start"><di:waypoint x="690" y="188" /><di:waypoint x="740" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Start_ConfigGateway" bpmnElement="Flow_Start_ConfigGateway"><di:waypoint x="910" y="188" /><di:waypoint x="960" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_ConfigMissing" bpmnElement="Flow_ConfigMissing"><di:waypoint x="985" y="213" /><di:waypoint x="985" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Reset_EndRetry" bpmnElement="Flow_Reset_EndRetry"><di:waypoint x="1100" y="340" /><di:waypoint x="1150" y="340" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_ConfigReady" bpmnElement="Flow_ConfigReady"><di:waypoint x="1010" y="188" /><di:waypoint x="1070" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_CreateRun_ReportRequest" bpmnElement="Flow_CreateRun_ReportRequest"><di:waypoint x="1280" y="188" /><di:waypoint x="1330" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_ReportRequest_MarkStarted" bpmnElement="Flow_ReportRequest_MarkStarted"><di:waypoint x="1560" y="188" /><di:waypoint x="1610" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_MarkStarted_End" bpmnElement="Flow_MarkStarted_End"><di:waypoint x="1820" y="188" /><di:waypoint x="1870" y="188" /></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
+

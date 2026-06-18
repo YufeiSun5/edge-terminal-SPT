@@ -1435,35 +1435,7 @@ func (e *TaskFlowExecutor) startQualifiedHoldGuard(taskID uint, hold time.Durati
 }
 
 func (e *TaskFlowExecutor) activeTaskQualified(taskID uint) bool {
-	for _, active := range e.tasks.AllActive() {
-		if active.ID != taskID {
-			continue
-		}
-		checked := 0
-		for varID, item := range active.StandardItems {
-			if !item.CheckEnabled || !item.AlarmEnabled || item.CheckMethod != models.CheckMethodNumericRange {
-				continue
-			}
-			tag, ok := e.tags.Get(varID)
-			if !ok {
-				return false
-			}
-			state := tag.RuntimeState()
-			if !state.Initialized || state.IsString {
-				return false
-			}
-			if state.Quality != 1 && item.QualityPolicy == models.QualityPolicyIgnoreBad {
-				return false
-			}
-			_, _, _, violated := limitAlarmForValue(state.Value, item)
-			if violated {
-				return false
-			}
-			checked++
-		}
-		return checked > 0
-	}
-	return false
+	return e.tasks.ActiveTaskQualified(e.tags, taskID)
 }
 
 func (e *TaskFlowExecutor) enqueueDetectionStartSnapshots(task models.DetectionTask) {

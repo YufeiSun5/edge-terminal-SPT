@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_ReportJobGeneration" targetNamespace="https://spindle.local/architecture/report-job-generation">
+  <bpmn:process id="Process_ReportJobGeneration" name="Main-server report job generation with synchronization readiness" isExecutable="false">
+    <bpmn:startEvent id="Start_ReportRequested" name="Report request visible in mirror DB">
+      <bpmn:outgoing>Flow_Start_Enqueue</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="Task_EnqueueJob" name="Create or reuse main_report_jobs">
+      <bpmn:documentation>POST /api/v1/main-server/report-jobs/enqueue creates a main-server owned job per detection_run_report_requests row.</bpmn:documentation>
+      <bpmn:incoming>Flow_Start_Enqueue</bpmn:incoming>
+      <bpmn:outgoing>Flow_Enqueue_Readiness</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Task_Readiness" name="Check report readiness from synchronized data">
+      <bpmn:documentation>Read task, report request, summary, features, history rows, storage-route snapshots, alarms, project and template metadata from mirror DB and artifact store.</bpmn:documentation>
+      <bpmn:incoming>Flow_Enqueue_Readiness</bpmn:incoming>
+      <bpmn:incoming>Flow_Timer_Readiness</bpmn:incoming>
+      <bpmn:outgoing>Flow_Readiness_Gateway</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="Gateway_DataReady" name="Required data ready?">
+      <bpmn:incoming>Flow_Readiness_Gateway</bpmn:incoming>
+      <bpmn:outgoing>Flow_NotReady_Wait</bpmn:outgoing>
+      <bpmn:outgoing>Flow_Ready_Template</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="Task_WaitingForSync" name="Set job waiting_for_sync and record missing items">
+      <bpmn:documentation>Do not generate empty reports. Record job event and next_run_at so the worker retries after synchronization catches up.</bpmn:documentation>
+      <bpmn:incoming>Flow_NotReady_Wait</bpmn:incoming>
+      <bpmn:outgoing>Flow_Wait_Timer</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:intermediateCatchEvent id="Event_RetryTimer" name="Retry after next_run_at">
+      <bpmn:incoming>Flow_Wait_Timer</bpmn:incoming>
+      <bpmn:outgoing>Flow_Timer_Readiness</bpmn:outgoing>
+      <bpmn:timerEventDefinition />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:serviceTask id="Task_OpenTemplate" name="Open template artifact and mapping">
+      <bpmn:documentation>Template source xlsx is stored in main-server ArtifactStore. Missing template or required mapping is a failure, not a default-template fallback.</bpmn:documentation>
+      <bpmn:incoming>Flow_Ready_Template</bpmn:incoming>
+      <bpmn:outgoing>Flow_Template_Gateway</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="Gateway_TemplateValid" name="Template and required mapping available?">
+      <bpmn:incoming>Flow_Template_Gateway</bpmn:incoming>
+      <bpmn:outgoing>Flow_TemplateMissing_Fail</bpmn:outgoing>
+      <bpmn:outgoing>Flow_TemplateValid_Metrics</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="Task_FailJob" name="Set job failed with explicit reason">
+      <bpmn:incoming>Flow_TemplateMissing_Fail</bpmn:incoming>
+      <bpmn:outgoing>Flow_Fail_End</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="End_Failed" name="Report failed">
+      <bpmn:incoming>Flow_Fail_End</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:serviceTask id="Task_ComputeMetrics" name="Compute backend metrics and limits">
+      <bpmn:documentation>Backend owns official averages, min/max, sample counts, qualified windows, limit result, alarm counts, and trace manifest values.</bpmn:documentation>
+      <bpmn:incoming>Flow_TemplateValid_Metrics</bpmn:incoming>
+      <bpmn:outgoing>Flow_Metrics_Charts</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Task_GenerateCharts" name="Generate chart PNG artifacts">
+      <bpmn:documentation>First production implementation is still pending. Chart PNG should be produced server-side and inserted into Excel, not captured from Luckysheet.</bpmn:documentation>
+      <bpmn:incoming>Flow_Metrics_Charts</bpmn:incoming>
+      <bpmn:outgoing>Flow_Charts_Excel</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Task_WriteExcel" name="Write report.xlsx + manifest.json to ArtifactStore">
+      <bpmn:incoming>Flow_Charts_Excel</bpmn:incoming>
+      <bpmn:outgoing>Flow_Excel_Succeeded</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="Task_Succeeded" name="Set job succeeded and notify users">
+      <bpmn:incoming>Flow_Excel_Succeeded</bpmn:incoming>
+      <bpmn:outgoing>Flow_Succeeded_End</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="End_Succeeded" name="Excel available for history preview and download package">
+      <bpmn:incoming>Flow_Succeeded_End</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_Start_Enqueue" sourceRef="Start_ReportRequested" targetRef="Task_EnqueueJob" />
+    <bpmn:sequenceFlow id="Flow_Enqueue_Readiness" sourceRef="Task_EnqueueJob" targetRef="Task_Readiness" />
+    <bpmn:sequenceFlow id="Flow_Readiness_Gateway" sourceRef="Task_Readiness" targetRef="Gateway_DataReady" />
+    <bpmn:sequenceFlow id="Flow_NotReady_Wait" name="No" sourceRef="Gateway_DataReady" targetRef="Task_WaitingForSync" />
+    <bpmn:sequenceFlow id="Flow_Wait_Timer" sourceRef="Task_WaitingForSync" targetRef="Event_RetryTimer" />
+    <bpmn:sequenceFlow id="Flow_Timer_Readiness" sourceRef="Event_RetryTimer" targetRef="Task_Readiness" />
+    <bpmn:sequenceFlow id="Flow_Ready_Template" name="Yes" sourceRef="Gateway_DataReady" targetRef="Task_OpenTemplate" />
+    <bpmn:sequenceFlow id="Flow_Template_Gateway" sourceRef="Task_OpenTemplate" targetRef="Gateway_TemplateValid" />
+    <bpmn:sequenceFlow id="Flow_TemplateMissing_Fail" name="No" sourceRef="Gateway_TemplateValid" targetRef="Task_FailJob" />
+    <bpmn:sequenceFlow id="Flow_Fail_End" sourceRef="Task_FailJob" targetRef="End_Failed" />
+    <bpmn:sequenceFlow id="Flow_TemplateValid_Metrics" name="Yes" sourceRef="Gateway_TemplateValid" targetRef="Task_ComputeMetrics" />
+    <bpmn:sequenceFlow id="Flow_Metrics_Charts" sourceRef="Task_ComputeMetrics" targetRef="Task_GenerateCharts" />
+    <bpmn:sequenceFlow id="Flow_Charts_Excel" sourceRef="Task_GenerateCharts" targetRef="Task_WriteExcel" />
+    <bpmn:sequenceFlow id="Flow_Excel_Succeeded" sourceRef="Task_WriteExcel" targetRef="Task_Succeeded" />
+    <bpmn:sequenceFlow id="Flow_Succeeded_End" sourceRef="Task_Succeeded" targetRef="End_Succeeded" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="Diagram_ReportJobGeneration">
+    <bpmndi:BPMNPlane id="Plane_ReportJobGeneration" bpmnElement="Process_ReportJobGeneration">
+      <bpmndi:BPMNShape id="Shape_Start_ReportRequested" bpmnElement="Start_ReportRequested"><dc:Bounds x="120" y="170" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_EnqueueJob" bpmnElement="Task_EnqueueJob"><dc:Bounds x="200" y="148" width="180" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_Readiness" bpmnElement="Task_Readiness"><dc:Bounds x="430" y="148" width="200" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Gateway_DataReady" bpmnElement="Gateway_DataReady" isMarkerVisible="true"><dc:Bounds x="690" y="163" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_WaitingForSync" bpmnElement="Task_WaitingForSync"><dc:Bounds x="640" y="300" width="210" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Event_RetryTimer" bpmnElement="Event_RetryTimer"><dc:Bounds x="514" y="322" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_OpenTemplate" bpmnElement="Task_OpenTemplate"><dc:Bounds x="800" y="148" width="190" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Gateway_TemplateValid" bpmnElement="Gateway_TemplateValid" isMarkerVisible="true"><dc:Bounds x="1040" y="163" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_FailJob" bpmnElement="Task_FailJob"><dc:Bounds x="1010" y="300" width="170" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_Failed" bpmnElement="End_Failed"><dc:Bounds x="1230" y="322" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_ComputeMetrics" bpmnElement="Task_ComputeMetrics"><dc:Bounds x="1150" y="148" width="200" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_GenerateCharts" bpmnElement="Task_GenerateCharts"><dc:Bounds x="1400" y="148" width="200" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_WriteExcel" bpmnElement="Task_WriteExcel"><dc:Bounds x="1650" y="148" width="210" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_Succeeded" bpmnElement="Task_Succeeded"><dc:Bounds x="1910" y="148" width="180" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_End_Succeeded" bpmnElement="End_Succeeded"><dc:Bounds x="2140" y="170" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_Flow_Start_Enqueue" bpmnElement="Flow_Start_Enqueue"><di:waypoint x="156" y="188" /><di:waypoint x="200" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Enqueue_Readiness" bpmnElement="Flow_Enqueue_Readiness"><di:waypoint x="380" y="188" /><di:waypoint x="430" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Readiness_Gateway" bpmnElement="Flow_Readiness_Gateway"><di:waypoint x="630" y="188" /><di:waypoint x="690" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_NotReady_Wait" bpmnElement="Flow_NotReady_Wait"><di:waypoint x="715" y="213" /><di:waypoint x="715" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Wait_Timer" bpmnElement="Flow_Wait_Timer"><di:waypoint x="640" y="340" /><di:waypoint x="550" y="340" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Timer_Readiness" bpmnElement="Flow_Timer_Readiness"><di:waypoint x="532" y="322" /><di:waypoint x="532" y="228" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Ready_Template" bpmnElement="Flow_Ready_Template"><di:waypoint x="740" y="188" /><di:waypoint x="800" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Template_Gateway" bpmnElement="Flow_Template_Gateway"><di:waypoint x="990" y="188" /><di:waypoint x="1040" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_TemplateMissing_Fail" bpmnElement="Flow_TemplateMissing_Fail"><di:waypoint x="1065" y="213" /><di:waypoint x="1065" y="300" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Fail_End" bpmnElement="Flow_Fail_End"><di:waypoint x="1180" y="340" /><di:waypoint x="1230" y="340" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_TemplateValid_Metrics" bpmnElement="Flow_TemplateValid_Metrics"><di:waypoint x="1090" y="188" /><di:waypoint x="1150" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Metrics_Charts" bpmnElement="Flow_Metrics_Charts"><di:waypoint x="1350" y="188" /><di:waypoint x="1400" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Charts_Excel" bpmnElement="Flow_Charts_Excel"><di:waypoint x="1600" y="188" /><di:waypoint x="1650" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Excel_Succeeded" bpmnElement="Flow_Excel_Succeeded"><di:waypoint x="1860" y="188" /><di:waypoint x="1910" y="188" /></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Succeeded_End" bpmnElement="Flow_Succeeded_End"><di:waypoint x="2090" y="188" /><di:waypoint x="2140" y="188" /></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
+

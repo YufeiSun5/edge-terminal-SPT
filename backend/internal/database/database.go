@@ -91,6 +91,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.DetectionStandardRecent{},
 		&models.DetectionStandardItem{},
 		&models.DetectionTask{},
+		&models.DetectionPlan{},
 		&models.DetectionRunStandardItem{},
 		&models.DetectionRunStorageRoute{},
 		&models.DetectionRunNote{},

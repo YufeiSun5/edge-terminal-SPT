@@ -19,7 +19,7 @@ applyTo: "backend/**/*_test.go,tests/**/*,scripts/**/*,*.ps1,*.bat,*.md"
 3. Record commands, pass/fail result, and skipped reasons in `AI_BOARD.md`.
 4. Schema-affecting changes require checking GORM models and `backend/deploy/schema.sql`.
 5. Realtime or control-channel changes require at least a manual smoke path.
-6. Field-facing machine/project tests are constrained to real test machines `AC-01` through `AC-12`. Do not create or use `AC-13+` or unrelated smoke Projects as evidence for KIO/PID/realtime acceptance; temporary non-field fixtures require explicit cleanup and must be labeled as non-field coverage.
+6. Field-facing machine/project tests are constrained to real test machines `AC-01` through `AC-08`. Do not create or use `AC-09+` or unrelated smoke Projects as evidence for KIO/PID/realtime acceptance; temporary non-field fixtures require explicit cleanup and must be labeled as non-field coverage.
 
 ## Current Minimum Gates
 

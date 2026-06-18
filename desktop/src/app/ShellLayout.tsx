@@ -31,9 +31,20 @@ import {
 import { openExternal, openLogs, restartSidecar } from '@/shared/desktop/desktopBridge'
 import { createSsoTicket, logout } from '@/features/auth/api'
 import { useAuthStore } from '@/features/auth/authStore'
-import { getNotificationUnreadCount, getNotifications, getProjects, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
+import {
+  getMainReportNotificationUnreadCount,
+  getMainReportNotifications,
+  getNotificationUnreadCount,
+  getNotifications,
+  getProjects,
+  markAllMainReportNotificationsRead,
+  markAllNotificationsRead,
+  markMainReportNotificationRead,
+  markNotificationRead,
+} from '@/features/edge-status/api'
 import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
-import type { Project, UserNotification } from '@/shared/api/types'
+import { env } from '@/shared/config/env'
+import type { MainReportNotification, Project, UserNotification } from '@/shared/api/types'
 import { languageCode } from '@/shared/i18n/language'
 import { queryClient } from './queryClient'
 
@@ -41,7 +52,7 @@ const navItems = [
   { path: '/', key: 'station', icon: LayoutGrid, permissions: ['view_realtime'] },
   { path: '/model-cockpit', key: 'modelCockpit', icon: PieChart, permissions: ['view_realtime'] },
   { path: '/history', key: 'history', icon: Clock, permissions: ['view_history'] },
-  { path: '/reports', key: 'reports', icon: FileText, permissions: ['view_history'] },
+  { path: '/report-settings', key: 'reportSettings', icon: FileText, permissions: ['system_settings'] },
   { path: '/notifications', key: 'notifications', icon: Bell, permissions: ['view_realtime', 'view_history', 'system_settings'] },
   { path: '/alarms', key: 'alarms', icon: TriangleAlert, permissions: ['view_realtime'] },
   { path: '/variables', key: 'variables', icon: SlidersHorizontal, permissions: ['manage_variables'] },
@@ -58,7 +69,41 @@ const notificationTypeOptions = [
   { value: 'detection.run_stopped', labelKey: 'notifications.types.runStopped' },
   { value: 'detection.result_ok', labelKey: 'notifications.types.resultOk' },
   { value: 'detection.result_ng', labelKey: 'notifications.types.resultNg' },
+  { value: 'report.job', labelKey: 'notifications.types.reportJob' },
 ]
+
+function reportNotificationToUserNotification(notification: MainReportNotification): UserNotification {
+  const payload = notification.payload ?? {}
+  const taskId = Number(payload.task_id ?? 0)
+  const projectId = Number(payload.project_id ?? 0)
+  const reportName = String(payload.report_name ?? notification.title ?? '')
+  return {
+    id: -notification.id,
+    event_uid: `main-report-${notification.id}`,
+    type: 'report.job',
+    level: notification.level,
+    target_type: 'all',
+    target_id: String(notification.job_id),
+    project_id: Number.isFinite(projectId) ? projectId : 0,
+    project_code: typeof payload.project_code === 'string' ? payload.project_code : undefined,
+    task_id: Number.isFinite(taskId) && taskId > 0 ? taskId : undefined,
+    test_no: typeof payload.test_no === 'string' ? payload.test_no : undefined,
+    display_name: reportName || notification.title,
+    message: notification.message,
+    payload: { ...payload, report_notification_id: notification.id, job_id: notification.job_id },
+    occurred_at: notification.created_at,
+    created_at: notification.created_at,
+    read_at: notification.read_at,
+  }
+}
+
+function sortNotifications(items: UserNotification[]) {
+  return items.sort((left, right) => {
+    const leftTime = Date.parse(left.occurred_at || left.created_at || '')
+    const rightTime = Date.parse(right.occurred_at || right.created_at || '')
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0)
+  })
+}
 
 export function ShellLayout() {
   const { t, i18n } = useTranslation()
@@ -66,6 +111,8 @@ export function ShellLayout() {
   const navigate = useNavigate()
   const [messageApi, contextHolder] = message.useMessage()
   const [stationExpanded, setStationExpanded] = useState(true)
+  const [historyExpanded, setHistoryExpanded] = useState(true)
+  const [reportSettingsExpanded, setReportSettingsExpanded] = useState(true)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const [notificationUnreadFilter, setNotificationUnreadFilter] = useState<'all' | 'unread'>('all')
   const [notificationTypeFilter, setNotificationTypeFilter] = useState<string>()
@@ -82,19 +129,45 @@ export function ShellLayout() {
   })
   const unreadQuery = useQuery({
     queryKey: ['shell', 'notifications', 'unread-count'],
-    queryFn: () => getNotificationUnreadCount(),
+    queryFn: async () => {
+      const base = await getNotificationUnreadCount()
+      if (env.runtimeRole !== 'main_server') return base
+      const report = await getMainReportNotificationUnreadCount()
+      return { unread: base.unread + report.unread }
+    },
     refetchInterval: 10000,
     retry: false,
   })
   const notificationsQuery = useQuery({
     queryKey: ['shell', 'notifications', 'latest', notificationUnreadFilter, notificationTypeFilter ?? 'all', notificationProjectFilter ?? 'all'],
-    queryFn: () =>
-      getNotifications({
+    queryFn: async () => {
+      if (notificationTypeFilter === 'report.job') {
+        if (env.runtimeRole !== 'main_server' || notificationProjectFilter) {
+          return { items: [], total: 0, limit: 20, offset: 0 }
+        }
+        const report = await getMainReportNotifications({
+          limit: 20,
+          unread: notificationUnreadFilter === 'unread' ? true : undefined,
+        })
+        return { ...report, items: report.items.map(reportNotificationToUserNotification) }
+      }
+      const base = await getNotifications({
         limit: 20,
         unread: notificationUnreadFilter === 'unread' ? true : undefined,
         type: notificationTypeFilter,
         project_id: notificationProjectFilter,
-      }),
+      })
+      if (env.runtimeRole !== 'main_server' || notificationProjectFilter || (notificationTypeFilter && notificationTypeFilter !== 'report.job')) {
+        return base
+      }
+      const report = await getMainReportNotifications({
+        limit: 20,
+        unread: notificationUnreadFilter === 'unread' ? true : undefined,
+      })
+      const reportItems = report.items.map(reportNotificationToUserNotification)
+      const items = sortNotifications([...base.items, ...reportItems]).slice(0, 20)
+      return { ...base, items, total: base.total + report.total }
+    },
     enabled: notificationOpen,
     staleTime: 5000,
     retry: false,
@@ -131,7 +204,7 @@ export function ShellLayout() {
     onError: (error) => messageApi.error(error instanceof Error ? error.message : t('auth.ssoFailed')),
   })
   const markReadMutation = useMutation({
-    mutationFn: (notificationId: number) => markNotificationRead(notificationId),
+    mutationFn: (notificationId: number) => notificationId < 0 ? markMainReportNotificationRead(Math.abs(notificationId)) : markNotificationRead(notificationId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
@@ -139,7 +212,12 @@ export function ShellLayout() {
     },
   })
   const markAllReadMutation = useMutation({
-    mutationFn: () => markAllNotificationsRead(),
+    mutationFn: async () => {
+      const base = await markAllNotificationsRead()
+      if (env.runtimeRole !== 'main_server') return base
+      const report = await markAllMainReportNotificationsRead()
+      return { updated: base.updated + report.updated }
+    },
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] }),
@@ -206,6 +284,15 @@ export function ShellLayout() {
       if (notification.var_id_text ?? notification.var_id) params.set('var_id', String(notification.var_id_text ?? notification.var_id))
       params.set('status', 'active')
       navigate(`/alarms?${params.toString()}`)
+      return
+    }
+
+    if (notification.type === 'report.job') {
+      if (notification.task_id && hasAnyPermission(['view_history'])) {
+        navigate(`/history/runs/${notification.task_id}?tab=reports`)
+      } else {
+        navigate('/history')
+      }
       return
     }
 
@@ -321,6 +408,10 @@ export function ShellLayout() {
           {visibleNavItems.map((item) => {
             const isStationNav = item.key === 'station'
             const stationActive = isStationNav && (location.pathname === '/' || location.pathname === '/station')
+            const isHistoryNav = item.key === 'history'
+            const historyActive = isHistoryNav && location.pathname.startsWith('/history')
+            const isReportSettingsNav = item.key === 'reportSettings'
+            const reportSettingsActive = isReportSettingsNav && location.pathname.startsWith('/report-settings')
 
             return (
               <div className="nav-group" key={item.path}>
@@ -338,6 +429,32 @@ export function ShellLayout() {
                         {stationExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </span>
                     ) : null}
+                  </button>
+                ) : isHistoryNav ? (
+                  <button
+                    className={historyActive ? 'nav-link nav-button active' : 'nav-link nav-button'}
+                    type="button"
+                    onClick={() => setHistoryExpanded((value) => !value)}
+                    aria-expanded={historyExpanded}
+                  >
+                    <item.icon size={18} />
+                    <span>{t('nav.historyAndPlans')}</span>
+                    <span className="nav-expand-icon">
+                      {historyExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
+                  </button>
+                ) : isReportSettingsNav ? (
+                  <button
+                    className={reportSettingsActive ? 'nav-link nav-button active' : 'nav-link nav-button'}
+                    type="button"
+                    onClick={() => setReportSettingsExpanded((value) => !value)}
+                    aria-expanded={reportSettingsExpanded}
+                  >
+                    <item.icon size={18} />
+                    <span>{t('nav.reportSettings')}</span>
+                    <span className="nav-expand-icon">
+                      {reportSettingsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
                   </button>
                 ) : (
                   <NavLink
@@ -366,6 +483,40 @@ export function ShellLayout() {
                         </Link>
                       )
                     })}
+                  </div>
+                ) : null}
+                {isHistoryNav && historyExpanded ? (
+                  <div className="nav-subtree">
+                    {[
+                      { path: '/history', key: 'gantt' },
+                      { path: '/history/list', key: 'historyList' },
+                      { path: '/history/plans', key: 'plans' },
+                    ].map((subItem) => (
+                      <NavLink
+                        className={({ isActive }) => (isActive ? 'nav-sublink active' : 'nav-sublink')}
+                        end={subItem.path === '/history'}
+                        key={subItem.path}
+                        to={subItem.path}
+                      >
+                        <span>{t(`nav.historyChildren.${subItem.key}`)}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                ) : null}
+                {isReportSettingsNav && reportSettingsExpanded ? (
+                  <div className="nav-subtree">
+                    {[
+                      { path: '/report-settings/templates', key: 'templates' },
+                      { path: '/report-settings/plan-imports', key: 'planImports' },
+                    ].map((subItem) => (
+                      <NavLink
+                        className={({ isActive }) => (isActive ? 'nav-sublink active' : 'nav-sublink')}
+                        key={subItem.path}
+                        to={subItem.path}
+                      >
+                        <span>{t(`nav.reportSettingsChildren.${subItem.key}`)}</span>
+                      </NavLink>
+                    ))}
                   </div>
                 ) : null}
               </div>

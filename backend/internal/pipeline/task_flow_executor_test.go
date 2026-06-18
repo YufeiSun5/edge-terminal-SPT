@@ -178,11 +178,12 @@ func TestTaskFlowJavaScriptRealtimeMultiVariableAndAuditedWrite(t *testing.T) {
 	tags := NewTagManager()
 	tasks := NewTaskManager()
 	projectID := uint(12)
+	projectCode := "UNIT-12"
 	tags.Load([]models.TagConfig{
-		{VarID: 1200, GatewayID: 1, SourceTopic: "topic", VarName: "start_flag", JSONPath: "start_flag", DataType: "INT", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
-		{VarID: 1201, GatewayID: 1, SourceTopic: "topic", VarName: "temp", JSONPath: "temp", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
-		{VarID: 1202, GatewayID: 1, SourceTopic: "topic", VarName: "pressure_ok", JSONPath: "pressure_ok", DataType: "BOOL", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
-		{VarID: 1203, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", VarName: "js_status", JSONPath: "js_status", DataType: "STRING", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
+		{VarID: 1200, GatewayID: 1, SourceTopic: "topic", VarName: "start_flag", JSONPath: "start_flag", DataType: "INT", ProjectID: &projectID, ProjectCode: projectCode, Enabled: true, ScaleFactor: 1},
+		{VarID: 1201, GatewayID: 1, SourceTopic: "topic", VarName: "temp", JSONPath: "temp", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: projectCode, Enabled: true, ScaleFactor: 1},
+		{VarID: 1202, GatewayID: 1, SourceTopic: "topic", VarName: "pressure_ok", JSONPath: "pressure_ok", DataType: "BOOL", ProjectID: &projectID, ProjectCode: projectCode, Enabled: true, ScaleFactor: 1},
+		{VarID: 1203, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", VarName: "js_status", JSONPath: "js_status", DataType: "STRING", ProjectID: &projectID, ProjectCode: projectCode, Enabled: true, ScaleFactor: 1},
 	})
 	executor := NewTaskFlowExecutor(repo, tags, tasks, channels)
 	executor.Load([]models.TaskFlow{{
@@ -239,11 +240,12 @@ func TestTaskFlowJavaScriptRealtimeAPIAcceptsStringVarIDs(t *testing.T) {
 	tags := NewTagManager()
 	tasks := NewTaskManager()
 	projectID := uint(12)
+	projectCode := "UNIT-12"
 	sourceVarID := int64(9212397624135540848)
 	statusVarID := int64(9212397624135540849)
 	tags.Load([]models.TagConfig{
-		{VarID: sourceVarID, GatewayID: 1, SourceTopic: "topic", VarName: "precise_temp", JSONPath: "precise_temp", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
-		{VarID: statusVarID, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", VarName: "precise_status", JSONPath: "precise_status", DataType: "STRING", ProjectID: &projectID, ProjectCode: "AC-12", Enabled: true, ScaleFactor: 1},
+		{VarID: sourceVarID, GatewayID: 1, SourceTopic: "topic", VarName: "precise_temp", JSONPath: "precise_temp", DataType: "FLOAT", ProjectID: &projectID, ProjectCode: projectCode, Enabled: true, ScaleFactor: 1},
+		{VarID: statusVarID, SourceType: models.TagSourceVirtual, GatewayID: 0, SourceTopic: "virtual", VarName: "precise_status", JSONPath: "precise_status", DataType: "STRING", ProjectID: &projectID, ProjectCode: projectCode, Enabled: true, ScaleFactor: 1},
 	})
 	sourceTag, ok := tags.Get(sourceVarID)
 	if !ok {

@@ -22,10 +22,31 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
-import { Button, Form, Input, InputNumber, Modal, Segmented, Select, Switch, Table, Tag, message } from 'antd'
+import {
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Segmented,
+  Select,
+  Switch,
+  Table,
+  Tag,
+  message,
+} from 'antd'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
@@ -47,11 +68,13 @@ import {
   Trash2,
 } from 'lucide-react'
 import type {
+  DetectionRun,
   DetectionRunStandardItem,
+  DetectionPlan,
   DetectionRunReportRequest,
   DetectionRunReportRequestPayload,
-  DetectionRunStartPayload,
   DetectionRunStorageRoute,
+  DetectionStandard,
   LimitAlarm,
   LimitAlarmScope,
   RealtimeVariablesSnapshotPayload,
@@ -59,6 +82,7 @@ import type {
   StationViewItemPayload,
   StationViewResolvedBinding,
   TagSnapshot,
+  TaskFlow,
   VariableConfig,
   VariableWriteResult,
 } from '@/shared/api/types'
@@ -67,8 +91,10 @@ import {
   abnormalStopDetectionRun,
   getActiveDetectionRuns,
   getDetectionRun,
+  getDetectionRuns,
   getDetectionRunReportRequests,
   getDetectionRunStorageRoutes,
+  getDetectionPlans,
   getDetectionStandards,
   getProjects,
   getLimitAlarms,
@@ -77,12 +103,18 @@ import {
   getStationViewEffective,
   getStationViewItems,
   getStationViewTemplates,
+  getTaskFlows,
   getVariables,
   replaceStationViewItems,
-  startDetectionRun,
+  startDetectionPlan,
   stopDetectionRun,
 } from '@/features/edge-status/api'
-import { RealtimeWebSocketCommandError, sendRealtimeWebSocketCommand, subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
+import {
+  RealtimeWebSocketCommandError,
+  sendRealtimeWebSocketCommand,
+  subscribeRealtimeWebSocket,
+} from '@/features/realtime/realtimeClient'
+import { detectionStandardScopeLabel } from '@/shared/detection/standardScope'
 import { languageCode } from '@/shared/i18n/language'
 import { StationCardGridStyles } from './components/StationCardGridStyles'
 import { StationLightBackground } from './components/StationLightBackground'
@@ -112,6 +144,7 @@ type StationViewBindingWithItem = StationViewResolvedBinding & {
 }
 
 type StartDetectionFormValues = {
+  plan_id?: number
   project_id: number
   factory_no: string
   customer_name?: string
@@ -135,29 +168,51 @@ type ReportRequestFormRow = {
 const stationMetricCardLimit = 12
 const stationLayoutAreaCardPool = 'card_pool'
 const stationLayoutAreaListLayout = 'list_layout'
+const startDetectionCommand = 'start_detection'
+const startDetectionModule = 'builtin.start_detection_run'
+const startDetectionConfirmAttempts = 8
+const startDetectionConfirmIntervalMs = 500
 
-function stationBindingDefaultOrder(binding: StationViewResolvedBinding, fallback: number) {
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function stationBindingDefaultOrder(
+  binding: StationViewResolvedBinding,
+  fallback: number,
+) {
   return Number.isFinite(binding.sort_order) ? binding.sort_order : fallback
 }
 
 function stationBindingPinned(binding: StationViewResolvedBinding) {
-  return (binding as StationViewResolvedBinding & { pinned?: boolean }).pinned === true
+  return (
+    (binding as StationViewResolvedBinding & { pinned?: boolean }).pinned ===
+    true
+  )
 }
 
-function sortStationBindingsByDefaultOrder<T extends StationViewResolvedBinding>(bindings: T[]): T[] {
+function sortStationBindingsByDefaultOrder<
+  T extends StationViewResolvedBinding,
+>(bindings: T[]): T[] {
   return bindings
     .map((binding, index) => ({ binding, index }))
     .sort((a, b) => {
-      const pinnedDiff = Number(stationBindingPinned(b.binding)) - Number(stationBindingPinned(a.binding))
+      const pinnedDiff =
+        Number(stationBindingPinned(b.binding)) -
+        Number(stationBindingPinned(a.binding))
       if (pinnedDiff !== 0) return pinnedDiff
-      const orderDiff = stationBindingDefaultOrder(a.binding, a.index) - stationBindingDefaultOrder(b.binding, b.index)
+      const orderDiff =
+        stationBindingDefaultOrder(a.binding, a.index) -
+        stationBindingDefaultOrder(b.binding, b.index)
       if (orderDiff !== 0) return orderDiff
       return a.index - b.index
     })
     .map((item) => item.binding)
 }
 
-function stationViewItemPayloadFromItem(item: StationViewItem): StationViewItemPayload {
+function stationViewItemPayloadFromItem(
+  item: StationViewItem,
+): StationViewItemPayload {
   return {
     item_uid: item.item_uid,
     layout_area: item.layout_area,
@@ -200,7 +255,13 @@ const pidSettingGroups: PIDSettingGroup[] = [
     key: 'temperature',
     titleKey: 'station.pid.groups.temperature',
     items: [
-      { key: 'SP1-WD', labelKey: 'station.pid.labels.temperatureSetpoint', unit: '℃', step: 0.1, precision: 1 },
+      {
+        key: 'SP1-WD',
+        labelKey: 'station.pid.labels.temperatureSetpoint',
+        unit: '℃',
+        step: 0.1,
+        precision: 1,
+      },
       { key: 'P1', labelKey: 'station.pid.labels.p1', step: 0.1, precision: 1 },
       { key: 'I1', labelKey: 'station.pid.labels.i1', step: 1, precision: 0 },
       { key: 'D1', labelKey: 'station.pid.labels.d1', step: 1, precision: 0 },
@@ -210,7 +271,13 @@ const pidSettingGroups: PIDSettingGroup[] = [
     key: 'humidity',
     titleKey: 'station.pid.groups.humidity',
     items: [
-      { key: 'SP2-SD', labelKey: 'station.pid.labels.humiditySetpoint', unit: '%', step: 0.1, precision: 1 },
+      {
+        key: 'SP2-SD',
+        labelKey: 'station.pid.labels.humiditySetpoint',
+        unit: '%',
+        step: 0.1,
+        precision: 1,
+      },
       { key: 'P2', labelKey: 'station.pid.labels.p2', step: 0.1, precision: 1 },
       { key: 'I2', labelKey: 'station.pid.labels.i2', step: 1, precision: 0 },
       { key: 'D2', labelKey: 'station.pid.labels.d2', step: 1, precision: 0 },
@@ -220,7 +287,13 @@ const pidSettingGroups: PIDSettingGroup[] = [
     key: 'temperature2',
     titleKey: 'station.pid.groups.temperature2',
     items: [
-      { key: 'SP2-WD', labelKey: 'station.pid.labels.temperatureSetpoint', unit: '℃', step: 0.1, precision: 1 },
+      {
+        key: 'SP2-WD',
+        labelKey: 'station.pid.labels.temperatureSetpoint',
+        unit: '℃',
+        step: 0.1,
+        precision: 1,
+      },
       { key: 'P3', labelKey: 'station.pid.labels.p3', step: 0.1, precision: 1 },
       { key: 'I3', labelKey: 'station.pid.labels.i3', step: 1, precision: 0 },
       { key: 'D3', labelKey: 'station.pid.labels.d3', step: 1, precision: 0 },
@@ -228,7 +301,16 @@ const pidSettingGroups: PIDSettingGroup[] = [
   },
 ]
 
-const cardColors = ['#c2410c', '#0f766e', '#2563eb', '#b45309', '#7c3aed', '#15803d', '#be185d', '#dc2626']
+const cardColors = [
+  '#c2410c',
+  '#0f766e',
+  '#2563eb',
+  '#b45309',
+  '#7c3aed',
+  '#15803d',
+  '#be185d',
+  '#dc2626',
+]
 
 type StationTableRow = {
   key: string
@@ -241,7 +323,11 @@ type StationTableRow = {
 }
 
 function formatAlarmValue(value?: number | null) {
-  return value === undefined || value === null ? '-' : Number(value).toFixed(3).replace(/\.?0+$/, '')
+  return value === undefined || value === null
+    ? '-'
+    : Number(value)
+        .toFixed(3)
+        .replace(/\.?0+$/, '')
 }
 
 function formatAlarmTime(value?: string) {
@@ -252,7 +338,10 @@ function formatAlarmTime(value?: string) {
 }
 
 function alarmDisplayName(
-  alarm: Pick<LimitAlarm, 'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name'>,
+  alarm: Pick<
+    LimitAlarm,
+    'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name'
+  >,
   language?: string,
 ) {
   const currentLanguage = languageCode(language)
@@ -262,28 +351,57 @@ function alarmDisplayName(
 }
 
 function variableDisplayName(
-  variable: Pick<VariableConfig, 'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name'>,
+  variable: Pick<
+    VariableConfig,
+    'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name'
+  >,
   language?: string,
 ) {
   const currentLanguage = languageCode(language)
-  if (currentLanguage === 'en') return variable.display_name_en || variable.var_name
-  if (currentLanguage === 'ja') return variable.display_name_ja || variable.var_name
+  if (currentLanguage === 'en')
+    return variable.display_name_en || variable.var_name
+  if (currentLanguage === 'ja')
+    return variable.display_name_ja || variable.var_name
   return variable.display_name || variable.var_name
 }
 
-function bindingDisplayName(binding: StationViewResolvedBinding, language?: string) {
+function bindingDisplayName(
+  binding: StationViewResolvedBinding,
+  language?: string,
+) {
   const currentLanguage = languageCode(language)
-  if (currentLanguage === 'en') return binding.display_name_en || binding.var_name || binding.var_id_text || String(binding.var_id ?? '')
-  if (currentLanguage === 'ja') return binding.display_name_ja || binding.var_name || binding.var_id_text || String(binding.var_id ?? '')
-  return binding.display_name || binding.var_name || binding.var_id_text || String(binding.var_id ?? '')
+  if (currentLanguage === 'en')
+    return (
+      binding.display_name_en ||
+      binding.var_name ||
+      binding.var_id_text ||
+      String(binding.var_id ?? '')
+    )
+  if (currentLanguage === 'ja')
+    return (
+      binding.display_name_ja ||
+      binding.var_name ||
+      binding.var_id_text ||
+      String(binding.var_id ?? '')
+    )
+  return (
+    binding.display_name ||
+    binding.var_name ||
+    binding.var_id_text ||
+    String(binding.var_id ?? '')
+  )
 }
 
-function bindingWireId(binding: Pick<StationViewResolvedBinding, 'var_id' | 'var_id_text'>) {
+function bindingWireId(
+  binding: Pick<StationViewResolvedBinding, 'var_id' | 'var_id_text'>,
+) {
   return binding.var_id_text ?? binding.var_id
 }
 
 function bindingKey(binding: StationViewResolvedBinding, index: number) {
-  return String(bindingWireId(binding) ?? `${binding.source}-${binding.var_name ?? index}`)
+  return String(
+    bindingWireId(binding) ?? `${binding.source}-${binding.var_name ?? index}`,
+  )
 }
 
 function snapshotKey(snapshot: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
@@ -298,11 +416,16 @@ function bindingLimits(binding: StationViewResolvedBinding) {
 }
 
 function numericSnapshotValue(snapshot?: TagSnapshot) {
-  if (!snapshot || snapshot.is_string || !Number.isFinite(snapshot.value)) return undefined
+  if (!snapshot || snapshot.is_string || !Number.isFinite(snapshot.value))
+    return undefined
   return snapshot.value
 }
 
-function formatMetricValue(value: number | undefined, unit: string | undefined, precision: number) {
+function formatMetricValue(
+  value: number | undefined,
+  unit: string | undefined,
+  precision: number,
+) {
   if (value === undefined) return '--'
   return `${value.toFixed(Math.max(0, Math.min(precision, 4)))}${unit ? ` ${unit}` : ''}`
 }
@@ -311,12 +434,17 @@ function formatStandardRange(binding: StationViewResolvedBinding) {
   const limits = bindingLimits(binding)
   const unit = binding.unit ? ` ${binding.unit}` : ''
   if (limits.min === undefined && limits.max === undefined) return '--'
-  if (limits.min === undefined) return `<= ${formatAlarmValue(limits.max)}${unit}`
-  if (limits.max === undefined) return `>= ${formatAlarmValue(limits.min)}${unit}`
+  if (limits.min === undefined)
+    return `<= ${formatAlarmValue(limits.max)}${unit}`
+  if (limits.max === undefined)
+    return `>= ${formatAlarmValue(limits.min)}${unit}`
   return `${formatAlarmValue(limits.min)} - ${formatAlarmValue(limits.max)}${unit}`
 }
 
-function isWithinLimits(value: number | undefined, binding: StationViewResolvedBinding) {
+function isWithinLimits(
+  value: number | undefined,
+  binding: StationViewResolvedBinding,
+) {
   if (value === undefined) return true
   const limits = bindingLimits(binding)
   if (limits.min !== undefined && value < limits.min) return false
@@ -324,7 +452,11 @@ function isWithinLimits(value: number | undefined, binding: StationViewResolvedB
   return true
 }
 
-function trendFromValue(value: number | undefined, min?: number, max?: number): TrendPoint[] {
+function trendFromValue(
+  value: number | undefined,
+  min?: number,
+  max?: number,
+): TrendPoint[] {
   const base = value ?? min ?? max ?? 0
   return Array.from({ length: 7 }, (_, index) => ({
     time: String(index + 1),
@@ -333,7 +465,8 @@ function trendFromValue(value: number | undefined, min?: number, max?: number): 
 }
 
 function iconForBinding(binding: StationViewResolvedBinding) {
-  const text = `${binding.var_group ?? ''} ${binding.var_name ?? ''} ${binding.display_name ?? ''}`.toLowerCase()
+  const text =
+    `${binding.var_group ?? ''} ${binding.var_name ?? ''} ${binding.display_name ?? ''}`.toLowerCase()
   if (text.includes('temp') || text.includes('温')) return Thermometer
   if (text.includes('humid') || text.includes('湿')) return Droplets
   if (text.includes('wind') || text.includes('风')) return Wind
@@ -343,30 +476,132 @@ function iconForBinding(binding: StationViewResolvedBinding) {
   return Gauge
 }
 
-function buildReportRequest(values: StartDetectionFormValues): DetectionRunReportRequestPayload | undefined {
+function buildReportRequest(
+  values: StartDetectionFormValues,
+  fallbackVarIds: Array<string | number> = [],
+): DetectionRunReportRequestPayload | undefined {
   const reports = (values.report_requests ?? [])
     .map((row) => {
-      const varIds = (row.var_ids ?? []).filter((item) => item !== undefined && item !== null && item !== '')
-      if (varIds.length === 0) return undefined
-      const report: NonNullable<DetectionRunReportRequestPayload['reports']>[number] = {
-        var_ids: varIds,
+      const varIds = (row.var_ids ?? []).filter(
+        (item) => item !== undefined && item !== null && item !== '',
+      )
+      const effectiveVarIds = varIds.length > 0 ? varIds : fallbackVarIds
+      if (effectiveVarIds.length === 0) return undefined
+      const report: NonNullable<
+        DetectionRunReportRequestPayload['reports']
+      >[number] = {
+        var_ids: effectiveVarIds,
       }
       if (row.template_id) report.template_id = row.template_id
       if (row.report_name?.trim()) report.report_name = row.report_name.trim()
       const paramsText = row.params_json?.trim()
-      if (paramsText) report.params = JSON.parse(paramsText) as Record<string, unknown>
+      if (paramsText)
+        report.params = JSON.parse(paramsText) as Record<string, unknown>
       return report
     })
-    .filter((item): item is NonNullable<DetectionRunReportRequestPayload['reports']>[number] => Boolean(item))
+    .filter(
+      (
+        item,
+      ): item is NonNullable<
+        DetectionRunReportRequestPayload['reports']
+      >[number] => Boolean(item),
+    )
   return reports.length > 0 ? { enabled: true, reports } : undefined
+}
+
+function parseTaskFlowSteps(flow: TaskFlow) {
+  const raw = flow.steps_json?.trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (Array.isArray(parsed)) return parsed as Array<{ module?: string }>
+    if (typeof parsed === 'object' && parsed)
+      return [parsed as { module?: string }]
+  } catch {
+    return []
+  }
+  return []
+}
+
+function taskFlowStartsDetection(flow: TaskFlow) {
+  const condition = (flow.condition_script ?? '').replace(/\s+/g, '')
+  const conditionMatches =
+    condition === '' ||
+    condition.includes(`task_params.command==="${startDetectionCommand}"`) ||
+    condition.includes(`task_params.command==='${startDetectionCommand}'`)
+  if (!conditionMatches) return false
+  if (flow.action_type === startDetectionModule) return true
+  return parseTaskFlowSteps(flow).some(
+    (step) => step.module === startDetectionModule,
+  )
+}
+
+function findStartDetectionRequestVar(flows: TaskFlow[]) {
+  return flows
+    .filter((flow) => flow.enabled)
+    .filter((flow) => flow.trigger_type === 'data_change')
+    .filter(taskFlowStartsDetection)
+    .flatMap((flow) => flow.vars ?? [])
+    .find((variable) => variable.role === 'watch')
+}
+
+async function waitForNewDetectionRun(
+  projectId: number,
+  previousMaxRunId: number,
+) {
+  for (let attempt = 0; attempt < startDetectionConfirmAttempts; attempt += 1) {
+    const [activeRuns, recentRuns] = await Promise.all([
+      getActiveDetectionRuns().catch(() => [] as DetectionRun[]),
+      getDetectionRuns({ project_id: projectId, limit: 5 })
+        .then((response) => response.items)
+        .catch(() => [] as DetectionRun[]),
+    ])
+    const nextRun = [...activeRuns, ...recentRuns]
+      .filter((run) => run.project_id === projectId && run.id > previousMaxRunId)
+      .sort((a, b) => b.id - a.id)[0]
+    if (nextRun) return nextRun
+    await sleep(startDetectionConfirmIntervalMs)
+  }
+  return undefined
 }
 
 function tagWireId(variable: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
   return variable.var_id_text ?? variable.var_id
 }
 
-function variableWireId(variable: Pick<VariableConfig, 'var_id' | 'var_id_text'>) {
+function variableWireId(
+  variable: Pick<VariableConfig, 'var_id' | 'var_id_text'>,
+) {
   return variable.var_id_text ?? variable.var_id
+}
+
+function standardReportVarIds(
+  standard?: DetectionStandard,
+  projectVariables: Array<Pick<VariableConfig, 'var_id' | 'var_id_text' | 'var_name'>> = [],
+) {
+  const seen = new Set<string>()
+  return (standard?.items ?? [])
+    .filter((item) => item.store_enabled || item.check_enabled)
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((item) => {
+      const direct = projectVariables.find(
+        (variable) =>
+          String(variable.var_id_text ?? variable.var_id) ===
+          String(item.var_id_text ?? item.var_id),
+      )
+      if (direct) return direct.var_id_text ?? direct.var_id
+      const byName = projectVariables.find(
+        (variable) => variable.var_name === item.var_name,
+      )
+      return byName ? byName.var_id_text ?? byName.var_id : item.var_id_text ?? item.var_id
+    })
+    .filter((value): value is string | number => {
+      if (value === undefined || value === null || value === '') return false
+      const key = String(value)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
 }
 
 function normalizePIDKey(value?: string) {
@@ -380,30 +615,49 @@ function isPIDWritable(variable: Pick<VariableConfig, 'writable' | 'rw_mode'>) {
 function isBrokerAcceptedWithoutAck(result?: VariableWriteResult) {
   if (!result) return false
   const kioStatus = result.kio?.status
-  return (result.broker_accepted === true || result.kio?.broker_accepted === true) && kioStatus === 'ack_timeout_or_unmatched'
+  return (
+    (result.broker_accepted === true || result.kio?.broker_accepted === true) &&
+    kioStatus === 'ack_timeout_or_unmatched'
+  )
 }
 
 function isGatewayOfflineWriteResult(result?: VariableWriteResult) {
   if (!result) return false
   const kioStatus = result.kio?.status
-  return kioStatus === 'gateway_offline' || (result.kio?.broker_accepted === false && result.kio?.message?.toLowerCase().includes('gateway'))
+  return (
+    kioStatus === 'gateway_offline' ||
+    (result.kio?.broker_accepted === false &&
+      result.kio?.message?.toLowerCase().includes('gateway'))
+  )
 }
 
-function isPIDReadbackMatch(submittedValue: string | undefined, currentValue: string) {
+function isPIDReadbackMatch(
+  submittedValue: string | undefined,
+  currentValue: string,
+) {
   const submitted = submittedValue?.trim()
   const current = currentValue.trim()
   if (!submitted || !current) return false
   const submittedNumber = Number(submitted)
   const currentNumber = Number(current)
-  if (Number.isFinite(submittedNumber) && Number.isFinite(currentNumber)) return Math.abs(submittedNumber - currentNumber) < 0.000001
+  if (Number.isFinite(submittedNumber) && Number.isFinite(currentNumber))
+    return Math.abs(submittedNumber - currentNumber) < 0.000001
   return submitted === current
 }
 
 function findPIDVariable(variables: VariableConfig[], key: string) {
   const normalizedKey = normalizePIDKey(key)
   return variables.find((variable) => {
-    const candidates = [variable.var_name, variable.display_name, variable.display_name_en, variable.display_name_ja, variable.raw_name]
-    return candidates.some((candidate) => normalizePIDKey(candidate) === normalizedKey)
+    const candidates = [
+      variable.var_name,
+      variable.display_name,
+      variable.display_name_en,
+      variable.display_name_ja,
+      variable.raw_name,
+    ]
+    return candidates.some(
+      (candidate) => normalizePIDKey(candidate) === normalizedKey,
+    )
   })
 }
 
@@ -411,7 +665,11 @@ function formatPIDNumber(value: number, precision: number) {
   return value.toFixed(Math.max(0, Math.min(precision, 4)))
 }
 
-function pidDisplayValue(key: string, rawValue: number | undefined, decimalPlaces = 1) {
+function pidDisplayValue(
+  key: string,
+  rawValue: number | undefined,
+  decimalPlaces = 1,
+) {
   if (rawValue === undefined) return ''
   if (key === 'SP2-SD') return formatPIDNumber(rawValue / 10, 1)
   if (key === 'SP1-WD' || key === 'SP2-WD') {
@@ -435,7 +693,10 @@ function pidWriteValue(key: string, displayValue: string, decimalPlaces = 1) {
   return numericValue
 }
 
-function coerceWriteValue(variable: Pick<VariableConfig, 'data_type'>, rawValue: string) {
+function coerceWriteValue(
+  variable: Pick<VariableConfig, 'data_type'>,
+  rawValue: string,
+) {
   const value = rawValue.trim()
   if (value === '') throw new Error('empty')
   const dataType = variable.data_type.toUpperCase()
@@ -444,33 +705,65 @@ function coerceWriteValue(variable: Pick<VariableConfig, 'data_type'>, rawValue:
     if (['0', 'false', 'off', 'no'].includes(value.toLowerCase())) return false
     throw new Error('bool')
   }
-  if (dataType === 'INT' || dataType === 'INTEGER' || dataType === 'FLOAT' || dataType === 'DOUBLE' || dataType === 'NUMBER') {
+  if (
+    dataType === 'INT' ||
+    dataType === 'INTEGER' ||
+    dataType === 'FLOAT' ||
+    dataType === 'DOUBLE' ||
+    dataType === 'NUMBER'
+  ) {
     const numericValue = Number(value)
     if (!Number.isFinite(numericValue)) throw new Error('number')
-    return dataType === 'INT' || dataType === 'INTEGER' ? Math.trunc(numericValue) : numericValue
+    return dataType === 'INT' || dataType === 'INTEGER'
+      ? Math.trunc(numericValue)
+      : numericValue
   }
   return value
 }
 
 function displayProjectName(
-  project: { project_code?: string; display_name?: string; display_name_en?: string; display_name_ja?: string; name?: string },
+  project: {
+    project_code?: string
+    display_name?: string
+    display_name_en?: string
+    display_name_ja?: string
+    name?: string
+  },
   language?: string,
 ) {
   const currentLanguage = languageCode(language)
-  if (currentLanguage === 'en') return project.display_name_en || project.project_code || ''
-  if (currentLanguage === 'ja') return project.display_name_ja || project.project_code || ''
+  if (currentLanguage === 'en')
+    return project.display_name_en || project.project_code || ''
+  if (currentLanguage === 'ja')
+    return project.display_name_ja || project.project_code || ''
   return project.display_name || project.name || project.project_code || ''
 }
 
 function standardDisplayName(
-  standard: { standard_code: string; display_name?: string; display_name_en?: string; display_name_ja?: string; name?: string } | undefined,
+  standard:
+    | {
+        standard_code: string
+        display_name?: string
+        display_name_en?: string
+        display_name_ja?: string
+        name?: string
+      }
+    | undefined,
   language?: string,
 ) {
   if (!standard) return ''
   const currentLanguage = languageCode(language)
-  if (currentLanguage === 'en') return standard.display_name_en || standard.standard_code
-  if (currentLanguage === 'ja') return standard.display_name_ja || standard.standard_code
+  if (currentLanguage === 'en')
+    return standard.display_name_en || standard.standard_code
+  if (currentLanguage === 'ja')
+    return standard.display_name_ja || standard.standard_code
   return standard.display_name || standard.name || standard.standard_code
+}
+
+function detectionPlanLabel(plan: DetectionPlan) {
+  const itemName =
+    plan.test_item_name || plan.test_item_code || plan.standard_code
+  return [plan.factory_no, itemName, plan.plan_no].filter(Boolean).join(' / ')
 }
 
 export function StationOperationPage() {
@@ -481,14 +774,28 @@ export function StationOperationPage() {
   const [messageApi, messageContext] = message.useMessage()
   const [startForm] = Form.useForm<StartDetectionFormValues>()
   const configEnabled = Form.useWatch('config_enabled', startForm)
+  const selectedPlanId = Form.useWatch('plan_id', startForm)
+  const startProjectId = Form.useWatch('project_id', startForm)
+  const selectedStandardId = Form.useWatch('standard_id', startForm)
+  const watchedReportRequestRows = Form.useWatch('report_requests', startForm)
+  const reportRequestRows = useMemo(
+    () => watchedReportRequestRows ?? [],
+    [watchedReportRequestRows],
+  )
   const [startModalOpen, setStartModalOpen] = useState(false)
   const [alarmModalOpen, setAlarmModalOpen] = useState(false)
   const [pidModalOpen, setPIDModalOpen] = useState(false)
   const [previewCardOrder, setPreviewCardOrder] = useState<string[]>([])
-  const [previewPinnedRows, setPreviewPinnedRows] = useState<Record<string, boolean>>({})
+  const [previewPinnedRows, setPreviewPinnedRows] = useState<
+    Record<string, boolean>
+  >({})
   const [pidVarGroup, setPIDVarGroup] = useState('')
-  const [pidWriteValues, setPIDWriteValues] = useState<Record<string, string>>({})
-  const [pidWriteStates, setPIDWriteStates] = useState<Record<string, PIDWriteState>>({})
+  const [pidWriteValues, setPIDWriteValues] = useState<Record<string, string>>(
+    {},
+  )
+  const [pidWriteStates, setPIDWriteStates] = useState<
+    Record<string, PIDWriteState>
+  >({})
   const [storageSnapshotOpen, setStorageSnapshotOpen] = useState(false)
   const [runSnapshotOpen, setRunSnapshotOpen] = useState(false)
   const [alarmScope, setAlarmScope] = useState<AlarmScopeFilter>('all')
@@ -496,11 +803,25 @@ export function StationOperationPage() {
   const canStartDetection = hasPermission('start_detection')
   const canStopDetection = hasPermission('stop_detection')
   const selectedProjectId = Number(searchParams.get('project_id'))
-  const validSelectedProjectId = Number.isFinite(selectedProjectId) && selectedProjectId > 0 ? selectedProjectId : undefined
-  const selectedEdgeInstanceId = searchParams.get('edge_instance_id') || undefined
+  const validSelectedProjectId =
+    Number.isFinite(selectedProjectId) && selectedProjectId > 0
+      ? selectedProjectId
+      : undefined
+  const selectedEdgeInstanceId =
+    searchParams.get('edge_instance_id') || undefined
+  const effectiveStartProjectId =
+    Number.isFinite(Number(startProjectId)) && Number(startProjectId) > 0
+      ? Number(startProjectId)
+      : validSelectedProjectId
   const stationViewQuery = useQuery({
-    queryKey: ['station', 'view-effective', validSelectedProjectId, selectedEdgeInstanceId],
-    queryFn: () => getStationViewEffective(validSelectedProjectId!, selectedEdgeInstanceId),
+    queryKey: [
+      'station',
+      'view-effective',
+      validSelectedProjectId,
+      selectedEdgeInstanceId,
+    ],
+    queryFn: () =>
+      getStationViewEffective(validSelectedProjectId!, selectedEdgeInstanceId),
     enabled: validSelectedProjectId !== undefined,
     refetchInterval: 10000,
     retry: false,
@@ -518,14 +839,33 @@ export function StationOperationPage() {
     retry: false,
   })
   const variablesQuery = useQuery({
-    queryKey: ['edge', 'realtime-variables', validSelectedProjectId, selectedEdgeInstanceId],
-    queryFn: () => getRealtimeVariables(validSelectedProjectId ? { project_id: validSelectedProjectId, edge_instance_id: selectedEdgeInstanceId } : {}),
+    queryKey: [
+      'edge',
+      'realtime-variables',
+      validSelectedProjectId,
+      selectedEdgeInstanceId,
+    ],
+    queryFn: () =>
+      getRealtimeVariables(
+        validSelectedProjectId
+          ? {
+              project_id: validSelectedProjectId,
+              edge_instance_id: selectedEdgeInstanceId,
+            }
+          : {},
+      ),
     enabled: validSelectedProjectId !== undefined,
     staleTime: 30000,
     retry: false,
   })
   const pidVariablesQuery = useQuery({
-    queryKey: ['station', 'pid-variables', validSelectedProjectId, selectedEdgeInstanceId, pidVarGroup],
+    queryKey: [
+      'station',
+      'pid-variables',
+      validSelectedProjectId,
+      selectedEdgeInstanceId,
+      pidVarGroup,
+    ],
     queryFn: () =>
       getVariables({
         edge_instance_id: selectedEdgeInstanceId,
@@ -561,21 +901,50 @@ export function StationOperationPage() {
     staleTime: 30000,
     retry: false,
   })
+  const detectionPlansQuery = useQuery({
+    queryKey: ['station', 'detection-plans', 'pending'],
+    queryFn: () => getDetectionPlans({ status: 'pending', limit: 300 }),
+    enabled: startModalOpen,
+    refetchInterval: startModalOpen ? 10000 : false,
+    retry: false,
+  })
+  const startTaskFlowsQuery = useQuery({
+    queryKey: ['station', 'start-task-flows', effectiveStartProjectId],
+    queryFn: () =>
+      getTaskFlows({
+        project_id: effectiveStartProjectId,
+        trigger_type: 'data_change',
+        enabled: true,
+      }),
+    enabled: startModalOpen && effectiveStartProjectId !== undefined,
+    staleTime: 10000,
+    retry: false,
+  })
   const alarmsQuery = useQuery({
     queryKey: ['station', 'limit-alarms', validSelectedProjectId, alarmScope],
     queryFn: () =>
       getLimitAlarms({
         limit: 100,
-        ...(validSelectedProjectId ? { project_id: validSelectedProjectId } : {}),
+        ...(validSelectedProjectId
+          ? { project_id: validSelectedProjectId }
+          : {}),
         ...(alarmScope === 'all' ? {} : { scope: alarmScope }),
       }),
     enabled: alarmModalOpen,
     refetchInterval: alarmModalOpen ? 5000 : false,
     retry: false,
   })
-  const [wsSnapshotState, setWsSnapshotState] = useState<{ key: string; items: TagSnapshot[] }>({ key: '', items: [] })
-  const [pidWsSnapshotState, setPIDWsSnapshotState] = useState<{ key: string; items: TagSnapshot[] }>({ key: '', items: [] })
-  const wsVarIdsKey = (stationViewQuery.data?.ws_subscription.var_ids ?? []).join(',')
+  const [wsSnapshotState, setWsSnapshotState] = useState<{
+    key: string
+    items: TagSnapshot[]
+  }>({ key: '', items: [] })
+  const [pidWsSnapshotState, setPIDWsSnapshotState] = useState<{
+    key: string
+    items: TagSnapshot[]
+  }>({ key: '', items: [] })
+  const wsVarIdsKey = (
+    stationViewQuery.data?.ws_subscription.var_ids ?? []
+  ).join(',')
   const wsSubscriptionKey = `${validSelectedProjectId ?? ''}:${wsVarIdsKey}`
   useEffect(() => {
     if (!validSelectedProjectId || !stationViewQuery.data) return undefined
@@ -588,16 +957,34 @@ export function StationOperationPage() {
       },
       onMessage: (envelope) => {
         if (envelope.type !== 'realtime.variables.snapshot') return
-        const payload = envelope.payload as RealtimeVariablesSnapshotPayload | undefined
-        setWsSnapshotState({ key: wsSubscriptionKey, items: payload?.items ?? [] })
+        const payload = envelope.payload as
+          | RealtimeVariablesSnapshotPayload
+          | undefined
+        setWsSnapshotState({
+          key: wsSubscriptionKey,
+          items: payload?.items ?? [],
+        })
       },
     })
-  }, [selectedEdgeInstanceId, validSelectedProjectId, stationViewQuery.data, wsSubscriptionKey])
-  const pidVariables = useMemo(() => pidVariablesQuery.data ?? [], [pidVariablesQuery.data])
-  const pidVarIds = useMemo(() => pidVariables.map(variableWireId).filter((value) => value !== undefined), [pidVariables])
+  }, [
+    selectedEdgeInstanceId,
+    validSelectedProjectId,
+    stationViewQuery.data,
+    wsSubscriptionKey,
+  ])
+  const pidVariables = useMemo(
+    () => pidVariablesQuery.data ?? [],
+    [pidVariablesQuery.data],
+  )
+  const pidVarIds = useMemo(
+    () =>
+      pidVariables.map(variableWireId).filter((value) => value !== undefined),
+    [pidVariables],
+  )
   const pidSubscriptionKey = `${validSelectedProjectId ?? ''}:${pidVarIds.join(',')}`
   useEffect(() => {
-    if (!pidModalOpen || !validSelectedProjectId || pidVarIds.length === 0) return undefined
+    if (!pidModalOpen || !validSelectedProjectId || pidVarIds.length === 0)
+      return undefined
     return subscribeRealtimeWebSocket({
       subscription: {
         topics: ['realtime.variables'],
@@ -607,17 +994,29 @@ export function StationOperationPage() {
       },
       onMessage: (envelope) => {
         if (envelope.type !== 'realtime.variables.snapshot') return
-        const payload = envelope.payload as RealtimeVariablesSnapshotPayload | undefined
-        setPIDWsSnapshotState({ key: pidSubscriptionKey, items: payload?.items ?? [] })
+        const payload = envelope.payload as
+          | RealtimeVariablesSnapshotPayload
+          | undefined
+        setPIDWsSnapshotState({
+          key: pidSubscriptionKey,
+          items: payload?.items ?? [],
+        })
       },
     })
-  }, [pidModalOpen, selectedEdgeInstanceId, validSelectedProjectId, pidSubscriptionKey, pidVarIds])
+  }, [
+    pidModalOpen,
+    selectedEdgeInstanceId,
+    validSelectedProjectId,
+    pidSubscriptionKey,
+    pidVarIds,
+  ])
   const variables = useMemo(() => {
     const merged = new Map<string, TagSnapshot>()
     for (const variable of variablesQuery.data ?? []) {
       merged.set(snapshotKey(variable), variable)
     }
-    const currentWSSnapshots = wsSnapshotState.key === wsSubscriptionKey ? wsSnapshotState.items : []
+    const currentWSSnapshots =
+      wsSnapshotState.key === wsSubscriptionKey ? wsSnapshotState.items : []
     for (const variable of currentWSSnapshots) {
       merged.set(snapshotKey(variable), variable)
     }
@@ -631,12 +1030,16 @@ export function StationOperationPage() {
   const stationVariables = useMemo(
     () =>
       validSelectedProjectId
-        ? variables.filter((variable) => variable.project_id === validSelectedProjectId)
+        ? variables.filter(
+            (variable) => variable.project_id === validSelectedProjectId,
+          )
         : variables,
     [validSelectedProjectId, variables],
   )
   const activeRun = validSelectedProjectId
-    ? activeRunsQuery.data?.find((run) => run.project_id === validSelectedProjectId)
+    ? activeRunsQuery.data?.find(
+        (run) => run.project_id === validSelectedProjectId,
+      )
     : activeRunsQuery.data?.[0]
   const storageSnapshotQuery = useQuery({
     queryKey: ['station', 'run-storage-routes', activeRun?.id],
@@ -659,22 +1062,53 @@ export function StationOperationPage() {
     refetchInterval: runSnapshotOpen ? 10000 : false,
     retry: false,
   })
-  const selectedRunProjectId = activeRun?.project_id ?? validSelectedProjectId
-  const standards = useMemo(() => standardsQuery.data ?? [], [standardsQuery.data])
-  const reportTemplates = useMemo(() => reportTemplatesQuery.data ?? [], [reportTemplatesQuery.data])
+  const standards = useMemo(
+    () => standardsQuery.data ?? [],
+    [standardsQuery.data],
+  )
+  const reportTemplates = useMemo(
+    () => reportTemplatesQuery.data ?? [],
+    [reportTemplatesQuery.data],
+  )
+  const pendingPlans = useMemo(
+    () => detectionPlansQuery.data?.items ?? [],
+    [detectionPlansQuery.data?.items],
+  )
   const availableStandards = useMemo(
+    () => standards,
+    [standards],
+  )
+  const selectedStartStandard = useMemo(
+    () => availableStandards.find((standard) => standard.id === selectedStandardId),
+    [availableStandards, selectedStandardId],
+  )
+  const selectedStandardReportVarIds = useMemo(
+    () => standardReportVarIds(selectedStartStandard, stationVariables),
+    [selectedStartStandard, stationVariables],
+  )
+  const hasReportRowsMissingVariables = useMemo(
     () =>
-      standards.filter(
-        (standard) => !selectedRunProjectId || !standard.project_id || standard.project_id === selectedRunProjectId,
+      reportRequestRows.some(
+        (row: ReportRequestFormRow) => !row.var_ids || row.var_ids.length === 0,
       ),
-    [selectedRunProjectId, standards],
+    [reportRequestRows],
+  )
+  const selectedPlan = useMemo(
+    () => pendingPlans.find((plan) => plan.id === selectedPlanId),
+    [pendingPlans, selectedPlanId],
   )
   const selectedProjectName = useMemo(() => {
     if (!selectedProject) return undefined
     const currentLanguage = languageCode(i18n.resolvedLanguage)
-    if (currentLanguage === 'en') return selectedProject.display_name_en || selectedProject.project_code
-    if (currentLanguage === 'ja') return selectedProject.display_name_ja || selectedProject.project_code
-    return selectedProject.display_name || selectedProject.name || selectedProject.project_code
+    if (currentLanguage === 'en')
+      return selectedProject.display_name_en || selectedProject.project_code
+    if (currentLanguage === 'ja')
+      return selectedProject.display_name_ja || selectedProject.project_code
+    return (
+      selectedProject.display_name ||
+      selectedProject.name ||
+      selectedProject.project_code
+    )
   }, [i18n.resolvedLanguage, selectedProject])
   const [isStatusCollapsed, setStatusCollapsed] = useState(false)
   const snapshotsByVarID = useMemo(() => {
@@ -686,7 +1120,10 @@ export function StationOperationPage() {
   }, [stationVariables])
   const pidSnapshotsByVarID = useMemo(() => {
     const result = new Map<string, TagSnapshot>(snapshotsByVarID)
-    const currentWSSnapshots = pidWsSnapshotState.key === pidSubscriptionKey ? pidWsSnapshotState.items : []
+    const currentWSSnapshots =
+      pidWsSnapshotState.key === pidSubscriptionKey
+        ? pidWsSnapshotState.items
+        : []
     for (const variable of currentWSSnapshots) {
       result.set(snapshotKey(variable), variable)
     }
@@ -696,7 +1133,11 @@ export function StationOperationPage() {
   const templateMetricBindings = useMemo<StationViewBindingWithItem[]>(
     () =>
       (stationViewQuery.data?.items ?? [])
-        .filter((item) => item.layout_area === stationLayoutAreaCardPool && item.visible !== false)
+        .filter(
+          (item) =>
+            item.layout_area === stationLayoutAreaCardPool &&
+            item.visible !== false,
+        )
         .flatMap((item) =>
           (item.resolved_bindings ?? []).map((binding) => ({
             ...binding,
@@ -709,13 +1150,23 @@ export function StationOperationPage() {
   )
   const metricBindings = useMemo(
     () =>
-      sortStationBindingsByDefaultOrder(templateMetricBindings).slice(0, stationMetricCardLimit),
+      sortStationBindingsByDefaultOrder(templateMetricBindings).slice(
+        0,
+        stationMetricCardLimit,
+      ),
     [templateMetricBindings],
   )
-  const defaultCardIds = useMemo(() => metricBindings.map((binding, index) => bindingKey(binding, index)), [metricBindings])
+  const defaultCardIds = useMemo(
+    () => metricBindings.map((binding, index) => bindingKey(binding, index)),
+    [metricBindings],
+  )
   useEffect(() => {
     setPreviewCardOrder([])
-  }, [selectedEdgeInstanceId, validSelectedProjectId, stationViewQuery.data?.template.template_uid])
+  }, [
+    selectedEdgeInstanceId,
+    validSelectedProjectId,
+    stationViewQuery.data?.template.template_uid,
+  ])
   const cardOrder = useMemo(() => {
     const next = previewCardOrder.filter((id) => defaultCardIds.includes(id))
     for (const id of defaultCardIds) {
@@ -725,7 +1176,9 @@ export function StationOperationPage() {
   }, [defaultCardIds, previewCardOrder])
   const bindingByCardId = useMemo(() => {
     const result = new Map<string, StationViewBindingWithItem>()
-    metricBindings.forEach((binding, index) => result.set(bindingKey(binding, index), binding))
+    metricBindings.forEach((binding, index) =>
+      result.set(bindingKey(binding, index), binding),
+    )
     return result
   }, [metricBindings])
   const cards = useMemo<MetricCard[]>(
@@ -734,7 +1187,10 @@ export function StationOperationPage() {
         .map((id, index) => {
           const binding = bindingByCardId.get(id)
           if (!binding) return undefined
-          const snapshot = bindingWireId(binding) !== undefined ? snapshotsByVarID.get(String(bindingWireId(binding))) : undefined
+          const snapshot =
+            bindingWireId(binding) !== undefined
+              ? snapshotsByVarID.get(String(bindingWireId(binding)))
+              : undefined
           const value = numericSnapshotValue(snapshot)
           const limits = bindingLimits(binding)
           const Icon = iconForBinding(binding)
@@ -759,7 +1215,11 @@ export function StationOperationPage() {
   const templateTableBindings = useMemo<StationViewBindingWithItem[]>(
     () =>
       (stationViewQuery.data?.items ?? [])
-        .filter((item) => item.layout_area === stationLayoutAreaListLayout && item.visible !== false)
+        .filter(
+          (item) =>
+            item.layout_area === stationLayoutAreaListLayout &&
+            item.visible !== false,
+        )
         .flatMap((item) =>
           (item.resolved_bindings ?? []).map((binding) => ({
             ...binding,
@@ -778,7 +1238,10 @@ export function StationOperationPage() {
     () =>
       tableBindings.map((binding, index) => {
         const key = bindingKey(binding, index)
-        const snapshot = bindingWireId(binding) !== undefined ? snapshotsByVarID.get(String(bindingWireId(binding))) : undefined
+        const snapshot =
+          bindingWireId(binding) !== undefined
+            ? snapshotsByVarID.get(String(bindingWireId(binding)))
+            : undefined
         const value = numericSnapshotValue(snapshot)
         return {
           key,
@@ -786,7 +1249,11 @@ export function StationOperationPage() {
           pinned: binding.pinned === true,
           name: bindingDisplayName(binding, i18n.resolvedLanguage),
           standard: formatStandardRange(binding),
-          value: formatMetricValue(value, binding.unit ?? '', binding.decimal_places ?? 2),
+          value: formatMetricValue(
+            value,
+            binding.unit ?? '',
+            binding.decimal_places ?? 2,
+          ),
           ok: isWithinLimits(value, binding),
         }
       }),
@@ -799,41 +1266,64 @@ export function StationOperationPage() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['edge', 'active-runs'] }),
       queryClient.invalidateQueries({ queryKey: ['station', 'current-run'] }),
-      queryClient.invalidateQueries({ queryKey: ['station', 'view-effective'] }),
-      queryClient.invalidateQueries({ queryKey: ['station', 'detection-runs'] }),
+      queryClient.invalidateQueries({
+        queryKey: ['station', 'view-effective'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['station', 'detection-runs'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['station', 'detection-plans'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['history', 'detection-plans'],
+      }),
       queryClient.invalidateQueries({ queryKey: ['history', 'data'] }),
     ])
   }
 
   const saveStationViewItemsMutation = useMutation({
     mutationFn: (items: StationViewItemPayload[]) => {
-      const templateUID = stationViewItemsQuery.data?.template_uid ?? stationViewQuery.data?.template.template_uid
+      const templateUID =
+        stationViewItemsQuery.data?.template_uid ??
+        stationViewQuery.data?.template.template_uid
       if (!templateUID) throw new Error(t('station.config.noTemplate'))
       return replaceStationViewItems({ template_uid: templateUID, items })
     },
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['station', 'view-effective'] }),
+        queryClient.invalidateQueries({
+          queryKey: ['station', 'view-effective'],
+        }),
         queryClient.invalidateQueries({ queryKey: ['station', 'view-items'] }),
       ])
       setPreviewPinnedRows({})
     },
     onError: (error) => {
       setPreviewPinnedRows({})
-      messageApi.error(error instanceof Error ? error.message : t('station.config.saveFailed'))
+      messageApi.error(
+        error instanceof Error ? error.message : t('station.config.saveFailed'),
+      )
     },
   })
 
   function saveStationViewItems(items: StationViewItem[]) {
-    saveStationViewItemsMutation.mutate(items.map(stationViewItemPayloadFromItem))
+    saveStationViewItemsMutation.mutate(
+      items.map(stationViewItemPayloadFromItem),
+    )
   }
 
   function persistCardOrder(ids: string[]) {
     if (rawStationViewItems.length === 0) return
     const itemUIDsByCardID = new Map<string, string>(
-      cards.flatMap((card): Array<[string, string]> => (card.itemUid ? [[card.id, card.itemUid]] : [])),
+      cards.flatMap(
+        (card): Array<[string, string]> =>
+          card.itemUid ? [[card.id, card.itemUid]] : [],
+      ),
     )
-    const orderedItemUIDs = ids.map((id) => itemUIDsByCardID.get(id)).filter((value): value is string => Boolean(value))
+    const orderedItemUIDs = ids
+      .map((id) => itemUIDsByCardID.get(id))
+      .filter((value): value is string => Boolean(value))
     if (orderedItemUIDs.length === 0) return
     const nextItems = rawStationViewItems.map((item) => {
       if (item.layout_area !== stationLayoutAreaCardPool) return item
@@ -845,10 +1335,34 @@ export function StationOperationPage() {
   }
 
   const startRunMutation = useMutation({
-    mutationFn: (values: StartDetectionFormValues) => {
-      const selectedStandard = availableStandards.find((standard) => standard.id === values.standard_id)
+    mutationFn: async (values: StartDetectionFormValues) => {
+      const requestVariable = findStartDetectionRequestVar(
+        startTaskFlowsQuery.data ?? [],
+      )
+      if (!requestVariable) {
+        throw new Error(t('station.start.errors.startTaskFlowRequired'))
+      }
+      if (values.plan_id) {
+        const response = await startDetectionPlan(values.plan_id, {
+          project_id: values.project_id,
+          operator_note: values.operator_note?.trim() || undefined,
+          request_var_name: requestVariable.var_name,
+        })
+        return response.task
+      }
+      const selectedStandard = availableStandards.find(
+        (standard) => standard.id === values.standard_id,
+      )
+      const requestProjectVariables = variables.filter(
+        (variable) => variable.project_id === values.project_id,
+      )
+      const defaultReportVarIds = standardReportVarIds(
+        selectedStandard,
+        requestProjectVariables,
+      )
       const configEnabled = values.config_enabled === true
-      const payload: DetectionRunStartPayload = {
+      const taskRequest = {
+        command: 'start_detection',
         project_id: values.project_id,
         factory_no: values.factory_no.trim(),
         customer_name: values.customer_name?.trim() || undefined,
@@ -857,15 +1371,61 @@ export function StationOperationPage() {
         mode: values.mode,
         standard_id: configEnabled ? values.standard_id : undefined,
         config_enabled: configEnabled,
-        config_code: configEnabled ? selectedStandard?.standard_code : undefined,
-        config_name: configEnabled ? standardDisplayName(selectedStandard, i18n.resolvedLanguage) : undefined,
+        config_code: configEnabled
+          ? selectedStandard?.standard_code
+          : undefined,
+        config_name: configEnabled
+          ? standardDisplayName(selectedStandard, i18n.resolvedLanguage)
+          : undefined,
         config_version: configEnabled ? selectedStandard?.version : undefined,
         config_hash: configEnabled ? selectedStandard?.config_hash : undefined,
-        report_request: buildReportRequest(values),
-        duration_sec: values.duration_min ? values.duration_min * 60 : undefined,
+        report_request: buildReportRequest(values, defaultReportVarIds),
+        duration_sec: values.duration_min
+          ? values.duration_min * 60
+          : undefined,
         operator_note: values.operator_note?.trim() || undefined,
+        enable_storage: true,
+        enable_alarm: true,
       }
-      return startDetectionRun(payload)
+      const commandID = `start-detection-${Date.now()}`
+      const previousRecentRuns = await getDetectionRuns({
+        project_id: values.project_id,
+        limit: 1,
+      })
+        .then((response) => response.items)
+        .catch(() => [] as DetectionRun[])
+      const previousProjectActiveRuns = (activeRunsQuery.data ?? []).filter(
+        (run) => run.project_id === values.project_id,
+      )
+      const previousMaxRunId = Math.max(
+        0,
+        ...previousRecentRuns.map((run) => run.id),
+        ...previousProjectActiveRuns.map((run) => run.id),
+      )
+      const result = await sendRealtimeWebSocketCommand<
+        unknown,
+        VariableWriteResult
+      >({
+        type: 'command.write_variable',
+        request_id: commandID,
+        command_id: commandID,
+        payload: {
+          edge_instance_id: selectedEdgeInstanceId,
+          project_id: values.project_id,
+          var_id: String(requestVariable.var_id_text ?? requestVariable.var_id),
+          value: JSON.stringify(taskRequest),
+          trigger: true,
+          max_depth: 3,
+        },
+      })
+      const startedRun = await waitForNewDetectionRun(
+        values.project_id,
+        previousMaxRunId,
+      )
+      if (!startedRun && (result?.triggered ?? 0) <= 0) {
+        throw new Error(t('station.start.errors.taskRequestFlowNotTriggered'))
+      }
+      return startedRun
     },
     onSuccess: async () => {
       messageApi.success(t('station.messages.started'))
@@ -873,106 +1433,159 @@ export function StationOperationPage() {
       await refreshRuns()
     },
     onError: (error) => {
-      messageApi.error(error instanceof Error ? error.message : t('station.messages.startFailed'))
+      messageApi.error(
+        error instanceof Error
+          ? error.message
+          : t('station.messages.startFailed'),
+      )
     },
   })
 
   const stopRunMutation = useMutation({
-    mutationFn: ({ runId, reason, abnormal }: { runId: number; reason: string; abnormal?: boolean }) =>
-      abnormal ? abnormalStopDetectionRun(runId, { reason }) : stopDetectionRun(runId, { reason }),
+    mutationFn: ({
+      runId,
+      reason,
+      abnormal,
+    }: {
+      runId: number
+      reason: string
+      abnormal?: boolean
+    }) =>
+      abnormal
+        ? abnormalStopDetectionRun(runId, { reason })
+        : stopDetectionRun(runId, { reason }),
     onSuccess: async (_, variables) => {
-      messageApi.success(variables.abnormal ? t('station.messages.abnormalStopped') : t('station.messages.stopped'))
+      messageApi.success(
+        variables.abnormal
+          ? t('station.messages.abnormalStopped')
+          : t('station.messages.stopped'),
+      )
       await refreshRuns()
     },
     onError: (error) => {
-      messageApi.error(error instanceof Error ? error.message : t('station.messages.stopFailed'))
+      messageApi.error(
+        error instanceof Error
+          ? error.message
+          : t('station.messages.stopFailed'),
+      )
     },
   })
 
-  const writePIDSetting = useCallback(async (setting: PIDSettingItem, variable: VariableConfig, displayValue: string) => {
-    const key = setting.key
-    if (!isPIDWritable(variable)) {
-      setPIDWriteStates((states) => ({
-        ...states,
-        [key]: { status: 'error', message: t('station.pid.readOnly'), submittedValue: displayValue },
-      }))
-      return false
-    }
-    let value: unknown
-    try {
-      value = coerceWriteValue(variable, String(pidWriteValue(setting.key, displayValue, 2)))
-    } catch {
-      messageApi.error(t('station.pid.invalidValue'))
-      setPIDWriteStates((states) => ({
-        ...states,
-        [key]: { status: 'error', message: t('station.pid.invalidValue'), submittedValue: displayValue },
-      }))
-      return false
-    }
-    const commandID = `pid-${key}-${Date.now()}`
-    setPIDWriteStates((states) => ({
-      ...states,
-      [key]: { status: 'pending', submittedValue: displayValue, submittedAt: new Date().toISOString() },
-    }))
-    setPIDWriteValues((values) => {
-      const next = { ...values }
-      delete next[key]
-      return next
-    })
-    try {
-      const result = await sendRealtimeWebSocketCommand<unknown, VariableWriteResult>({
-        type: 'command.write_variable',
-        request_id: commandID,
-        command_id: commandID,
-        payload: {
-          var_id: String(variableWireId(variable)),
-          edge_instance_id: selectedEdgeInstanceId,
-          project_id: validSelectedProjectId,
-          var_name: variable.var_name,
-          value,
-          trigger: false,
-          wait_ack: true,
-          ack_timeout_sec: 10,
-        },
-      })
-      setPIDWriteStates((states) => ({
-        ...states,
-        [key]: { status: 'ack', submittedValue: displayValue, submittedAt: new Date().toISOString(), result },
-      }))
-      return true
-    } catch (error) {
-      const commandError = error instanceof RealtimeWebSocketCommandError ? error : undefined
-      const result = commandError?.result as VariableWriteResult | undefined
-      if (isBrokerAcceptedWithoutAck(result)) {
+  const writePIDSetting = useCallback(
+    async (
+      setting: PIDSettingItem,
+      variable: VariableConfig,
+      displayValue: string,
+    ) => {
+      const key = setting.key
+      if (!isPIDWritable(variable)) {
         setPIDWriteStates((states) => ({
           ...states,
           [key]: {
-            status: 'sent',
-            message: t('station.pid.sentReadbackPending'),
+            status: 'error',
+            message: t('station.pid.readOnly'),
+            submittedValue: displayValue,
+          },
+        }))
+        return false
+      }
+      let value: unknown
+      try {
+        value = coerceWriteValue(
+          variable,
+          String(pidWriteValue(setting.key, displayValue, 2)),
+        )
+      } catch {
+        messageApi.error(t('station.pid.invalidValue'))
+        setPIDWriteStates((states) => ({
+          ...states,
+          [key]: {
+            status: 'error',
+            message: t('station.pid.invalidValue'),
+            submittedValue: displayValue,
+          },
+        }))
+        return false
+      }
+      const commandID = `pid-${key}-${Date.now()}`
+      setPIDWriteStates((states) => ({
+        ...states,
+        [key]: {
+          status: 'pending',
+          submittedValue: displayValue,
+          submittedAt: new Date().toISOString(),
+        },
+      }))
+      setPIDWriteValues((values) => {
+        const next = { ...values }
+        delete next[key]
+        return next
+      })
+      try {
+        const result = await sendRealtimeWebSocketCommand<
+          unknown,
+          VariableWriteResult
+        >({
+          type: 'command.write_variable',
+          request_id: commandID,
+          command_id: commandID,
+          payload: {
+            var_id: String(variableWireId(variable)),
+            edge_instance_id: selectedEdgeInstanceId,
+            project_id: validSelectedProjectId,
+            var_name: variable.var_name,
+            value,
+            trigger: false,
+            wait_ack: true,
+            ack_timeout_sec: 10,
+          },
+        })
+        setPIDWriteStates((states) => ({
+          ...states,
+          [key]: {
+            status: 'ack',
             submittedValue: displayValue,
             submittedAt: new Date().toISOString(),
             result,
           },
         }))
         return true
+      } catch (error) {
+        const commandError =
+          error instanceof RealtimeWebSocketCommandError ? error : undefined
+        const result = commandError?.result as VariableWriteResult | undefined
+        if (isBrokerAcceptedWithoutAck(result)) {
+          setPIDWriteStates((states) => ({
+            ...states,
+            [key]: {
+              status: 'sent',
+              message: t('station.pid.sentReadbackPending'),
+              submittedValue: displayValue,
+              submittedAt: new Date().toISOString(),
+              result,
+            },
+          }))
+          return true
+        }
+        setPIDWriteStates((states) => ({
+          ...states,
+          [key]: {
+            status: 'error',
+            message: isGatewayOfflineWriteResult(result)
+              ? t('station.pid.gatewayOffline')
+              : error instanceof Error
+                ? error.message
+                : t('station.pid.writeFailed'),
+            submittedValue: displayValue,
+            submittedAt: new Date().toISOString(),
+            result,
+          },
+        }))
+        return false
       }
-      setPIDWriteStates((states) => ({
-        ...states,
-        [key]: {
-          status: 'error',
-          message: isGatewayOfflineWriteResult(result)
-            ? t('station.pid.gatewayOffline')
-            : error instanceof Error
-              ? error.message
-              : t('station.pid.writeFailed'),
-          submittedValue: displayValue,
-          submittedAt: new Date().toISOString(),
-          result,
-        },
-      }))
-      return false
-    }
-  }, [messageApi, selectedEdgeInstanceId, t, validSelectedProjectId])
+    },
+    [messageApi, selectedEdgeInstanceId, t, validSelectedProjectId],
+  )
 
   async function submitAllPIDSettings() {
     let submitted = 0
@@ -989,14 +1602,23 @@ export function StationOperationPage() {
         else failed += 1
       }
     }
-    if (submitted > 0 && failed === 0) messageApi.success(t('station.pid.writeAck'))
+    if (submitted > 0 && failed === 0)
+      messageApi.success(t('station.pid.writeAck'))
     if (failed > 0) messageApi.error(t('station.pid.writeFailed'))
   }
 
   function togglePinnedRow(row: StationTableRow) {
-    if (!row.itemUid || rawStationViewItems.length === 0 || saveStationViewItemsMutation.isPending) return
+    if (
+      !row.itemUid ||
+      rawStationViewItems.length === 0 ||
+      saveStationViewItemsMutation.isPending
+    )
+      return
     const nextPinned = !row.pinned
-    setPreviewPinnedRows((current) => ({ ...current, [row.itemUid!]: nextPinned }))
+    setPreviewPinnedRows((current) => ({
+      ...current,
+      [row.itemUid!]: nextPinned,
+    }))
     const nextItems = rawStationViewItems.map((item) => {
       if (item.item_uid !== row.itemUid) return item
       return { ...item, pinned: nextPinned }
@@ -1004,10 +1626,39 @@ export function StationOperationPage() {
     saveStationViewItems(nextItems)
   }
 
+  function fillEmptyReportVariables(varIds = selectedStandardReportVarIds) {
+    if (varIds.length === 0) return
+    const currentRows =
+      (startForm.getFieldValue('report_requests') as ReportRequestFormRow[]) ??
+      []
+    if (currentRows.length === 0) {
+      startForm.setFieldValue('report_requests', [
+        {
+          template_id: reportTemplates[0]?.id,
+          var_ids: varIds,
+          params_json: '{}',
+        },
+      ])
+      return
+    }
+    startForm.setFieldValue(
+      'report_requests',
+      currentRows.map((row) => ({
+        ...row,
+        var_ids: row.var_ids && row.var_ids.length > 0 ? row.var_ids : varIds,
+      })),
+    )
+  }
+
   function openStartModal() {
     const targetProject = selectedProject ?? projects[0]
     const defaultStandard = availableStandards[0]
+    const defaultReportVarIds = standardReportVarIds(
+      defaultStandard,
+      stationVariables,
+    )
     startForm.setFieldsValue({
+      plan_id: undefined,
       project_id: targetProject?.id,
       factory_no: '',
       customer_name: '',
@@ -1016,24 +1667,59 @@ export function StationOperationPage() {
       mode: defaultStandard?.mode ?? 'standard',
       config_enabled: Boolean(defaultStandard),
       standard_id: defaultStandard?.id,
-      report_requests: [{ template_id: reportTemplates[0]?.id, var_ids: [], params_json: '{\n  "inlet_area_m2": 1.25\n}' }],
+      report_requests: [
+        {
+          template_id: reportTemplates[0]?.id,
+          var_ids: defaultReportVarIds,
+          params_json: '{\n  "inlet_area_m2": 1.25\n}',
+        },
+      ],
       duration_min: 60,
     })
     setStartModalOpen(true)
   }
 
+  function applyDetectionPlan(planId?: number) {
+    const plan = pendingPlans.find((item) => item.id === planId)
+    if (!plan) {
+      startForm.setFieldsValue({ plan_id: undefined })
+      return
+    }
+    const matchedStandard = availableStandards.find(
+      (standard) => standard.standard_code === plan.standard_code,
+    )
+    startForm.setFieldsValue({
+      plan_id: plan.id,
+      factory_no: plan.factory_no,
+      customer_name: plan.customer_name,
+      device_model: plan.device_model,
+      test_no: plan.plan_no,
+      mode: plan.mode || matchedStandard?.mode || 'standard',
+      config_enabled: true,
+      standard_id: matchedStandard?.id,
+    })
+  }
+
   function confirmStop(abnormal = false) {
     if (!activeRun) return
     Modal.confirm({
-      title: abnormal ? t('station.run.abnormalStopTitle') : t('station.run.stopTitle'),
-      content: abnormal ? t('station.run.abnormalStopDesc') : t('station.run.stopDesc'),
-      okText: abnormal ? t('station.actions.abnormalStop') : t('station.actions.stop'),
+      title: abnormal
+        ? t('station.run.abnormalStopTitle')
+        : t('station.run.stopTitle'),
+      content: abnormal
+        ? t('station.run.abnormalStopDesc')
+        : t('station.run.stopDesc'),
+      okText: abnormal
+        ? t('station.actions.abnormalStop')
+        : t('station.actions.stop'),
       cancelText: t('actions.cancel'),
       okButtonProps: { danger: abnormal },
       onOk: () =>
         stopRunMutation.mutateAsync({
           runId: activeRun.id,
-          reason: abnormal ? t('station.run.abnormalDefaultReason') : t('station.run.manualStopReason'),
+          reason: abnormal
+            ? t('station.run.abnormalDefaultReason')
+            : t('station.run.manualStopReason'),
           abnormal,
         }),
     })
@@ -1049,15 +1735,21 @@ export function StationOperationPage() {
     navigate(`/history?${params.toString()}`)
   }
 
-  const statusProjectCode = selectedProject?.project_code ?? activeRun?.project_code ?? 'SN-20230912'
-  const statusProject = selectedProjectName ?? activeRun?.test_no ?? t('station.status.mockProject')
+  const statusProjectCode =
+    selectedProject?.project_code ?? activeRun?.project_code ?? 'SN-20230912'
+  const statusProject =
+    selectedProjectName ?? activeRun?.test_no ?? t('station.status.mockProject')
   const statusConfig = selectedProject?.model_name || activeRun?.mode || 'A'
   const statusTask = activeRun?.test_no ?? t('station.run.idle')
-  const selectedStandardLabel = activeRun?.standard_code || availableStandards[0]?.standard_code || '--'
+  const selectedStandardLabel =
+    activeRun?.standard_code || availableStandards[0]?.standard_code || '--'
   const effectiveTemplate = stationViewQuery.data?.template
   const visibleTemplates = stationViewTemplatesQuery.data?.items ?? []
   const enabledAssignments = visibleTemplates.reduce(
-    (count, template) => count + (template.assignments ?? []).filter((assignment) => assignment.enabled).length,
+    (count, template) =>
+      count +
+      (template.assignments ?? []).filter((assignment) => assignment.enabled)
+        .length,
     0,
   )
   const alarmRows = alarmsQuery.data?.items ?? []
@@ -1078,7 +1770,9 @@ export function StationOperationPage() {
         width: 110,
         render: (scope: string) => (
           <Tag color={scope === 'default' ? 'cyan' : 'volcano'}>
-            {scope === 'default' ? t('station.alarms.scopeDefault') : t('station.alarms.scopeDetection')}
+            {scope === 'default'
+              ? t('station.alarms.scopeDefault')
+              : t('station.alarms.scopeDetection')}
           </Tag>
         ),
       },
@@ -1098,7 +1792,11 @@ export function StationOperationPage() {
         dataIndex: 'alarm_level',
         key: 'alarm_level',
         width: 84,
-        render: (level: string) => <Tag color={level === 'HH' || level === 'LL' ? 'red' : 'orange'}>{level}</Tag>,
+        render: (level: string) => (
+          <Tag color={level === 'HH' || level === 'LL' ? 'red' : 'orange'}>
+            {level}
+          </Tag>
+        ),
       },
       {
         title: t('station.alarms.status'),
@@ -1108,7 +1806,9 @@ export function StationOperationPage() {
         render: (status: string) => (
           <span className={status === 'active' ? 'status-ng' : 'status-ok'}>
             <span />
-            {status === 'active' ? t('station.alarms.active') : t('station.alarms.closed')}
+            {status === 'active'
+              ? t('station.alarms.active')
+              : t('station.alarms.closed')}
           </span>
         ),
       },
@@ -1118,9 +1818,18 @@ export function StationOperationPage() {
         width: 170,
         render: (_: unknown, record: LimitAlarm) => (
           <div className="station-alarm-values">
-            <span>{t('station.alarms.startValue')}: {formatAlarmValue(record.start_value)}</span>
-            <span>{t('station.alarms.limitValue')}: {formatAlarmValue(record.limit_value)}</span>
-            <span>{t('station.alarms.recoverValue')}: {formatAlarmValue(record.recover_value)}</span>
+            <span>
+              {t('station.alarms.startValue')}:{' '}
+              {formatAlarmValue(record.start_value)}
+            </span>
+            <span>
+              {t('station.alarms.limitValue')}:{' '}
+              {formatAlarmValue(record.limit_value)}
+            </span>
+            <span>
+              {t('station.alarms.recoverValue')}:{' '}
+              {formatAlarmValue(record.recover_value)}
+            </span>
           </div>
         ),
       },
@@ -1160,7 +1869,9 @@ export function StationOperationPage() {
         dataIndex: 'storage_target',
         key: 'storage_target',
         width: 132,
-        render: (value: string) => <Tag color={value === 'wide_table' ? 'blue' : 'default'}>{value}</Tag>,
+        render: (value: string) => (
+          <Tag color={value === 'wide_table' ? 'blue' : 'default'}>{value}</Tag>
+        ),
       },
       {
         title: t('station.storage.tableColumn'),
@@ -1169,7 +1880,9 @@ export function StationOperationPage() {
         render: (_: unknown, record: DetectionRunStorageRoute) => (
           <div className="station-alarm-values">
             <span>{record.table_name || '--'}</span>
-            <span>{record.column_name || '--'} / {record.column_type || '--'}</span>
+            <span>
+              {record.column_name || '--'} / {record.column_type || '--'}
+            </span>
           </div>
         ),
       },
@@ -1198,7 +1911,11 @@ export function StationOperationPage() {
         dataIndex: 'store_on_start',
         key: 'store_on_start',
         width: 110,
-        render: (value: boolean) => <Tag color={value ? 'green' : 'default'}>{value ? t('station.storage.yes') : t('station.storage.no')}</Tag>,
+        render: (value: boolean) => (
+          <Tag color={value ? 'green' : 'default'}>
+            {value ? t('station.storage.yes') : t('station.storage.no')}
+          </Tag>
+        ),
       },
     ],
     [t],
@@ -1222,8 +1939,14 @@ export function StationOperationPage() {
         width: 210,
         render: (_: unknown, record: DetectionRunStandardItem) => (
           <div className="station-alarm-values">
-            <span>LL/L: {formatAlarmValue(record.limit_ll)} / {formatAlarmValue(record.limit_l)}</span>
-            <span>H/HH: {formatAlarmValue(record.limit_h)} / {formatAlarmValue(record.limit_hh)}</span>
+            <span>
+              LL/L: {formatAlarmValue(record.limit_ll)} /{' '}
+              {formatAlarmValue(record.limit_l)}
+            </span>
+            <span>
+              H/HH: {formatAlarmValue(record.limit_h)} /{' '}
+              {formatAlarmValue(record.limit_hh)}
+            </span>
           </div>
         ),
       },
@@ -1232,8 +1955,12 @@ export function StationOperationPage() {
         key: 'defaultAlarm',
         width: 130,
         render: (_: unknown, record: DetectionRunStandardItem) => (
-          <Tag color={record.variable_default_alarm_enabled ? 'cyan' : 'default'}>
-            {record.variable_default_alarm_enabled ? t('station.storage.yes') : t('station.storage.no')}
+          <Tag
+            color={record.variable_default_alarm_enabled ? 'cyan' : 'default'}
+          >
+            {record.variable_default_alarm_enabled
+              ? t('station.storage.yes')
+              : t('station.storage.no')}
           </Tag>
         ),
       },
@@ -1243,8 +1970,16 @@ export function StationOperationPage() {
         width: 230,
         render: (_: unknown, record: DetectionRunStandardItem) => (
           <div className="station-alarm-values">
-            <span>LL/L: {formatAlarmValue(record.variable_default_limit_ll ?? undefined)} / {formatAlarmValue(record.variable_default_limit_l ?? undefined)}</span>
-            <span>H/HH: {formatAlarmValue(record.variable_default_limit_h ?? undefined)} / {formatAlarmValue(record.variable_default_limit_hh ?? undefined)}</span>
+            <span>
+              LL/L:{' '}
+              {formatAlarmValue(record.variable_default_limit_ll ?? undefined)}{' '}
+              / {formatAlarmValue(record.variable_default_limit_l ?? undefined)}
+            </span>
+            <span>
+              H/HH:{' '}
+              {formatAlarmValue(record.variable_default_limit_h ?? undefined)} /{' '}
+              {formatAlarmValue(record.variable_default_limit_hh ?? undefined)}
+            </span>
           </div>
         ),
       },
@@ -1254,8 +1989,15 @@ export function StationOperationPage() {
         width: 220,
         render: (_: unknown, record: DetectionRunStandardItem) => (
           <div className="station-alarm-values">
-            <span>{t('station.snapshot.deadband')}: {formatAlarmValue(record.variable_default_limit_deadband)}</span>
-            <span>{t('station.snapshot.hold')}: {record.variable_default_violation_hold_ms} / {record.variable_default_recover_hold_ms} ms</span>
+            <span>
+              {t('station.snapshot.deadband')}:{' '}
+              {formatAlarmValue(record.variable_default_limit_deadband)}
+            </span>
+            <span>
+              {t('station.snapshot.hold')}:{' '}
+              {record.variable_default_violation_hold_ms} /{' '}
+              {record.variable_default_recover_hold_ms} ms
+            </span>
           </div>
         ),
       },
@@ -1265,8 +2007,17 @@ export function StationOperationPage() {
         width: 180,
         render: (_: unknown, record: DetectionRunStandardItem) => (
           <div className="station-alarm-values">
-            <span>{record.alarm_enabled ? t('station.snapshot.alarmOn') : t('station.snapshot.alarmOff')}</span>
-            <span>{record.check_on_start ? t('station.snapshot.checkOnStart') : t('station.snapshot.checkByCycle')} / {record.check_cycle_ms} ms</span>
+            <span>
+              {record.alarm_enabled
+                ? t('station.snapshot.alarmOn')
+                : t('station.snapshot.alarmOff')}
+            </span>
+            <span>
+              {record.check_on_start
+                ? t('station.snapshot.checkOnStart')
+                : t('station.snapshot.checkByCycle')}{' '}
+              / {record.check_cycle_ms} ms
+            </span>
           </div>
         ),
       },
@@ -1282,7 +2033,9 @@ export function StationOperationPage() {
         render: (_: unknown, record: DetectionRunReportRequest) => (
           <div className="station-alarm-variable">
             <strong>{alarmDisplayName(record, i18n.resolvedLanguage)}</strong>
-            <span>{record.var_name || record.var_id_text || record.var_id}</span>
+            <span>
+              {record.var_name || record.var_id_text || record.var_id}
+            </span>
           </div>
         ),
       },
@@ -1330,7 +2083,11 @@ export function StationOperationPage() {
 
         <aside className="station-side">
           <section
-            className={isStatusCollapsed ? 'station-status-card glass-panel collapsed' : 'station-status-card glass-panel'}
+            className={
+              isStatusCollapsed
+                ? 'station-status-card glass-panel collapsed'
+                : 'station-status-card glass-panel'
+            }
             onClick={() => setStatusCollapsed((value) => !value)}
           >
             {isStatusCollapsed ? (
@@ -1338,28 +2095,50 @@ export function StationOperationPage() {
                 <div className="status-collapsed-left">
                   <strong>{statusProjectCode}</strong>
                   <span>{statusProject}</span>
-                  <span>{activeRun ? activeRun.test_no : t('station.run.idle')}</span>
+                  <span>
+                    {activeRun ? activeRun.test_no : t('station.run.idle')}
+                  </span>
                 </div>
-                <div className={activeRun ? 'station-ok compact running' : 'station-ok compact'}>{activeRun ? 'RUN' : 'OK'}</div>
+                <div
+                  className={
+                    activeRun
+                      ? 'station-ok compact running'
+                      : 'station-ok compact'
+                  }
+                >
+                  {activeRun ? 'RUN' : 'OK'}
+                </div>
               </>
             ) : (
               <>
                 <div className="station-status-top">
                   <div className="station-status-main">
                     <div>
-                      <span className="eyebrow">{t('station.status.projectId')}</span>
+                      <span className="eyebrow">
+                        {t('station.status.projectId')}
+                      </span>
                       <strong>{statusProjectCode}</strong>
                     </div>
                     <div>
-                      <span className="eyebrow">{t('station.status.project')}</span>
+                      <span className="eyebrow">
+                        {t('station.status.project')}
+                      </span>
                       <strong className="serif">{statusProject}</strong>
                     </div>
                   </div>
                   <div className="station-result">
-                    <div className={activeRun ? 'station-ok running' : 'station-ok'}>{activeRun ? 'RUN' : 'OK'}</div>
+                    <div
+                      className={
+                        activeRun ? 'station-ok running' : 'station-ok'
+                      }
+                    >
+                      {activeRun ? 'RUN' : 'OK'}
+                    </div>
                     <div className="station-normal">
                       <span />
-                      {activeRun ? t('station.run.running') : t('station.status.normal')}
+                      {activeRun
+                        ? t('station.run.running')
+                        : t('station.status.normal')}
                     </div>
                   </div>
                 </div>
@@ -1382,11 +2161,18 @@ export function StationOperationPage() {
           </section>
 
           <div className="station-actions">
-            <Button icon={<Gauge size={15} />} disabled={!validSelectedProjectId} onClick={() => setPIDModalOpen(true)}>
+            <Button
+              icon={<Gauge size={15} />}
+              disabled={!validSelectedProjectId}
+              onClick={() => setPIDModalOpen(true)}
+            >
               {t('station.actions.pid')}
             </Button>
             <Button>{t('station.actions.mute')}</Button>
-            <Button className={alarmOn ? 'alarm-active' : undefined} onClick={() => setAlarmModalOpen(true)}>
+            <Button
+              className={alarmOn ? 'alarm-active' : undefined}
+              onClick={() => setAlarmModalOpen(true)}
+            >
               {t('station.actions.alarmLog')}
             </Button>
             {activeRun ? (
@@ -1469,7 +2255,9 @@ export function StationOperationPage() {
                     sortedStationRows.map((row) => {
                       return (
                         <tr
-                          className={row.pinned ? 'station-row pinned' : 'station-row'}
+                          className={
+                            row.pinned ? 'station-row pinned' : 'station-row'
+                          }
                           key={row.key}
                           title={row.name}
                           onClick={() => togglePinnedRow(row)}
@@ -1481,7 +2269,9 @@ export function StationOperationPage() {
                           <td>{row.standard}</td>
                           <td className="mono">{row.value}</td>
                           <td>
-                            <span className={row.ok ? 'status-ok' : 'status-ng'}>
+                            <span
+                              className={row.ok ? 'status-ok' : 'status-ng'}
+                            >
                               <span />
                               {row.ok ? 'OK' : 'NG'}
                             </span>
@@ -1496,12 +2286,26 @@ export function StationOperationPage() {
           </section>
         </aside>
       </div>
-      <div className="station-template-footnote" aria-label={t('station.template.trace')}>
+      <div
+        className="station-template-footnote"
+        aria-label={t('station.template.trace')}
+      >
         <span>{t('station.template.trace')}</span>
         <strong>{effectiveTemplate?.template_code ?? '--'}</strong>
-        <span>v{effectiveTemplate?.version ?? '-'} / {effectiveTemplate?.status ?? '-'}</span>
-        <span>{t('station.template.visibleTemplates')}: {stationViewTemplatesQuery.isFetching ? '...' : visibleTemplates.length}</span>
-        <span>{t('station.template.assignments')}: {stationViewTemplatesQuery.isFetching ? '...' : enabledAssignments}</span>
+        <span>
+          v{effectiveTemplate?.version ?? '-'} /{' '}
+          {effectiveTemplate?.status ?? '-'}
+        </span>
+        <span>
+          {t('station.template.visibleTemplates')}:{' '}
+          {stationViewTemplatesQuery.isFetching
+            ? '...'
+            : visibleTemplates.length}
+        </span>
+        <span>
+          {t('station.template.assignments')}:{' '}
+          {stationViewTemplatesQuery.isFetching ? '...' : enabledAssignments}
+        </span>
       </div>
       <Modal
         className="station-run-modal"
@@ -1512,14 +2316,36 @@ export function StationOperationPage() {
         footer={null}
         destroyOnHidden
       >
-        <Form form={startForm} layout="vertical" onFinish={(values) => startRunMutation.mutate(values)}>
+        <Form
+          form={startForm}
+          layout="vertical"
+          onFinish={(values) => startRunMutation.mutate(values)}
+        >
           <div className="station-run-layout">
             <section className="station-run-section">
               <div className="station-run-section-head">
                 <span>{t('station.run.basicInfo')}</span>
               </div>
               <div className="station-run-form-grid">
-                <Form.Item name="project_id" label={t('station.run.project')} rules={[{ required: true }]}>
+                <Form.Item name="plan_id" label={t('station.run.plan')}>
+                  <Select
+                    allowClear
+                    showSearch
+                    loading={detectionPlansQuery.isFetching}
+                    optionFilterProp="label"
+                    placeholder={t('station.run.planPlaceholder')}
+                    onChange={(value) => applyDetectionPlan(value)}
+                    options={pendingPlans.map((plan) => ({
+                      label: detectionPlanLabel(plan),
+                      value: plan.id,
+                    }))}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="project_id"
+                  label={t('station.run.project')}
+                  rules={[{ required: true }]}
+                >
                   <Select
                     options={projects.map((project) => ({
                       label: `${displayProjectName(project, i18n.resolvedLanguage)} / ${project.project_code}`,
@@ -1527,28 +2353,59 @@ export function StationOperationPage() {
                     }))}
                   />
                 </Form.Item>
-                <Form.Item name="factory_no" label={t('station.run.factoryNo')} rules={[{ required: true }]}>
-                  <Input />
+                <Form.Item
+                  name="factory_no"
+                  label={t('station.run.factoryNo')}
+                  rules={[{ required: true }]}
+                >
+                  <Input disabled={Boolean(selectedPlan)} />
                 </Form.Item>
-                <Form.Item name="customer_name" label={t('station.run.customerName')}>
-                  <Input />
+                <Form.Item
+                  name="customer_name"
+                  label={t('station.run.customerName')}
+                >
+                  <Input disabled={Boolean(selectedPlan)} />
                 </Form.Item>
-                <Form.Item name="device_model" label={t('station.run.deviceModel')}>
-                  <Input />
+                <Form.Item
+                  name="device_model"
+                  label={t('station.run.deviceModel')}
+                >
+                  <Input disabled={Boolean(selectedPlan)} />
                 </Form.Item>
                 <Form.Item name="test_no" label={t('station.run.testNo')}>
-                  <Input placeholder={t('station.run.testNoAuto')} />
+                  <Input
+                    disabled={Boolean(selectedPlan)}
+                    placeholder={t('station.run.testNoAuto')}
+                  />
                 </Form.Item>
-                <Form.Item name="mode" label={t('station.run.mode')} rules={[{ required: true }]}>
+                <Form.Item
+                  name="mode"
+                  label={t('station.run.mode')}
+                  rules={[{ required: true }]}
+                >
                   <Select
+                    disabled={Boolean(selectedPlan)}
                     options={[
-                      { label: t('station.run.standardMode'), value: 'standard' },
-                      { label: t('station.run.performanceMode'), value: 'performance' },
+                      {
+                        label: t('station.run.standardMode'),
+                        value: 'standard',
+                      },
+                      {
+                        label: t('station.run.performanceMode'),
+                        value: 'performance',
+                      },
                     ]}
                   />
                 </Form.Item>
-                <Form.Item name="duration_min" label={t('station.run.durationMin')}>
-                  <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+                <Form.Item
+                  name="duration_min"
+                  label={t('station.run.durationMin')}
+                >
+                  <InputNumber
+                    min={1}
+                    precision={0}
+                    style={{ width: '100%' }}
+                  />
                 </Form.Item>
               </div>
             </section>
@@ -1558,21 +2415,44 @@ export function StationOperationPage() {
                 <span>{t('station.run.standardAndTemplate')}</span>
               </div>
               <div className="station-run-form-grid station-run-form-grid-compact">
-                <Form.Item name="config_enabled" label={t('station.run.configEnabled')} valuePropName="checked">
+                <Form.Item
+                  name="config_enabled"
+                  label={t('station.run.configEnabled')}
+                  valuePropName="checked"
+                >
                   <Switch />
                 </Form.Item>
-                <Form.Item name="standard_id" label={t('station.run.configName')}>
+                <Form.Item
+                  name="standard_id"
+                  label={t('station.run.configName')}
+                >
                   <Select
                     allowClear
-                    disabled={!configEnabled}
+                    disabled={!configEnabled || Boolean(selectedPlan)}
                     loading={standardsQuery.isFetching}
+                    optionFilterProp="label"
+                    onChange={(standardId) => {
+                      const nextStandard = availableStandards.find(
+                        (standard) => standard.id === standardId,
+                      )
+                      const nextVarIds = standardReportVarIds(
+                        nextStandard,
+                        stationVariables,
+                      )
+                      fillEmptyReportVariables(nextVarIds)
+                    }}
                     options={availableStandards.map((standard) => ({
-                      label: `${standardDisplayName(standard, i18n.resolvedLanguage)} / ${standard.standard_code} / v${standard.version}`,
+                      label: `${standardDisplayName(standard, i18n.resolvedLanguage)} / ${standard.standard_code} / v${standard.version} / ${detectionStandardScopeLabel(standard, t, selectedProject)}`,
                       value: standard.id,
                     }))}
                   />
                 </Form.Item>
               </div>
+              {selectedStartStandard ? (
+                <Tag color={selectedStartStandard.project_id ? 'blue' : selectedStartStandard.project_group ? 'purple' : 'default'}>
+                  {detectionStandardScopeLabel(selectedStartStandard, t, selectedProject)}
+                </Tag>
+              ) : null}
             </section>
 
             <section className="station-run-section station-run-report-section">
@@ -1581,6 +2461,28 @@ export function StationOperationPage() {
                   <strong>{t('station.run.reportRequests')}</strong>
                   <span>{t('station.run.reportRequestsHint')}</span>
                 </div>
+                <div className="station-run-report-actions">
+                  <Tag
+                    color={
+                      selectedStandardReportVarIds.length > 0
+                        ? hasReportRowsMissingVariables
+                          ? 'gold'
+                          : 'green'
+                        : 'default'
+                    }
+                  >
+                    {t('station.run.reportAutoVariables', {
+                      count: selectedStandardReportVarIds.length,
+                    })}
+                  </Tag>
+                  <Button
+                    size="small"
+                    disabled={selectedStandardReportVarIds.length === 0}
+                    onClick={() => fillEmptyReportVariables()}
+                  >
+                    {t('station.run.fillReportVariables')}
+                  </Button>
+                </div>
               </div>
               <Form.List name="report_requests">
                 {(fields, { add, remove }) => (
@@ -1588,7 +2490,11 @@ export function StationOperationPage() {
                     {fields.map((field, index) => (
                       <div className="station-run-report-row" key={field.key}>
                         <div className="station-run-report-row-head">
-                          <span>{t('station.run.reportRequestIndex', { index: index + 1 })}</span>
+                          <span>
+                            {t('station.run.reportRequestIndex', {
+                              index: index + 1,
+                            })}
+                          </span>
                           <Button
                             danger
                             size="small"
@@ -1598,7 +2504,11 @@ export function StationOperationPage() {
                           />
                         </div>
                         <div className="station-run-report-fields">
-                          <Form.Item {...field} name={[field.name, 'template_id']} label={t('station.run.reportTemplate')}>
+                          <Form.Item
+                            {...field}
+                            name={[field.name, 'template_id']}
+                            label={t('station.run.reportTemplate')}
+                          >
                             <Select
                               allowClear
                               loading={reportTemplatesQuery.isFetching}
@@ -1608,27 +2518,62 @@ export function StationOperationPage() {
                               }))}
                             />
                           </Form.Item>
-                          <Form.Item {...field} name={[field.name, 'report_name']} label={t('station.run.reportName')}>
+                          <Form.Item
+                            {...field}
+                            name={[field.name, 'report_name']}
+                            label={t('station.run.reportName')}
+                          >
                             <Input />
                           </Form.Item>
-                          <Form.Item {...field} className="station-run-report-field-wide" name={[field.name, 'var_ids']} label={t('station.run.reportVariables')}>
+                          <Form.Item
+                            {...field}
+                            className="station-run-report-field-wide"
+                            name={[field.name, 'var_ids']}
+                            label={t('station.run.reportVariables')}
+                            extra={
+                              selectedStandardReportVarIds.length > 0
+                                ? t('station.run.reportVariablesAutoHint', {
+                                    count: selectedStandardReportVarIds.length,
+                                  })
+                                : t('station.run.reportVariablesRequiredHint')
+                            }
+                          >
                             <Select
                               allowClear
                               mode="multiple"
                               optionFilterProp="label"
+                              placeholder={t(
+                                'station.run.reportVariablesPlaceholder',
+                              )}
                               options={stationVariables.map((variable) => ({
                                 label: `${alarmDisplayName(variable, i18n.resolvedLanguage)} / ${variable.var_name}`,
                                 value: tagWireId(variable),
                               }))}
                             />
                           </Form.Item>
-                          <Form.Item {...field} className="station-run-report-field-wide" name={[field.name, 'params_json']} label={t('station.run.reportParams')}>
+                          <Form.Item
+                            {...field}
+                            className="station-run-report-field-wide"
+                            name={[field.name, 'params_json']}
+                            label={t('station.run.reportParams')}
+                          >
                             <Input.TextArea rows={3} spellCheck={false} />
                           </Form.Item>
                         </div>
                       </div>
                     ))}
-                    <Button className="station-run-add-report" size="small" icon={<Plus size={14} />} onClick={() => add({ template_id: reportTemplates[0]?.id, var_ids: [], params_json: '{}' })}>
+                    <Button
+                      className="station-run-add-report"
+                      size="small"
+                      icon={<Plus size={14} />}
+                      onClick={() =>
+                        add({
+                          template_id: reportTemplates[0]?.id,
+                          var_ids: selectedStandardReportVarIds,
+                          params_json: '{}',
+                        })
+                      }
+                    >
                       {t('station.run.addReportRequest')}
                     </Button>
                   </div>
@@ -1643,8 +2588,15 @@ export function StationOperationPage() {
             </section>
           </div>
           <div className="station-run-modal-footer">
-            <Button onClick={() => setStartModalOpen(false)}>{t('actions.cancel')}</Button>
-            <Button type="primary" htmlType="submit" icon={<Play size={15} />} loading={startRunMutation.isPending}>
+            <Button onClick={() => setStartModalOpen(false)}>
+              {t('actions.cancel')}
+            </Button>
+            <Button
+              type="primary"
+              htmlType="submit"
+              icon={<Play size={15} />}
+              loading={startRunMutation.isPending}
+            >
               {t('station.actions.start')}
             </Button>
           </div>
@@ -1656,7 +2608,9 @@ export function StationOperationPage() {
         open={pidModalOpen}
         onCancel={() => setPIDModalOpen(false)}
         footer={[
-          <Button key="cancel" onClick={() => setPIDModalOpen(false)}>{t('actions.cancel')}</Button>,
+          <Button key="cancel" onClick={() => setPIDModalOpen(false)}>
+            {t('actions.cancel')}
+          </Button>,
           <Button key="submit" type="primary" onClick={submitAllPIDSettings}>
             {t('station.pid.submit')}
           </Button>,
@@ -1667,7 +2621,11 @@ export function StationOperationPage() {
       >
         <div className="station-alarm-toolbar">
           <div className="station-pid-project">
-            <span>{validSelectedProjectId ? selectedProjectName ?? statusProjectCode : t('station.status.noProject')}</span>
+            <span>
+              {validSelectedProjectId
+                ? (selectedProjectName ?? statusProjectCode)
+                : t('station.status.noProject')}
+            </span>
             <Tag>{statusProjectCode}</Tag>
           </div>
           <div className="station-alarm-toolbar-right">
@@ -1678,7 +2636,11 @@ export function StationOperationPage() {
               onChange={(event) => setPIDVarGroup(event.target.value)}
               style={{ width: 150 }}
             />
-            <Button size="small" onClick={() => pidVariablesQuery.refetch()} loading={pidVariablesQuery.isFetching}>
+            <Button
+              size="small"
+              onClick={() => pidVariablesQuery.refetch()}
+              loading={pidVariablesQuery.isFetching}
+            >
               {t('actions.refresh')}
             </Button>
           </div>
@@ -1693,12 +2655,30 @@ export function StationOperationPage() {
               <div className="station-pid-card-body">
                 {group.items.map((setting) => {
                   const variable = findPIDVariable(pidVariables, setting.key)
-                  const snapshot = variable ? pidSnapshotsByVarID.get(String(variableWireId(variable))) : undefined
-                  const currentValue = pidDisplayValue(setting.key, numericSnapshotValue(snapshot), 2)
+                  const snapshot = variable
+                    ? pidSnapshotsByVarID.get(String(variableWireId(variable)))
+                    : undefined
+                  const currentValue = pidDisplayValue(
+                    setting.key,
+                    numericSnapshotValue(snapshot),
+                    2,
+                  )
                   const draftValue = pidWriteValues[setting.key] ?? ''
                   const state = pidWriteStates[setting.key]
-                  const readback = isPIDReadbackMatch(state?.submittedValue, currentValue)
-                  const color = state?.status === 'ack' ? 'green' : state?.status === 'sent' ? 'cyan' : state?.status === 'error' ? 'red' : state?.status === 'pending' ? 'blue' : 'default'
+                  const readback = isPIDReadbackMatch(
+                    state?.submittedValue,
+                    currentValue,
+                  )
+                  const color =
+                    state?.status === 'ack'
+                      ? 'green'
+                      : state?.status === 'sent'
+                        ? 'cyan'
+                        : state?.status === 'error'
+                          ? 'red'
+                          : state?.status === 'pending'
+                            ? 'blue'
+                            : 'default'
                   const canWrite = variable ? isPIDWritable(variable) : false
                   const inputBaseValue = draftValue || currentValue || '0'
                   return (
@@ -1706,7 +2686,13 @@ export function StationOperationPage() {
                       <div className="station-pid-setting-head">
                         <span>{t(setting.labelKey)}</span>
                         {variable ? (
-                          <Tag color={canWrite ? color : 'default'}>{canWrite ? (state?.status ? t(`station.pid.${state.status}`) : t('station.pid.idle')) : t('station.pid.readOnly')}</Tag>
+                          <Tag color={canWrite ? color : 'default'}>
+                            {canWrite
+                              ? state?.status
+                                ? t(`station.pid.${state.status}`)
+                                : t('station.pid.idle')
+                              : t('station.pid.readOnly')}
+                          </Tag>
                         ) : (
                           <Tag color="red">{t('station.pid.noConnection')}</Tag>
                         )}
@@ -1714,11 +2700,18 @@ export function StationOperationPage() {
                       {variable ? (
                         <>
                           <div className="station-pid-variable-name">
-                            {variableDisplayName(variable, i18n.resolvedLanguage)} / {variable.var_name}
+                            {variableDisplayName(
+                              variable,
+                              i18n.resolvedLanguage,
+                            )}{' '}
+                            / {variable.var_name}
                           </div>
                           <div className="station-pid-current-row">
                             <span>{t('station.pid.currentValue')}</span>
-                            <strong>{currentValue || '--'}{setting.unit ? ` ${setting.unit}` : ''}</strong>
+                            <strong>
+                              {currentValue || '--'}
+                              {setting.unit ? ` ${setting.unit}` : ''}
+                            </strong>
                           </div>
                           <div className="station-pid-control">
                             <Button
@@ -1730,7 +2723,10 @@ export function StationOperationPage() {
                                 const current = Number(inputBaseValue)
                                 setPIDWriteValues((values) => ({
                                   ...values,
-                                  [setting.key]: formatPIDNumber(current - setting.step, setting.precision),
+                                  [setting.key]: formatPIDNumber(
+                                    current - setting.step,
+                                    setting.precision,
+                                  ),
                                 }))
                               }}
                             />
@@ -1739,9 +2735,19 @@ export function StationOperationPage() {
                               value={draftValue}
                               placeholder={currentValue || '--'}
                               readOnly={!canWrite}
-                              onChange={(event) => setPIDWriteValues((values) => ({ ...values, [setting.key]: event.target.value }))}
+                              onChange={(event) =>
+                                setPIDWriteValues((values) => ({
+                                  ...values,
+                                  [setting.key]: event.target.value,
+                                }))
+                              }
                               onPressEnter={() => {
-                                if (canWrite && draftValue.trim()) void writePIDSetting(setting, variable, draftValue)
+                                if (canWrite && draftValue.trim())
+                                  void writePIDSetting(
+                                    setting,
+                                    variable,
+                                    draftValue,
+                                  )
                               }}
                             />
                             <Button
@@ -1753,22 +2759,48 @@ export function StationOperationPage() {
                                 const current = Number(inputBaseValue)
                                 setPIDWriteValues((values) => ({
                                   ...values,
-                                  [setting.key]: formatPIDNumber(current + setting.step, setting.precision),
+                                  [setting.key]: formatPIDNumber(
+                                    current + setting.step,
+                                    setting.precision,
+                                  ),
                                 }))
                               }}
                             />
                           </div>
                           <div className="station-pid-setting-foot">
-                            <span>{snapshot?.last_update ? formatAlarmTime(snapshot.last_update) : '-'}</span>
-                            {draftValue ? <Tag color="gold">{t('station.pid.draftValue')}: {draftValue}</Tag> : null}
-                            {state?.submittedValue ? <Tag>{t('station.pid.submittedValue')}: {state.submittedValue}</Tag> : null}
-                            {readback ? <Tag color="cyan">{t('station.pid.readback')}</Tag> : null}
-                            {state?.message ? <span>{state.message}</span> : null}
-                            {state?.result?.kio?.status ? <span>{state.result.kio.status}</span> : null}
+                            <span>
+                              {snapshot?.last_update
+                                ? formatAlarmTime(snapshot.last_update)
+                                : '-'}
+                            </span>
+                            {draftValue ? (
+                              <Tag color="gold">
+                                {t('station.pid.draftValue')}: {draftValue}
+                              </Tag>
+                            ) : null}
+                            {state?.submittedValue ? (
+                              <Tag>
+                                {t('station.pid.submittedValue')}:{' '}
+                                {state.submittedValue}
+                              </Tag>
+                            ) : null}
+                            {readback ? (
+                              <Tag color="cyan">
+                                {t('station.pid.readback')}
+                              </Tag>
+                            ) : null}
+                            {state?.message ? (
+                              <span>{state.message}</span>
+                            ) : null}
+                            {state?.result?.kio?.status ? (
+                              <span>{state.result.kio.status}</span>
+                            ) : null}
                           </div>
                         </>
                       ) : (
-                        <div className="station-pid-disconnected">{t('station.pid.noConnection')}</div>
+                        <div className="station-pid-disconnected">
+                          {t('station.pid.noConnection')}
+                        </div>
                       )}
                     </div>
                   )
@@ -1797,9 +2829,17 @@ export function StationOperationPage() {
           />
           <div className="station-alarm-toolbar-right">
             <span>
-              {validSelectedProjectId ? t('station.alarms.currentProject', { name: selectedProjectName ?? statusProjectCode }) : t('station.alarms.allProjects')}
+              {validSelectedProjectId
+                ? t('station.alarms.currentProject', {
+                    name: selectedProjectName ?? statusProjectCode,
+                  })
+                : t('station.alarms.allProjects')}
             </span>
-            <Button size="small" onClick={() => alarmsQuery.refetch()} loading={alarmsQuery.isFetching}>
+            <Button
+              size="small"
+              onClick={() => alarmsQuery.refetch()}
+              loading={alarmsQuery.isFetching}
+            >
               {t('actions.refresh')}
             </Button>
           </div>
@@ -1831,14 +2871,24 @@ export function StationOperationPage() {
               : t('station.run.idle')}
           </span>
           <div className="station-alarm-toolbar-right">
-            <span>{t('station.snapshot.count', { count: runSnapshotQuery.data?.standard_items?.length ?? 0 })}</span>
-            <Button size="small" onClick={() => runSnapshotQuery.refetch()} loading={runSnapshotQuery.isFetching}>
+            <span>
+              {t('station.snapshot.count', {
+                count: runSnapshotQuery.data?.standard_items?.length ?? 0,
+              })}
+            </span>
+            <Button
+              size="small"
+              onClick={() => runSnapshotQuery.refetch()}
+              loading={runSnapshotQuery.isFetching}
+            >
               {t('actions.refresh')}
             </Button>
           </div>
         </div>
         <Table<DetectionRunStandardItem>
-          rowKey={(record) => `${record.task_id}-${record.standard_item_id}-${record.var_id_text ?? record.var_id}`}
+          rowKey={(record) =>
+            `${record.task_id}-${record.standard_item_id}-${record.var_id_text ?? record.var_id}`
+          }
           size="small"
           columns={runSnapshotColumns}
           dataSource={runSnapshotQuery.data?.standard_items ?? []}
@@ -1849,8 +2899,19 @@ export function StationOperationPage() {
         <div className="station-alarm-toolbar">
           <span>{t('station.snapshot.reportRequests')}</span>
           <div className="station-alarm-toolbar-right">
-            <span>{t('station.snapshot.reportRequestCount', { count: reportRequestsQuery.data?.count ?? runSnapshotQuery.data?.report_requests?.length ?? 0 })}</span>
-            <Button size="small" onClick={() => reportRequestsQuery.refetch()} loading={reportRequestsQuery.isFetching}>
+            <span>
+              {t('station.snapshot.reportRequestCount', {
+                count:
+                  reportRequestsQuery.data?.count ??
+                  runSnapshotQuery.data?.report_requests?.length ??
+                  0,
+              })}
+            </span>
+            <Button
+              size="small"
+              onClick={() => reportRequestsQuery.refetch()}
+              loading={reportRequestsQuery.isFetching}
+            >
               {t('actions.refresh')}
             </Button>
           </div>
@@ -1859,8 +2920,14 @@ export function StationOperationPage() {
           rowKey={(record) => record.id}
           size="small"
           columns={reportRequestColumns}
-          dataSource={reportRequestsQuery.data?.items ?? runSnapshotQuery.data?.report_requests ?? []}
-          loading={reportRequestsQuery.isFetching || runSnapshotQuery.isFetching}
+          dataSource={
+            reportRequestsQuery.data?.items ??
+            runSnapshotQuery.data?.report_requests ??
+            []
+          }
+          loading={
+            reportRequestsQuery.isFetching || runSnapshotQuery.isFetching
+          }
           pagination={false}
           scroll={{ x: 820, y: 220 }}
         />
@@ -1882,14 +2949,24 @@ export function StationOperationPage() {
               : t('station.run.idle')}
           </span>
           <div className="station-alarm-toolbar-right">
-            <span>{t('station.storage.count', { count: storageSnapshotQuery.data?.count ?? 0 })}</span>
-            <Button size="small" onClick={() => storageSnapshotQuery.refetch()} loading={storageSnapshotQuery.isFetching}>
+            <span>
+              {t('station.storage.count', {
+                count: storageSnapshotQuery.data?.count ?? 0,
+              })}
+            </span>
+            <Button
+              size="small"
+              onClick={() => storageSnapshotQuery.refetch()}
+              loading={storageSnapshotQuery.isFetching}
+            >
               {t('actions.refresh')}
             </Button>
           </div>
         </div>
         <Table<DetectionRunStorageRoute>
-          rowKey={(record) => `${record.task_id}-${record.route_id}-${record.var_id_text ?? record.var_id}`}
+          rowKey={(record) =>
+            `${record.task_id}-${record.route_id}-${record.var_id_text ?? record.var_id}`
+          }
           size="small"
           columns={storageRouteColumns}
           dataSource={storageSnapshotQuery.data?.items ?? []}
@@ -1922,7 +2999,9 @@ function SortableMetricGrid({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   )
   const activeCard = cards.find((card) => card.id === activeId)
 
@@ -1933,7 +3012,10 @@ function SortableMetricGrid({
     const checkScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollElement
       setCanScrollUp(scrollTop > 2)
-      setCanScrollDown(scrollHeight > clientHeight && scrollTop + clientHeight < scrollHeight - 2)
+      setCanScrollDown(
+        scrollHeight > clientHeight &&
+          scrollTop + clientHeight < scrollHeight - 2,
+      )
     }
 
     checkScroll()
@@ -2012,7 +3094,10 @@ function SortableMetricGrid({
             </div>
           ) : (
             <div className="station-card-grid">
-              <SortableContext items={cards.map((card) => card.id)} strategy={rectSortingStrategy}>
+              <SortableContext
+                items={cards.map((card) => card.id)}
+                strategy={rectSortingStrategy}
+              >
                 {cards.map((card) => (
                   <SortableMetricCard
                     key={card.id}
@@ -2026,29 +3111,61 @@ function SortableMetricGrid({
           )}
         </div>
         <button
-          className={canScrollUp ? 'station-scroll-cue top visible' : 'station-scroll-cue top'}
-          onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+          className={
+            canScrollUp
+              ? 'station-scroll-cue top visible'
+              : 'station-scroll-cue top'
+          }
+          onClick={() =>
+            scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+          }
           aria-label={t('station.actions.scrollTop')}
         >
           <ChevronUp size={12} />
         </button>
         <button
-          className={canScrollDown ? 'station-scroll-cue bottom visible' : 'station-scroll-cue bottom'}
-          onClick={() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })}
+          className={
+            canScrollDown
+              ? 'station-scroll-cue bottom visible'
+              : 'station-scroll-cue bottom'
+          }
+          onClick={() =>
+            scrollRef.current?.scrollTo({
+              top: scrollRef.current.scrollHeight,
+              behavior: 'smooth',
+            })
+          }
           aria-label={t('station.actions.scrollBottom')}
         >
           <ChevronDown size={12} />
         </button>
       </div>
       <DragOverlay dropAnimation={dropAnimation}>
-        {activeCard ? <MetricCardView card={activeCard} label={activeCard.label} dragging /> : null}
+        {activeCard ? (
+          <MetricCardView card={activeCard} label={activeCard.label} dragging />
+        ) : null}
       </DragOverlay>
     </DndContext>
   )
 }
 
-function SortableMetricCard({ card, label, isDropping }: { card: MetricCard; label: string; isDropping: boolean }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: card.id })
+function SortableMetricCard({
+  card,
+  label,
+  isDropping,
+}: {
+  card: MetricCard
+  label: string
+  isDropping: boolean
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: card.id })
   if (isDragging || isDropping) {
     return (
       <div
@@ -2072,12 +3189,29 @@ function SortableMetricCard({ card, label, isDropping }: { card: MetricCard; lab
   )
 }
 
-function MetricCardView({ card, label, dragging = false }: { card: MetricCard; label: string; dragging?: boolean }) {
+function MetricCardView({
+  card,
+  label,
+  dragging = false,
+}: {
+  card: MetricCard
+  label: string
+  dragging?: boolean
+}) {
   return (
-    <article className={dragging ? 'metric-card glass-panel dragging' : 'metric-card glass-panel'}>
+    <article
+      className={
+        dragging
+          ? 'metric-card glass-panel dragging'
+          : 'metric-card glass-panel'
+      }
+    >
       <div className="metric-card-head">
         <div className="metric-title-group">
-          <span className="metric-icon" style={{ color: card.color, backgroundColor: `${card.color}18` }}>
+          <span
+            className="metric-icon"
+            style={{ color: card.color, backgroundColor: `${card.color}18` }}
+          >
             {card.icon}
           </span>
           <div>
@@ -2092,7 +3226,12 @@ function MetricCardView({ card, label, dragging = false }: { card: MetricCard; l
         </div>
       </div>
       <div className="metric-chart">
-        <CardChart chartData={card.trend} legendName={label} min={card.min} max={card.max} />
+        <CardChart
+          chartData={card.trend}
+          legendName={label}
+          min={card.min}
+          max={card.max}
+        />
       </div>
     </article>
   )
@@ -2121,8 +3260,15 @@ function CardChart({
   return (
     <div className="card-chart-line">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={chartData} margin={{ top: 20, right: 10, left: -25, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 4" vertical={false} stroke="rgba(30,27,24,0.06)" />
+        <AreaChart
+          data={chartData}
+          margin={{ top: 20, right: 10, left: -25, bottom: 0 }}
+        >
+          <CartesianGrid
+            strokeDasharray="3 4"
+            vertical={false}
+            stroke="rgba(30,27,24,0.06)"
+          />
           <XAxis
             dataKey="time"
             stroke="rgba(30,27,24,0.4)"
@@ -2150,7 +3296,12 @@ function CardChart({
               boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
               padding: '4px 8px',
             }}
-            itemStyle={{ color: '#333', fontWeight: 600, fontFamily: 'Georgia, serif', fontSize: 13 }}
+            itemStyle={{
+              color: '#333',
+              fontWeight: 600,
+              fontFamily: 'Georgia, serif',
+              fontSize: 13,
+            }}
             labelStyle={{ display: 'none' }}
           />
           {min !== undefined ? (

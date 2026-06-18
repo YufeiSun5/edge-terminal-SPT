@@ -27,6 +27,7 @@ type detectionStandardCreateRequest struct {
 	DisplayNameJA    string                         `json:"display_name_ja"`
 	ProjectID        *uint                          `json:"project_id"`
 	ProjectCode      string                         `json:"project_code"`
+	ProjectGroup     string                         `json:"project_group"`
 	Mode             string                         `json:"mode"`
 	Version          int                            `json:"version"`
 	Enabled          *bool                          `json:"enabled"`
@@ -43,6 +44,7 @@ type detectionStandardPatchRequest struct {
 	DisplayNameJA    *string `json:"display_name_ja"`
 	ProjectID        *uint   `json:"project_id"`
 	ProjectCode      *string `json:"project_code"`
+	ProjectGroup     *string `json:"project_group"`
 	Mode             *string `json:"mode"`
 	Version          *int    `json:"version"`
 	Enabled          *bool   `json:"enabled"`
@@ -312,7 +314,8 @@ func detectionStandardFromCreate(req detectionStandardCreateRequest) (models.Det
 		DisplayNameEN:    req.DisplayNameEN,
 		DisplayNameJA:    req.DisplayNameJA,
 		ProjectID:        req.ProjectID,
-		ProjectCode:      req.ProjectCode,
+		ProjectCode:      strings.TrimSpace(req.ProjectCode),
+		ProjectGroup:     strings.TrimSpace(req.ProjectGroup),
 		Mode:             req.Mode,
 		Version:          version,
 		Enabled:          enabled,
@@ -344,6 +347,7 @@ func detectionStandardUpdates(req detectionStandardPatchRequest) (map[string]int
 		updates["project_id"] = *req.ProjectID
 	}
 	setStringUpdate(updates, "project_code", req.ProjectCode)
+	setStringUpdate(updates, "project_group", req.ProjectGroup)
 	setStringUpdate(updates, "mode", req.Mode)
 	if req.Version != nil {
 		if *req.Version <= 0 {
@@ -476,6 +480,7 @@ func parseDetectionStandardFilter(c *gin.Context) (database.DetectionStandardFil
 		filter.ProjectID = &ProjectID
 	}
 	filter.ProjectCode = c.Query("project_code")
+	filter.ProjectGroup = c.Query("project_group")
 	filter.Mode = c.Query("mode")
 	if raw := c.Query("enabled"); raw != "" {
 		value, err := strconv.ParseBool(raw)

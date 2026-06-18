@@ -52,6 +52,7 @@ type Project struct {
 	DisplayNameEN  string    `gorm:"column:display_name_en" json:"display_name_en"`
 	DisplayNameJA  string    `gorm:"column:display_name_ja" json:"display_name_ja"`
 	ModelName      string    `gorm:"column:model_name" json:"model_name"`
+	ProjectGroup   string    `gorm:"column:project_group" json:"project_group"`
 	ImageRef       string    `gorm:"column:image_ref" json:"image_ref"`
 	Enabled        bool      `gorm:"column:enabled" json:"enabled"`
 	Blocked        bool      `gorm:"column:blocked" json:"blocked"`

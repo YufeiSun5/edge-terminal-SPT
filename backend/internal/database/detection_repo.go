@@ -145,6 +145,10 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 			if !standard.Enabled {
 				return errors.New("detection standard is disabled")
 			}
+			items, tagByVarID, err := remapDetectionStandardItemsToProject(tx, items, task.ProjectID)
+			if err != nil {
+				return err
+			}
 			task.StandardID = &standard.ID
 			task.StandardCode = standard.StandardCode
 			task.StandardVer = standard.Version
@@ -156,10 +160,6 @@ func (r *Repository) StartDetectionTaskWithOptions(opts StartDetectionOptions) (
 			task.ConfigHash = firstNonEmpty(task.ConfigHash, standard.ConfigHash)
 			if opts.ReportTemplateID == nil && standard.ReportTemplateID != nil {
 				opts.ReportTemplateID = standard.ReportTemplateID
-			}
-			tagByVarID, err := loadTagsByVarID(tx, items)
-			if err != nil {
-				return err
 			}
 			snapshotItems = makeRunStandardItems(task, standard, items, tagByVarID, now)
 		} else if len(opts.CustomItems) > 0 {
@@ -420,6 +420,17 @@ func (r *Repository) ListDetectionTasks(filter DetectionTaskFilter) ([]models.De
 		return nil, err
 	}
 	return tasks, nil
+}
+
+func (r *Repository) FindDetectionTaskByProjectAndTestNo(projectID uint, testNo string) (models.DetectionTask, error) {
+	var task models.DetectionTask
+	if err := r.db.
+		Where("project_id = ? AND test_no = ?", projectID, testNo).
+		Order("started_at desc, id desc").
+		First(&task).Error; err != nil {
+		return task, err
+	}
+	return r.GetDetectionTask(task.ID)
 }
 
 func (r *Repository) GetCurrentDetectionTaskForProject(projectID uint) (models.DetectionTask, error) {
@@ -988,10 +999,22 @@ func (r *Repository) ListDetectionStandards(filter DetectionStandardFilter) ([]m
 	var standards []models.DetectionStandard
 	query := r.db.Model(&models.DetectionStandard{})
 	if filter.ProjectID != nil {
-		query = query.Where("project_id = ?", *filter.ProjectID)
+		var project models.Project
+		if err := r.db.Select("id", "project_group").First(&project, "id = ?", *filter.ProjectID).Error; err != nil {
+			return nil, err
+		}
+		projectGroup := strings.TrimSpace(project.ProjectGroup)
+		if projectGroup != "" {
+			query = query.Where("(project_id = ? OR project_group = ? OR (project_id IS NULL AND project_group = ''))", *filter.ProjectID, projectGroup)
+		} else {
+			query = query.Where("(project_id = ? OR (project_id IS NULL AND project_group = ''))", *filter.ProjectID)
+		}
 	}
 	if filter.ProjectCode != "" {
 		query = query.Where("project_code = ?", filter.ProjectCode)
+	}
+	if filter.ProjectGroup != "" {
+		query = query.Where("project_group = ?", strings.TrimSpace(filter.ProjectGroup))
 	}
 	if filter.Mode != "" {
 		query = query.Where("mode = ?", filter.Mode)
@@ -1101,6 +1124,8 @@ func (r *Repository) ListRecentDetectionStandards(userID uint, projectID *uint, 
 
 func (r *Repository) CreateDetectionStandard(standard *models.DetectionStandard, items []models.DetectionStandardItem) error {
 	now := time.Now()
+	standard.ProjectCode = strings.TrimSpace(standard.ProjectCode)
+	standard.ProjectGroup = strings.TrimSpace(standard.ProjectGroup)
 	standard.CreatedAt = now
 	standard.UpdatedAt = now
 	if standard.Version == 0 {
@@ -1113,6 +1138,9 @@ func (r *Repository) CreateDetectionStandard(standard *models.DetectionStandard,
 		return err
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := hydrateDetectionStandardProjectGroup(tx, standard); err != nil {
+			return err
+		}
 		if id, err := r.nextID(tx, standard.TableName()); err != nil {
 			return err
 		} else if id > 0 {
@@ -1172,6 +1200,21 @@ func (r *Repository) UpdateDetectionStandard(id uint, updates map[string]interfa
 		var current models.DetectionStandard
 		if err := tx.First(&current, "id = ?", id).Error; err != nil {
 			return err
+		}
+		if rawProjectID, ok := normalizedUpdates["project_id"]; ok {
+			projectID, err := detectionStandardProjectIDValue(rawProjectID)
+			if err != nil {
+				return err
+			}
+			if projectID != nil {
+				projectGroup, err := projectGroupForID(tx, *projectID)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(fmt.Sprint(normalizedUpdates["project_group"])) == "" && projectGroup != "" {
+					normalizedUpdates["project_group"] = projectGroup
+				}
+			}
 		}
 		targetVersion := current.Version + 1
 		if explicitVersion, ok := normalizedUpdates["version"]; ok {
@@ -1338,6 +1381,7 @@ func computeDetectionStandardHash(standard models.DetectionStandard, items []mod
 		DisplayNameEN    string     `json:"display_name_en"`
 		DisplayNameJA    string     `json:"display_name_ja"`
 		ProjectCode      string     `json:"project_code"`
+		ProjectGroup     string     `json:"project_group"`
 		Mode             string     `json:"mode"`
 		ReportTemplateID *uint      `json:"report_template_id"`
 		Version          int        `json:"version"`
@@ -1350,6 +1394,7 @@ func computeDetectionStandardHash(standard models.DetectionStandard, items []mod
 		DisplayNameEN:    strings.TrimSpace(standard.DisplayNameEN),
 		DisplayNameJA:    strings.TrimSpace(standard.DisplayNameJA),
 		ProjectCode:      strings.TrimSpace(standard.ProjectCode),
+		ProjectGroup:     strings.TrimSpace(standard.ProjectGroup),
 		Mode:             strings.TrimSpace(standard.Mode),
 		ReportTemplateID: standard.ReportTemplateID,
 		Version:          standard.Version,
@@ -1403,6 +1448,60 @@ func computeDetectionStandardHash(standard models.DetectionStandard, items []mod
 	return hex.EncodeToString(sum[:]), nil
 }
 
+func hydrateDetectionStandardProjectGroup(tx *gorm.DB, standard *models.DetectionStandard) error {
+	if standard == nil || standard.ProjectID == nil || strings.TrimSpace(standard.ProjectGroup) != "" {
+		return nil
+	}
+	projectGroup, err := projectGroupForID(tx, *standard.ProjectID)
+	if err != nil {
+		return err
+	}
+	standard.ProjectGroup = projectGroup
+	return nil
+}
+
+func projectGroupForID(tx *gorm.DB, projectID uint) (string, error) {
+	var project models.Project
+	if err := tx.Select("id", "project_group").First(&project, "id = ?", projectID).Error; err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(project.ProjectGroup), nil
+}
+
+func detectionStandardProjectIDValue(value interface{}) (*uint, error) {
+	switch v := value.(type) {
+	case nil:
+		return nil, nil
+	case uint:
+		return &v, nil
+	case *uint:
+		return v, nil
+	case uint64:
+		parsed := uint(v)
+		return &parsed, nil
+	case int:
+		if v <= 0 {
+			return nil, fmt.Errorf("project_id must be positive")
+		}
+		parsed := uint(v)
+		return &parsed, nil
+	case int64:
+		if v <= 0 {
+			return nil, fmt.Errorf("project_id must be positive")
+		}
+		parsed := uint(v)
+		return &parsed, nil
+	case float64:
+		if v <= 0 || v != float64(uint(v)) {
+			return nil, fmt.Errorf("project_id must be positive integer")
+		}
+		parsed := uint(v)
+		return &parsed, nil
+	default:
+		return nil, fmt.Errorf("invalid project_id")
+	}
+}
+
 func loadTagsByVarID(db *gorm.DB, items []models.DetectionStandardItem) (map[int64]models.TagConfig, error) {
 	varIDs := make([]int64, 0, len(items))
 	seen := make(map[int64]struct{}, len(items))
@@ -1426,6 +1525,63 @@ func loadTagsByVarID(db *gorm.DB, items []models.DetectionStandardItem) (map[int
 		tagByVarID[tag.VarID] = tag
 	}
 	return tagByVarID, nil
+}
+
+func remapDetectionStandardItemsToProject(db *gorm.DB, items []models.DetectionStandardItem, projectID uint) ([]models.DetectionStandardItem, map[int64]models.TagConfig, error) {
+	tagByVarID, err := loadTagsByVarID(db, items)
+	if err != nil {
+		return nil, nil, err
+	}
+	varNames := make([]string, 0, len(items))
+	seenNames := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		name := strings.TrimSpace(item.VarName)
+		if name == "" {
+			continue
+		}
+		if _, ok := seenNames[name]; ok {
+			continue
+		}
+		seenNames[name] = struct{}{}
+		varNames = append(varNames, name)
+	}
+	tagsByName := make(map[string]models.TagConfig, len(varNames))
+	if len(varNames) > 0 {
+		var projectTags []models.TagConfig
+		if err := db.Where("project_id = ? AND enabled = ? AND var_name IN ?", projectID, true, varNames).Find(&projectTags).Error; err != nil {
+			return nil, nil, err
+		}
+		for _, tag := range projectTags {
+			applyTagPersistenceDefaults(&tag)
+			tagsByName[strings.TrimSpace(tag.VarName)] = tag
+		}
+	}
+	remapped := make([]models.DetectionStandardItem, 0, len(items))
+	for _, item := range items {
+		currentTag, currentOK := tagByVarID[item.VarID]
+		if currentOK && currentTag.ProjectID != nil && *currentTag.ProjectID == projectID && currentTag.Enabled {
+			remapped = append(remapped, item)
+			continue
+		}
+		tag, ok := tagsByName[strings.TrimSpace(item.VarName)]
+		if !ok {
+			return nil, nil, fmt.Errorf("detection standard item %q cannot be mapped to project_id %d", item.VarName, projectID)
+		}
+		item.VarID = tag.VarID
+		item.VarName = firstNonEmpty(tag.VarName, item.VarName)
+		item.DisplayName = firstNonEmpty(tag.DisplayName, item.DisplayName)
+		item.DisplayNameEN = firstNonEmpty(tag.DisplayNameEN, item.DisplayNameEN)
+		item.DisplayNameJA = firstNonEmpty(tag.DisplayNameJA, item.DisplayNameJA)
+		if strings.TrimSpace(item.Unit) == "" {
+			item.Unit = tag.Unit
+		}
+		if item.DecimalPlaces == 0 {
+			item.DecimalPlaces = tag.DecimalPlaces
+		}
+		tagByVarID[tag.VarID] = tag
+		remapped = append(remapped, item)
+	}
+	return remapped, tagByVarID, nil
 }
 
 func makeRunStandardItems(task *models.DetectionTask, standard models.DetectionStandard, items []models.DetectionStandardItem, tagByVarID map[int64]models.TagConfig, now time.Time) []models.DetectionRunStandardItem {

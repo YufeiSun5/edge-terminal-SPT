@@ -12,6 +12,7 @@ type Project struct {
 	DisplayNameEN  string    `gorm:"column:display_name_en;size:128" json:"display_name_en"`
 	DisplayNameJA  string    `gorm:"column:display_name_ja;size:128" json:"display_name_ja"`
 	ModelName      string    `gorm:"column:model_name;size:128" json:"model_name"`
+	ProjectGroup   string    `gorm:"column:project_group;size:64;index" json:"project_group"`
 	ImageRef       string    `gorm:"column:image_ref;size:255" json:"image_ref"`
 	Enabled        bool      `gorm:"column:enabled;default:true;index" json:"enabled"`
 	Blocked        bool      `gorm:"column:blocked;default:false;index" json:"blocked"`

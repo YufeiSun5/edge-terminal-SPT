@@ -374,7 +374,7 @@ HTTP 控制 handler 只做鉴权、幂等、参数校验、审计和响应映射
 }
 ```
 
-报表请求解析复用检测启动时的 `report_request` 规则：支持 `reports[]`、`template_id/template_code`、`variables/var_ids/variable_names` 和 `params`，落表后仍由外部数据库同步软件同步到主服务器，主服务器生成自己的报表任务和文件资产。
+报表请求解析复用检测启动时的 `report_request` 规则：支持 `reports[]`、`template_id/template_code`、`variables/var_ids/variable_names` 和 `params`，落表后主服务器查询视角可见即可生成自己的报表任务和文件资产；应用层不实现数据库同步。
 
 ## 审计
 

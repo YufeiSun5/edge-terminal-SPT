@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sys_projects (
   display_name_en VARCHAR(128) DEFAULT '',
   display_name_ja VARCHAR(128) DEFAULT '',
   model_name VARCHAR(128) DEFAULT '',
+  project_group VARCHAR(64) DEFAULT '',
   image_ref VARCHAR(255) DEFAULT '',
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   blocked BOOLEAN NOT NULL DEFAULT FALSE,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS sys_projects (
   UNIQUE KEY uk_projects_code (project_code),
   INDEX idx_projects_site_no (site_no),
   INDEX idx_projects_edge_instance_id (edge_instance_id),
+  INDEX idx_projects_group (project_group),
   INDEX idx_projects_enabled (enabled),
   INDEX idx_projects_blocked (blocked)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -378,6 +380,7 @@ CREATE TABLE IF NOT EXISTS sys_detection_standards (
   display_name_ja VARCHAR(128) DEFAULT '',
   project_id BIGINT UNSIGNED NULL,
   project_code VARCHAR(64) DEFAULT '',
+  project_group VARCHAR(64) DEFAULT '',
   mode VARCHAR(64) DEFAULT '',
   report_template_id BIGINT UNSIGNED NULL,
   version INT NOT NULL DEFAULT 1,
@@ -393,6 +396,7 @@ CREATE TABLE IF NOT EXISTS sys_detection_standards (
   UNIQUE KEY uk_detection_standards_code (standard_code),
   INDEX idx_detection_standards_project_id (project_id),
   INDEX idx_detection_standards_project_code (project_code),
+  INDEX idx_detection_standards_project_group (project_group),
   INDEX idx_detection_standards_mode (mode),
   INDEX idx_detection_standards_report_template_id (report_template_id),
   INDEX idx_detection_standards_enabled (enabled),
@@ -406,6 +410,8 @@ CREATE TABLE IF NOT EXISTS sys_report_templates (
   display_name VARCHAR(128) DEFAULT '',
   file_ref VARCHAR(512) NOT NULL,
   file_kind VARCHAR(32) NOT NULL DEFAULT 'xlsx',
+  file_sha256 VARCHAR(64) DEFAULT '',
+  file_size BIGINT NOT NULL DEFAULT 0,
   version INT NOT NULL DEFAULT 1,
   params_schema_json TEXT NULL,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -519,7 +525,7 @@ CREATE TABLE IF NOT EXISTS sys_detection_tasks (
   stop_reason VARCHAR(255) DEFAULT '',
   operator_note VARCHAR(512) DEFAULT '',
   custom_config_json TEXT NULL,
-  template_ref VARCHAR(128) DEFAULT '',
+  template_ref VARCHAR(512) DEFAULT '',
   report_template_id BIGINT UNSIGNED NULL,
   report_template_code VARCHAR(64) DEFAULT '',
   report_template_version INT NOT NULL DEFAULT 0,
@@ -536,6 +542,44 @@ CREATE TABLE IF NOT EXISTS sys_detection_tasks (
   INDEX idx_detection_report_template_id (report_template_id),
   INDEX idx_detection_status (status),
   INDEX idx_detection_end_policy (end_policy)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS sys_detection_plans (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  plan_no VARCHAR(128) NOT NULL,
+  source_system VARCHAR(64) NOT NULL,
+  external_plan_id VARCHAR(128) NOT NULL,
+  external_order_no VARCHAR(128) DEFAULT '',
+  factory_no VARCHAR(128) NOT NULL,
+  customer_name VARCHAR(128) DEFAULT '',
+  device_model VARCHAR(128) DEFAULT '',
+  test_item_code VARCHAR(64) DEFAULT '',
+  test_item_name VARCHAR(128) DEFAULT '',
+  test_sequence INT NOT NULL DEFAULT 0,
+  mode VARCHAR(64) DEFAULT 'standard',
+  standard_code VARCHAR(64) NOT NULL,
+  report_request_json TEXT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  owner_edge_instance_id VARCHAR(64) DEFAULT '',
+  owner_project_id BIGINT UNSIGNED NULL,
+  owner_project_code VARCHAR(64) DEFAULT '',
+  started_task_id BIGINT UNSIGNED NULL,
+  started_at DATETIME(3) NULL,
+  cancelled_at DATETIME(3) NULL,
+  error_message VARCHAR(512) DEFAULT '',
+  sync_scope VARCHAR(32) NOT NULL DEFAULT 'global',
+  edge_instance_id VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_node VARCHAR(64) NOT NULL DEFAULT '',
+  updated_by_user VARCHAR(128) NOT NULL DEFAULT '',
+  created_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NULL,
+  UNIQUE KEY uk_detection_plans_plan_no (plan_no),
+  UNIQUE KEY uk_detection_plans_source_external (source_system, external_plan_id),
+  INDEX idx_detection_plans_status (status),
+  INDEX idx_detection_plans_factory_no (factory_no),
+  INDEX idx_detection_plans_standard_code (standard_code),
+  INDEX idx_detection_plans_owner_task (owner_edge_instance_id, owner_project_id, started_task_id),
+  INDEX idx_detection_plans_external_order (external_order_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS detection_run_notes (
@@ -1014,20 +1058,21 @@ ON DUPLICATE KEY UPDATE
   enabled = VALUES(enabled),
   updated_at = NOW(3);
 
-INSERT INTO sys_projects (project_code, site_no, name, display_name, display_name_en, display_name_ja, model_name, enabled, blocked, placeholder, created_at, updated_at)
+INSERT INTO sys_projects (project_code, site_no, name, display_name, display_name_en, display_name_ja, model_name, project_group, enabled, blocked, placeholder, created_at, updated_at)
 VALUES
-  ('AC-01', 'PLC01', '1号精密空调', '1号精密空调', 'Precision AC 1', '精密空調1号機', '', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
-  ('AC-02', 'PLC02', '2号精密空调', '2号精密空调', 'Precision AC 2', '精密空調2号機', '', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
-  ('AC-03', 'PLC03', '3号精密空调', '3号精密空调', 'Precision AC 3', '精密空調3号機', '', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
-  ('AC-04', 'PLC04', '4号精密空调', '4号精密空调', 'Precision AC 4', '精密空調4号機', '', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
-  ('AC-05', 'PLC05', '5号精密空调', '5号精密空调', 'Precision AC 5', '精密空調5号機', '', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
-  ('AC-06', 'PLC06', '6号精密空调', '6号精密空调', 'Precision AC 6', '精密空調6号機', '', TRUE, FALSE, TRUE, NOW(3), NOW(3))
+  ('AC-01', 'PLC01', '1号精密空调', '1号精密空调', 'Precision AC 1', '精密空調1号機', '', 'AC', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
+  ('AC-02', 'PLC02', '2号精密空调', '2号精密空调', 'Precision AC 2', '精密空調2号機', '', 'AC', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
+  ('AC-03', 'PLC03', '3号精密空调', '3号精密空调', 'Precision AC 3', '精密空調3号機', '', 'AC', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
+  ('AC-04', 'PLC04', '4号精密空调', '4号精密空调', 'Precision AC 4', '精密空調4号機', '', 'AC', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
+  ('AC-05', 'PLC05', '5号精密空调', '5号精密空调', 'Precision AC 5', '精密空調5号機', '', 'AC', TRUE, FALSE, TRUE, NOW(3), NOW(3)),
+  ('AC-06', 'PLC06', '6号精密空调', '6号精密空调', 'Precision AC 6', '精密空調6号機', '', 'AC', TRUE, FALSE, TRUE, NOW(3), NOW(3))
 ON DUPLICATE KEY UPDATE
   site_no = VALUES(site_no),
   name = VALUES(name),
   display_name = VALUES(display_name),
   display_name_en = VALUES(display_name_en),
   display_name_ja = VALUES(display_name_ja),
+  project_group = CASE WHEN sys_projects.project_group = '' THEN VALUES(project_group) ELSE sys_projects.project_group END,
   updated_at = NOW(3);
 
 INSERT INTO sys_tags (var_id, gateway_id, source_topic, source_path, raw_name, project_id, project_code, var_group, var_name, display_name, json_path, data_type, unit, decimal_places, scale_factor, offset_val, discovered, enabled, created_at, updated_at)

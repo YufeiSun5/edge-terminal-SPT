@@ -17,7 +17,7 @@ type VariablesService struct {
 	edgeInstanceID string
 }
 
-const maxKIOTestProjectCount = 12
+const maxKIOTestProjectCount = 8
 
 type CreateVariableInput struct {
 	VarID                  int64
@@ -163,7 +163,7 @@ func (s *VariablesService) BulkRemapKIOProjects(input BulkRemapKIOProjectsInput)
 	input = normalizeBulkRemapKIOInput(input)
 	result := BulkRemapKIOProjectsResult{DryRun: input.DryRun, ProjectCount: input.ProjectCount}
 	if input.ProjectCount > maxKIOTestProjectCount {
-		return result, fmt.Errorf("project_count must be between 1 and %d; KIO field tests are constrained to AC-01..AC-12", maxKIOTestProjectCount)
+		return result, fmt.Errorf("project_count must be between 1 and %d; KIO field tests are constrained to AC-01..AC-08", maxKIOTestProjectCount)
 	}
 	projects := make(map[int]models.Project, input.ProjectCount)
 	for projectNo := 1; projectNo <= input.ProjectCount; projectNo++ {
@@ -600,7 +600,7 @@ func firstNonEmpty(values ...string) string {
 
 func normalizeBulkRemapKIOInput(input BulkRemapKIOProjectsInput) BulkRemapKIOProjectsInput {
 	if input.ProjectCount <= 0 {
-		input.ProjectCount = 12
+		input.ProjectCount = maxKIOTestProjectCount
 	}
 	if input.ProjectCodePrefix == "" {
 		input.ProjectCodePrefix = "AC"

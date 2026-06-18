@@ -9,6 +9,12 @@ import type {
   CommandAcceptedResponse,
   DetectionRun,
   DetectionRunEventsResponse,
+  DetectionPlan,
+  DetectionPlanListParams,
+  DetectionPlanListResponse,
+  DetectionPlanStartPayload,
+  DetectionPlanStartResponse,
+  DetectionPlanUpdatePayload,
   DetectionRunListParams,
   DetectionRunListResponse,
   DetectionRunNotePayload,
@@ -38,15 +44,21 @@ import type {
   MainReportJobEventsResponse,
   MainReportJobListParams,
   MainReportJobListResponse,
+  MainReportRegeneratePayload,
   MainReportReadinessResponse,
   NotificationListParams,
   NotificationListResponse,
   NotificationUnreadCount,
+  MainReportNotificationListResponse,
+  MainReportNotificationUnreadCount,
   Project,
   ProjectPatchPayload,
   ProjectPayload,
   ProjectMemberUpdate,
   ProjectMembersResponse,
+  PlanImportConfirmPayload,
+  PlanImportConfirmResult,
+  PlanImportDraft,
   RealtimeVariableListParams,
   StationViewEffectiveResponse,
   StationViewItemsReplacePayload,
@@ -56,7 +68,11 @@ import type {
   TagSnapshot,
   ReportTemplate,
   ReportTemplateListParams,
+  ReportTemplateListResponse,
+  ReportTemplateMappingPayload,
   ReportTemplatePayload,
+  ReportTemplateUploadPayload,
+  ReportTemplateUploadResponse,
   RuntimeChannelDetailsResponse,
   RuntimeNotificationStats,
   RuntimeWorkersResponse,
@@ -197,6 +213,38 @@ export function markAllNotificationsRead(params: NotificationListParams = {}) {
 	if (params.keyword) query.set("keyword", params.keyword);
 	const suffix = query.toString();
 	return postJson<{ updated: number }, Record<string, never>>(`/api/v1/notifications/read-all${suffix ? `?${suffix}` : ""}`, {});
+}
+
+export function getMainReportNotifications(params: NotificationListParams & { job_id?: number } = {}) {
+	const query = new URLSearchParams();
+	if (params.unread !== undefined) query.set("unread", String(params.unread));
+	if (params.level) query.set("level", params.level);
+	if (params.limit !== undefined) query.set("limit", String(params.limit));
+	if (params.offset !== undefined) query.set("offset", String(params.offset));
+	if (params.job_id !== undefined) query.set("job_id", String(params.job_id));
+	const suffix = query.toString();
+	return getJson<MainReportNotificationListResponse>(`/api/v1/main-server/report-notifications${suffix ? `?${suffix}` : ""}`);
+}
+
+export function getMainReportNotificationUnreadCount(params: NotificationListParams & { job_id?: number } = {}) {
+	const query = new URLSearchParams();
+	if (params.level) query.set("level", params.level);
+	if (params.job_id !== undefined) query.set("job_id", String(params.job_id));
+	const suffix = query.toString();
+	return getJson<MainReportNotificationUnreadCount>(`/api/v1/main-server/report-notifications/unread-count${suffix ? `?${suffix}` : ""}`);
+}
+
+export function markMainReportNotificationRead(notificationId: number) {
+  return postJson<{ ok: true }, Record<string, never>>(`/api/v1/main-server/report-notifications/${notificationId}/read`, {});
+}
+
+export function markAllMainReportNotificationsRead(params: NotificationListParams & { job_id?: number } = {}) {
+	const query = new URLSearchParams();
+	if (params.unread !== undefined) query.set("unread", String(params.unread));
+	if (params.level) query.set("level", params.level);
+	if (params.job_id !== undefined) query.set("job_id", String(params.job_id));
+	const suffix = query.toString();
+	return postJson<{ updated: number }, Record<string, never>>(`/api/v1/main-server/report-notifications/read-all${suffix ? `?${suffix}` : ""}`, {});
 }
 
 export function getLimitAlarms(params: LimitAlarmListParams = {}) {
@@ -451,6 +499,26 @@ export function getDetectionRun(runId: number) {
   return getJson<DetectionRun>(`/api/v1/detection-runs/${runId}`).then(withRunAliases);
 }
 
+export function getDetectionPlans(params: DetectionPlanListParams = {}) {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.factory_no) query.set("factory_no", params.factory_no);
+  if (params.keyword) query.set("keyword", params.keyword);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+  const suffix = query.toString();
+  return getJson<DetectionPlanListResponse>(`/api/v1/detection-plans${suffix ? `?${suffix}` : ""}`);
+}
+
+export function updateDetectionPlan(planId: number, payload: DetectionPlanUpdatePayload) {
+  return patchJson<DetectionPlan, DetectionPlanUpdatePayload>(`/api/v1/detection-plans/${planId}`, payload);
+}
+
+export function startDetectionPlan(planId: number, payload: DetectionPlanStartPayload) {
+  return postJson<DetectionPlanStartResponse, DetectionPlanStartPayload>(`/api/v1/detection-plans/${planId}/start`, payload)
+    .then((response) => ({ ...response, task: response.task ? withRunAliases(response.task) : undefined }));
+}
+
 export function getCurrentDetectionRun(projectId: number) {
   const query = new URLSearchParams({ project_id: String(projectId) });
   return getJson<DetectionRun>(`/api/v1/detection-runs/current?${query.toString()}`).then(withRunAliases);
@@ -545,6 +613,67 @@ export function getReportTemplates(params: ReportTemplateListParams = {}) {
   return getJson<ReportTemplate[]>(`/api/v1/report-templates${suffix ? `?${suffix}` : ""}`);
 }
 
+export function getMainReportTemplates(params: ReportTemplateListParams = {}) {
+  const query = new URLSearchParams();
+  if (params.enabled !== undefined) query.set("enabled", String(params.enabled));
+  if (params.keyword) query.set("keyword", params.keyword);
+  const suffix = query.toString();
+  return getJson<ReportTemplateListResponse>(`/api/v1/main-server/report-templates${suffix ? `?${suffix}` : ""}`);
+}
+
+export async function uploadMainReportTemplate(payload: ReportTemplateUploadPayload) {
+  try {
+    const body = new FormData();
+    body.append("file", payload.file);
+    body.append("template_code", payload.template_code);
+    if (payload.name) body.append("name", payload.name);
+    if (payload.display_name) body.append("display_name", payload.display_name);
+    if (payload.version !== undefined) body.append("version", String(payload.version));
+    if (payload.params_schema_json) body.append("params_schema_json", payload.params_schema_json);
+    if (payload.remark) body.append("remark", payload.remark);
+    if (payload.enabled !== undefined) body.append("enabled", String(payload.enabled));
+    const response = await apiClient.post<ReportTemplateUploadResponse>("/api/v1/main-server/report-templates/upload", body);
+    return response.data;
+  } catch (error) {
+    throw toApiError(error);
+  }
+}
+
+export function updateMainReportTemplateMapping(templateId: number, payload: ReportTemplateMappingPayload) {
+  return patchJson<ReportTemplate, ReportTemplateMappingPayload>(`/api/v1/main-server/report-templates/${templateId}/mapping`, payload);
+}
+
+export async function downloadMainReportTemplateArtifact(templateId: number): Promise<MainReportArtifact> {
+  try {
+    const response = await apiClient.get<Blob>(`/api/v1/main-server/report-templates/${templateId}/artifact`, {
+      responseType: "blob",
+    });
+    return {
+      blob: response.data,
+      filename: filenameFromContentDisposition(headerString(response.headers["content-disposition"]), `report-template-${templateId}.xlsx`),
+      contentType: headerString(response.headers["content-type"]) ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
+  } catch (error) {
+    throw toApiError(error);
+  }
+}
+
+export async function parseMainReportPlanImport(file: File, edgeInstanceId?: string) {
+  try {
+    const body = new FormData();
+    body.append("file", file);
+    if (edgeInstanceId) body.append("edge_instance_id", edgeInstanceId);
+    const response = await apiClient.post<PlanImportDraft>("/api/v1/main-server/report-plan-imports/parse", body);
+    return response.data;
+  } catch (error) {
+    throw toApiError(error);
+  }
+}
+
+export function confirmMainReportPlanImport(payload: PlanImportConfirmPayload) {
+  return postJson<PlanImportConfirmResult, PlanImportConfirmPayload>("/api/v1/main-server/report-plan-imports/confirm", payload);
+}
+
 export function getMainReportReadiness(taskId: number, edgeInstanceId?: string) {
   const query = new URLSearchParams({ task_id: String(taskId) });
   if (edgeInstanceId) query.set("edge_instance_id", edgeInstanceId);
@@ -578,6 +707,10 @@ export function retryMainReportJob(jobId: number) {
   return postJson<MainReportJob, Record<string, never>>(`/api/v1/main-server/report-jobs/${jobId}/retry`, {});
 }
 
+export function regenerateMainReportJob(jobId: number, payload: MainReportRegeneratePayload) {
+  return postJson<MainReportJob, MainReportRegeneratePayload>(`/api/v1/main-server/report-jobs/${jobId}/regenerate`, payload);
+}
+
 function filenameFromContentDisposition(value: string | undefined, fallback: string) {
   if (!value) return fallback;
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
@@ -599,6 +732,21 @@ export async function downloadMainReportArtifact(jobId: number): Promise<MainRep
       blob: response.data,
       filename: filenameFromContentDisposition(headerString(response.headers["content-disposition"]), `report-job-${jobId}.xlsx`),
       contentType: headerString(response.headers["content-type"]) ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
+  } catch (error) {
+    throw toApiError(error);
+  }
+}
+
+export async function downloadMainServerPackage(payload: { task_id: number; keys: string[]; edge_instance_id?: string }): Promise<MainReportArtifact> {
+  try {
+    const response = await apiClient.post<Blob>("/api/v1/main-server/download-packages", payload, {
+      responseType: "blob",
+    });
+    return {
+      blob: response.data,
+      filename: filenameFromContentDisposition(headerString(response.headers["content-disposition"]), `task-${payload.task_id}-download-package.zip`),
+      contentType: headerString(response.headers["content-type"]) ?? "application/zip",
     };
   } catch (error) {
     throw toApiError(error);

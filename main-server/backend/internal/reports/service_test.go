@@ -3,9 +3,12 @@ package reports
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +22,8 @@ import (
 
 func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	db := newReportTestDB(t)
+	artifactDir := t.TempDir()
+	seedBasicReportTemplate(t, db, artifactDir, "PERF")
 	project := query.Project{ProjectCode: "AC-RPT-SVC", Name: "Report Service Project", EdgeInstanceID: "edge-a", Enabled: true}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
@@ -86,7 +91,7 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: t.TempDir(), WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
+	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir, WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
 	result, err := service.EnqueueTask(task.ID, "edge-a", false)
 	if err != nil {
 		t.Fatal(err)
@@ -108,14 +113,11 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	if len(processed) != 1 || processed[0].Status != StatusSuccess || processed[0].ArtifactRef == "" {
 		t.Fatalf("unexpected processed result: %+v", processed)
 	}
-	if _, err := os.Stat(processed[0].ArtifactRef); err != nil {
-		t.Fatalf("manifest missing: %v", err)
-	}
 	path, name, contentType, err := service.Artifact(processed[0].ID)
 	if err != nil {
 		t.Fatalf("artifact should be downloadable: %v", err)
 	}
-	if path != processed[0].ArtifactRef || name != processed[0].ArtifactName || contentType != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
+	if strings.TrimSpace(path) == "" || name != processed[0].ArtifactName || contentType != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" {
 		t.Fatalf("unexpected artifact metadata path=%s name=%s content_type=%s job=%+v", path, name, contentType, processed[0])
 	}
 	workbook, err := excelize.OpenFile(path)
@@ -125,6 +127,13 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	defer func() { _ = workbook.Close() }()
 	if workbook.GetSheetName(0) == "" {
 		t.Fatalf("xlsx artifact has no sheets")
+	}
+	pictures, err := workbook.GetPictures("Customer", "D2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pictures) == 0 {
+		t.Fatalf("expected generated report curve picture in customer report sheet")
 	}
 	assertCellValue(t, workbook, "Customer", "B2", task.TestNo)
 	assertCellValue(t, workbook, "Customer", "B3", "1.25")
@@ -148,8 +157,7 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	if qualifiedMetric.Status != "available" || qualifiedMetric.AvgValue == nil || *qualifiedMetric.AvgValue != 50 {
 		t.Fatalf("expected available qualified two-hour average, got %+v", qualifiedMetric)
 	}
-	manifestPath := filepath.Join(filepath.Dir(processed[0].ArtifactRef), fmt.Sprintf("task-%d-request-%d-manifest.json", processed[0].TaskID, processed[0].RequestID))
-	rawManifest, err := os.ReadFile(manifestPath)
+	rawManifest, _, err := service.store.Get(context.Background(), companionManifestKey(processed[0]))
 	if err != nil {
 		t.Fatalf("manifest should exist: %v", err)
 	}
@@ -196,8 +204,166 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	}
 }
 
+func TestServiceRunDueOnceAutoEnqueuesStoppedReportTasks(t *testing.T) {
+	db := newReportTestDB(t)
+	artifactDir := t.TempDir()
+	seedBasicReportTemplate(t, db, artifactDir, "AUTO")
+	project := query.Project{ProjectCode: "AC-RPT-AUTO", Name: "Auto Report Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
+	started := ended.Add(-2 * time.Hour)
+	task := query.DetectionTask{TestNo: "RUN-RPT-AUTO", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &started, EndedAt: &ended}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := query.DetectionRunReportRequest{
+		TaskID:          task.ID,
+		TestNo:          task.TestNo,
+		ProjectID:       project.ID,
+		ProjectCode:     project.ProjectCode,
+		TemplateCode:    "AUTO",
+		TemplateVersion: 1,
+		VarID:           8701,
+		VarName:         "auto_temp",
+		ReportName:      "自动入队报表",
+		VariablesJSON:   `[{"var_id":"8701"}]`,
+		ParamsJSON:      `{"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B4","source":"metric.avg","var_id":8701,"required":true}]}}`,
+		Status:          "pending",
+	}
+	if err := db.Create(&request).Error; err != nil {
+		t.Fatal(err)
+	}
+	seedReportTaskSnapshots(t, db, project, task, ended, []reportVarSeed{
+		{VarID: 8701, VarName: "auto_temp", DisplayName: "自动温度", Unit: "C", LimitL: floatPtr(10), LimitH: floatPtr(30), Values: []float64{18, 19, 20}},
+	})
+	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir, WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
+	processed, err := service.RunDueOnce(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processed) != 1 || processed[0].Status != StatusSuccess || processed[0].RequestID != request.ID {
+		t.Fatalf("expected worker to auto enqueue and generate one report, got %+v", processed)
+	}
+	jobs, total, _, _, err := service.ListJobs(JobFilter{TaskID: &task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(jobs) != 1 || jobs[0].ID != processed[0].ID {
+		t.Fatalf("expected one persisted auto job, total=%d jobs=%+v processed=%+v", total, jobs, processed)
+	}
+	workbook := openReportWorkbook(t, artifactPath(t, service, processed[0]))
+	defer func() { _ = workbook.Close() }()
+	assertCellValue(t, workbook, "Customer", "B2", task.TestNo)
+	assertCellValue(t, workbook, "Customer", "B4", "19")
+	pictures, err := workbook.GetPictures("Customer", "D2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pictures) == 0 {
+		t.Fatalf("expected auto generated report to include chart picture")
+	}
+}
+
+func TestServiceRegeneratesReportWithParamsOverrideWithoutOverwritingOriginal(t *testing.T) {
+	db := newReportTestDB(t)
+	artifactDir := t.TempDir()
+	seedBasicReportTemplate(t, db, artifactDir, "REGEN")
+	project := query.Project{ProjectCode: "AC-RPT-REGEN", Name: "Report Regeneration Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
+	started := ended.Add(-2 * time.Hour)
+	task := query.DetectionTask{TestNo: "RUN-RPT-REGEN", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &started, EndedAt: &ended}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := query.DetectionRunReportRequest{
+		TaskID:          task.ID,
+		TestNo:          task.TestNo,
+		ProjectID:       project.ID,
+		ProjectCode:     project.ProjectCode,
+		TemplateCode:    "REGEN",
+		TemplateVersion: 1,
+		VarID:           8801,
+		VarName:         "regen_temp",
+		ReportName:      "参数重生成报表",
+		VariablesJSON:   `[{"var_id":"8801"}]`,
+		ParamsJSON:      `{"coefficient":1.25,"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B3","source":"param.coefficient","required":true},{"cell":"B4","source":"metric.avg","var_id":8801,"required":true}]}}`,
+		Status:          "pending",
+	}
+	if err := db.Create(&request).Error; err != nil {
+		t.Fatal(err)
+	}
+	seedReportTaskSnapshots(t, db, project, task, ended, []reportVarSeed{
+		{VarID: 8801, VarName: "regen_temp", DisplayName: "重生成温度", Unit: "C", LimitL: floatPtr(0), LimitH: floatPtr(100), Values: []float64{20, 22, 24}},
+	})
+	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir, WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
+	if _, err := service.EnqueueTask(task.ID, "edge-a", false); err != nil {
+		t.Fatal(err)
+	}
+	processed, err := service.RunDueOnce(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processed) != 1 || processed[0].Status != StatusSuccess {
+		t.Fatalf("expected original report success, got %+v", processed)
+	}
+	original := processed[0]
+	originalPath := artifactPath(t, service, original)
+	originalWorkbook := openReportWorkbook(t, originalPath)
+	assertCellValue(t, originalWorkbook, "Customer", "B3", "1.25")
+	_ = originalWorkbook.Close()
+
+	regenerated, err := service.RegenerateJobWithParams(original.ID, RegenerateReportInput{
+		ParamsJSON: `{"coefficient":2.5,"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B3","source":"param.coefficient","required":true},{"cell":"B4","source":"metric.avg","var_id":8801,"required":true}]}}`,
+		Reason:     "adjust coefficient",
+		Operator:   "tester",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regenerated.ID == original.ID || regenerated.ParentJobID == nil || *regenerated.ParentJobID != original.ID || regenerated.GenerationType != "params_override" {
+		t.Fatalf("unexpected regenerated job identity: original=%+v regenerated=%+v", original, regenerated)
+	}
+	processed, err = service.RunDueOnce(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var regeneratedDone MainReportJob
+	for _, job := range processed {
+		if job.ID == regenerated.ID {
+			regeneratedDone = job
+		}
+	}
+	if regeneratedDone.ID == 0 || regeneratedDone.Status != StatusSuccess {
+		t.Fatalf("expected regenerated job success, got processed=%+v", processed)
+	}
+	if regeneratedDone.ArtifactRef == original.ArtifactRef {
+		t.Fatalf("regeneration must not overwrite original artifact: original=%s regenerated=%s", original.ArtifactRef, regeneratedDone.ArtifactRef)
+	}
+	regeneratedWorkbook := openReportWorkbook(t, artifactPath(t, service, regeneratedDone))
+	assertCellValue(t, regeneratedWorkbook, "Customer", "B3", "2.5")
+	_ = regeneratedWorkbook.Close()
+	originalWorkbook = openReportWorkbook(t, originalPath)
+	assertCellValue(t, originalWorkbook, "Customer", "B3", "1.25")
+	_ = originalWorkbook.Close()
+	events, _, err := service.ListEvents(regenerated.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reportEventsContain(events, EventEnqueued) || !reportEventsContain(events, EventSucceeded) {
+		t.Fatalf("regenerated job should record lifecycle events, got %+v", events)
+	}
+}
+
 func TestServiceProcessesSameTaskMultiReportRequestsIndependently(t *testing.T) {
 	db := newReportTestDB(t)
+	artifactDir := t.TempDir()
+	seedBasicReportTemplate(t, db, artifactDir, "PERF-A")
+	seedBasicReportTemplate(t, db, artifactDir, "PERF-B")
 	project := query.Project{ProjectCode: "AC-RPT-EB069", Name: "EB069 Multi Report Project", EdgeInstanceID: "edge-a", Enabled: true}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
@@ -255,7 +421,7 @@ func TestServiceProcessesSameTaskMultiReportRequestsIndependently(t *testing.T) 
 		{VarID: 9102, VarName: "pressure", DisplayName: "压力", Unit: "Pa", LimitL: floatPtr(30), LimitH: floatPtr(70), Values: []float64{40, 50, 60}},
 		{VarID: 9103, VarName: "humidity", DisplayName: "湿度", Unit: "%RH", LimitL: floatPtr(40), LimitH: floatPtr(80), Values: []float64{55, 65, 75}},
 	})
-	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: t.TempDir(), WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
+	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir, WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
 	result, err := service.EnqueueTask(task.ID, "edge-a", false)
 	if err != nil {
 		t.Fatal(err)
@@ -290,12 +456,12 @@ func TestServiceProcessesSameTaskMultiReportRequestsIndependently(t *testing.T) 
 	if jobA.ID == 0 || jobB.ID == 0 || jobA.ArtifactRef == jobB.ArtifactRef {
 		t.Fatalf("report requests should have independent jobs/artifacts: A=%+v B=%+v", jobA, jobB)
 	}
-	pkgA := assertReportArtifactPackage(t, jobA, []int64{9101, 9102})
-	pkgB := assertReportArtifactPackage(t, jobB, []int64{9103})
+	pkgA := assertReportArtifactPackage(t, service, jobA, []int64{9101, 9102})
+	pkgB := assertReportArtifactPackage(t, service, jobB, []int64{9103})
 	if pkgA.Reports[0].ReportName != "性能报表A" || pkgB.Reports[0].ReportName != "性能报表B" {
 		t.Fatalf("report names crossed: A=%s B=%s", pkgA.Reports[0].ReportName, pkgB.Reports[0].ReportName)
 	}
-	workbookA := openReportWorkbook(t, jobA.ArtifactRef)
+	workbookA := openReportWorkbook(t, artifactPath(t, service, jobA))
 	defer func() { _ = workbookA.Close() }()
 	assertCellValue(t, workbookA, "CustomerA", "B2", task.TestNo)
 	assertCellValue(t, workbookA, "CustomerA", "B3", "性能报表A")
@@ -305,7 +471,7 @@ func TestServiceProcessesSameTaskMultiReportRequestsIndependently(t *testing.T) 
 	assertCellValue(t, workbookA, "CustomerA", "B7", "Pa")
 	assertCellValue(t, workbookA, "CustomerA", "B8", "1.25")
 	assertCellValue(t, workbookA, "CustomerA", "B9", "30")
-	workbookB := openReportWorkbook(t, jobB.ArtifactRef)
+	workbookB := openReportWorkbook(t, artifactPath(t, service, jobB))
 	defer func() { _ = workbookB.Close() }()
 	assertCellValue(t, workbookB, "CustomerB", "C2", task.TestNo)
 	assertCellValue(t, workbookB, "CustomerB", "C3", "性能报表B")
@@ -321,21 +487,7 @@ func TestServiceFillsCustomerWorkbookCellsAndTracePackage(t *testing.T) {
 	artifactDir := t.TempDir()
 	templatePath := filepath.Join(artifactDir, "customer-template.xlsx")
 	writeCustomerTemplateWorkbook(t, templatePath)
-	if err := db.Create(&query.ReportTemplate{TemplateCode: "CUSTOMER-CELL-MAP", Name: "Customer Cell Map", DisplayName: "客户模板", FileRef: templatePath, FileKind: "xlsx", Version: 1, Enabled: true}).Error; err != nil {
-		t.Fatal(err)
-	}
-	project := query.Project{ProjectCode: "AC-RPT-CUSTOMER", Name: "Customer Workbook Project", EdgeInstanceID: "edge-a", Enabled: true}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
-	started := ended.Add(-3 * time.Hour)
-	task := query.DetectionTask{TestNo: "RUN-EB069-CUSTOMER", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &started, EndedAt: &ended}
-	if err := db.Create(&task).Error; err != nil {
-		t.Fatal(err)
-	}
-	paramsJSON := `{
-		"judgement": "OK",
+	templateMappingJSON := `{
 		"cell_mapping": {
 			"version": 1,
 			"sheet": "Customer_Report",
@@ -355,6 +507,20 @@ func TestServiceFillsCustomerWorkbookCellsAndTracePackage(t *testing.T) {
 			]
 		}
 	}`
+	if err := db.Create(&query.ReportTemplate{TemplateCode: "CUSTOMER-CELL-MAP", Name: "Customer Cell Map", DisplayName: "客户模板", FileRef: templatePath, FileKind: "xlsx", Version: 1, ParamsSchemaJSON: templateMappingJSON, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	project := query.Project{ProjectCode: "AC-RPT-CUSTOMER", Name: "Customer Workbook Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
+	started := ended.Add(-3 * time.Hour)
+	task := query.DetectionTask{TestNo: "RUN-EB069-CUSTOMER", ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &started, EndedAt: &ended}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	paramsJSON := `{"judgement":"OK"}`
 	request := query.DetectionRunReportRequest{
 		TaskID:          task.ID,
 		TestNo:          task.TestNo,
@@ -386,7 +552,7 @@ func TestServiceFillsCustomerWorkbookCellsAndTracePackage(t *testing.T) {
 	if len(processed) != 1 || processed[0].Status != StatusSuccess {
 		t.Fatalf("expected customer workbook report success, got %+v", processed)
 	}
-	workbook := openReportWorkbook(t, processed[0].ArtifactRef)
+	workbook := openReportWorkbook(t, artifactPath(t, service, processed[0]))
 	defer func() { _ = workbook.Close() }()
 	assertCellValue(t, workbook, "Report_Run", "B14", templatePath)
 	assertCellValue(t, workbook, "Customer_Report", "A1", "Customer Acceptance Template")
@@ -403,8 +569,8 @@ func TestServiceFillsCustomerWorkbookCellsAndTracePackage(t *testing.T) {
 	assertCellValue(t, workbook, "Customer_Report", "B12", "OK")
 	assertCellValue(t, workbook, "Customer_Report", "B13", "C")
 
-	packagePayload := assertReportArtifactPackage(t, processed[0], []int64{9401})
-	manifestPackage := readManifestReportPackage(t, processed[0])
+	packagePayload := assertReportArtifactPackage(t, service, processed[0], []int64{9401})
+	manifestPackage := readManifestReportPackage(t, service, processed[0])
 	customerVar := packagePayload.Reports[0].Variables[0]
 	manifestVar := manifestPackage.Reports[0].Variables[0]
 	if packagePayload.Task.TestNo != task.TestNo || manifestPackage.Task.TestNo != task.TestNo {
@@ -492,6 +658,8 @@ func TestServiceEB069NegativeBoundaries(t *testing.T) {
 
 	t.Run("insufficient qualified window is visible in package", func(t *testing.T) {
 		db := newReportTestDB(t)
+		artifactDir := t.TempDir()
+		seedBasicReportTemplate(t, db, artifactDir, "SHORT-WINDOW")
 		project, task := seedReportTaskWithRequests(t, db, "AC-RPT-SHORT-WINDOW", "edge-a", []query.DetectionRunReportRequest{
 			{TemplateCode: "SHORT-WINDOW", VarID: 9321, VarName: "temp", VariablesJSON: `[{"var_id":"9321"}]`, Status: "pending"},
 		})
@@ -499,7 +667,7 @@ func TestServiceEB069NegativeBoundaries(t *testing.T) {
 		seedReportTaskSnapshots(t, db, project, task, ended, []reportVarSeed{
 			{VarID: 9321, VarName: "temp", DisplayName: "温度", Unit: "C", LimitL: floatPtr(0), LimitH: floatPtr(30), Offsets: []time.Duration{-30 * time.Minute, 0}, Values: []float64{10, 12}},
 		})
-		service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: t.TempDir(), WaitingDelay: time.Millisecond})
+		service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir, WaitingDelay: time.Millisecond})
 		if _, err := service.EnqueueTask(task.ID, "edge-a", false); err != nil {
 			t.Fatal(err)
 		}
@@ -510,17 +678,18 @@ func TestServiceEB069NegativeBoundaries(t *testing.T) {
 		if len(processed) != 1 || processed[0].Status != StatusSuccess {
 			t.Fatalf("short but synchronized data should generate report, got %+v", processed)
 		}
-		pkg := assertReportArtifactPackage(t, processed[0], []int64{9321})
+		pkg := assertReportArtifactPackage(t, service, processed[0], []int64{9321})
 		if status := pkg.Reports[0].Variables[0].Metrics.QualifiedTwoHours.Status; status != "insufficient" {
 			t.Fatalf("expected insufficient qualified two-hour window, got %s", status)
 		}
 	})
 
-	t.Run("missing template fallback and single report mapping failure are isolated", func(t *testing.T) {
+	t.Run("missing template and single report mapping failure are isolated", func(t *testing.T) {
 		db := newReportTestDB(t)
 		artifactDir := t.TempDir()
+		seedBasicReportTemplate(t, db, artifactDir, "BAD-MAPPING")
 		project, task := seedReportTaskWithRequests(t, db, "AC-RPT-ONE-FAILS", "edge-a", []query.DetectionRunReportRequest{
-			{TemplateCode: "MISSING-TEMPLATE", VarID: 9331, VarName: "temp", ReportName: "fallback ok", VariablesJSON: `[{"var_id":"9331"}]`, ParamsJSON: `{"cell_mapping":{"sheet":"OK","items":[{"cell":"A1","source":"metric.avg","var_id":9331,"required":true}]}}`, Status: "pending"},
+			{TemplateCode: "MISSING-TEMPLATE", VarID: 9331, VarName: "temp", ReportName: "missing template", VariablesJSON: `[{"var_id":"9331"}]`, ParamsJSON: `{"cell_mapping":{"sheet":"OK","items":[{"cell":"A1","source":"metric.avg","var_id":9331,"required":true}]}}`, Status: "pending"},
 			{TemplateCode: "BAD-MAPPING", VarID: 9332, VarName: "pressure", ReportName: "mapping fails", VariablesJSON: `[{"var_id":"9332"}]`, ParamsJSON: `{"cell_mapping":{"sheet":"BAD","items":[{"cell":"A1","source":"param.missing.required","required":true}]}}`, Status: "pending"},
 		})
 		ended := *task.EndedAt
@@ -539,26 +708,19 @@ func TestServiceEB069NegativeBoundaries(t *testing.T) {
 		if len(processed) != 2 {
 			t.Fatalf("expected two processed jobs, got %+v", processed)
 		}
-		var successJob, failedJob MainReportJob
+		failedJobs := 0
 		for _, job := range processed {
-			switch job.Status {
-			case StatusSuccess:
-				successJob = job
-			case StatusFailed:
-				failedJob = job
+			if job.Status != StatusFailed {
+				t.Fatalf("missing template and bad mapping should both fail, got %+v", processed)
 			}
+			if job.ArtifactRef != "" || job.ErrorMessage == "" {
+				t.Fatalf("failed report should not publish artifact and should record error, got %+v", job)
+			}
+			failedJobs++
 		}
-		if successJob.ID == 0 || failedJob.ID == 0 {
-			t.Fatalf("expected one success and one failed job, got %+v", processed)
+		if failedJobs != 2 {
+			t.Fatalf("expected two failed jobs, got %+v", processed)
 		}
-		if failedJob.ArtifactRef != "" || failedJob.ErrorMessage == "" {
-			t.Fatalf("failed report should not publish artifact and should record error, got %+v", failedJob)
-		}
-		workbook := openReportWorkbook(t, successJob.ArtifactRef)
-		defer func() { _ = workbook.Close() }()
-		assertCellValue(t, workbook, "Report_Run", "B14", filepath.Join(artifactDir, DefaultTemplateFileRef))
-		assertCellValue(t, workbook, "Default_Report", "A1", "Spindle Default Report Template")
-		assertCellValue(t, workbook, "OK", "A1", "12")
 	})
 }
 
@@ -590,6 +752,58 @@ func TestEnsureSchemaSeedsDefaultReportTemplate(t *testing.T) {
 	assertCellValue(t, workbook, "Default_Report", "A3", "test_no")
 }
 
+func TestServiceUploadsReportTemplateArtifactAndMapping(t *testing.T) {
+	db := newReportTestDB(t)
+	artifactDir := t.TempDir()
+	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir})
+
+	raw, err := buildDefaultReportTemplateWorkbook()
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, meta, err := service.UploadTemplate(context.Background(), TemplateUploadInput{
+		TemplateCode:     "CUSTOMER-UPLOAD",
+		Name:             "Customer Upload",
+		DisplayName:      "客户上传模板",
+		ParamsSchemaJSON: `{"cell_mapping":{"sheet":"Default_Report","items":[]}}`,
+		Remark:           "uploaded by test",
+		Enabled:          true,
+	}, raw, "customer-upload.xlsx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if template.FileRef != meta.Key || template.FileSHA256 != meta.SHA256 || template.FileSize != meta.Size || template.Version != 1 {
+		t.Fatalf("template artifact metadata mismatch: template=%+v meta=%+v", template, meta)
+	}
+	if !strings.HasPrefix(template.FileRef, "templates/CUSTOMER-UPLOAD/v1/") {
+		t.Fatalf("unexpected template artifact key: %s", template.FileRef)
+	}
+	path, name, contentType, err := service.TemplateArtifact(template.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "CUSTOMER-UPLOAD-v1.xlsx" || contentType != reportXLSXContentType {
+		t.Fatalf("unexpected template artifact metadata path=%s name=%s content_type=%s", path, name, contentType)
+	}
+	workbook := openReportWorkbook(t, path)
+	defer func() { _ = workbook.Close() }()
+	assertCellValue(t, workbook, "Default_Report", "A1", "Spindle Default Report Template")
+
+	updated, err := service.UpdateTemplateMapping(template.ID, `{"cell_mapping":{"sheet":"Report","items":[{"cell":"A1","source":"task.test_no"}]}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(updated.ParamsSchemaJSON, `"source":"task.test_no"`) {
+		t.Fatalf("mapping was not updated: %+v", updated)
+	}
+	if _, _, _, err := service.TemplateArtifact(template.ID + 999); !errors.Is(err, ErrTemplateNotFound) {
+		t.Fatalf("missing template artifact should return ErrTemplateNotFound, got %v", err)
+	}
+	if _, _, err := service.UploadTemplate(context.Background(), TemplateUploadInput{TemplateCode: "BAD", Enabled: true}, []byte("not xlsx"), "bad.xlsx"); !errors.Is(err, ErrInvalidReportTemplate) {
+		t.Fatalf("invalid template upload should fail, got %v", err)
+	}
+}
+
 func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 	db := newReportTestDB(t)
 	artifactDir := t.TempDir()
@@ -597,8 +811,7 @@ func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 	if err := service.EnsureSchema(); err != nil {
 		t.Fatal(err)
 	}
-	defaultTemplatePath := filepath.Join(artifactDir, DefaultTemplateFileRef)
-	if _, err := os.Stat(defaultTemplatePath); err != nil {
+	if _, err := os.Stat(filepath.Join(artifactDir, DefaultTemplateFileRef)); err != nil {
 		t.Fatalf("default template workbook should be created: %v", err)
 	}
 
@@ -654,11 +867,11 @@ func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 		t.Fatalf("expected default template report success, got %+v", processed)
 	}
 
-	workbook := openReportWorkbook(t, processed[0].ArtifactRef)
+	workbook := openReportWorkbook(t, artifactPath(t, service, processed[0]))
 	defer func() { _ = workbook.Close() }()
 	assertCellValue(t, workbook, "Report_Run", "B10", DefaultTemplateCode)
 	assertCellValue(t, workbook, "Report_Run", "B11", "1")
-	assertCellValue(t, workbook, "Report_Run", "B14", defaultTemplatePath)
+	assertCellValue(t, workbook, "Report_Run", "B14", DefaultTemplateFileRef)
 	assertCellValue(t, workbook, "Default_Report", "A1", "Spindle Default Report Template")
 	assertCellValue(t, workbook, "Default_Report", "B3", task.TestNo)
 	assertCellValue(t, workbook, "Default_Report", "B4", project.ProjectCode)
@@ -673,8 +886,8 @@ func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 	assertCellValue(t, workbook, "Default_Report", "B13", "C")
 	assertCellValue(t, workbook, "Default_Report", "B14", "默认模板验收")
 
-	packagePayload := assertReportArtifactPackage(t, processed[0], []int64{9501})
-	manifestPackage := readManifestReportPackage(t, processed[0])
+	packagePayload := assertReportArtifactPackage(t, service, processed[0], []int64{9501})
+	manifestPackage := readManifestReportPackage(t, service, processed[0])
 	packageVar := packagePayload.Reports[0].Variables[0]
 	manifestVar := manifestPackage.Reports[0].Variables[0]
 	if packagePayload.Reports[0].TemplateCode != DefaultTemplateCode || manifestPackage.Reports[0].TemplateVersion != DefaultTemplateVersion {
@@ -691,6 +904,104 @@ func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 	}
 	if manifestVar.Limits.LimitL == nil || *manifestVar.Limits.LimitL != 10 || manifestVar.Limits.LimitH == nil || *manifestVar.Limits.LimitH != 30 || manifestVar.Unit != "C" {
 		t.Fatalf("manifest limits/unit should match Default_Report B11/B12/B13: %+v", manifestVar)
+	}
+}
+
+func TestServiceGeneratesOneSheetTempHumidityFormulaReport(t *testing.T) {
+	db := newReportTestDB(t)
+	artifactDir := t.TempDir()
+	templatePath := filepath.Join(artifactDir, "temp-humidity-formula.xlsx")
+	writeTempHumidityFormulaTemplateWorkbook(t, templatePath)
+	templateMappingJSON := `{
+		"cell_mapping": {
+			"version": 1,
+			"sheet": "TempHumidity",
+			"chart_cell": "D3",
+			"items": [
+				{"cell":"B3","source":"task.test_no","required":true},
+				{"cell":"B4","source":"task.project_code","required":true},
+				{"cell":"B5","source":"task.factory_no","required":true},
+				{"cell":"B7","source":"metric.avg","var_id":9701,"required":true},
+				{"cell":"C7","source":"metric.avg","var_id":9702,"required":true},
+				{"cell":"B8","source":"limit.limit_l","var_id":9701,"required":true},
+				{"cell":"C8","source":"limit.limit_l","var_id":9702,"required":true},
+				{"cell":"B9","source":"limit.limit_h","var_id":9701,"required":true},
+				{"cell":"C9","source":"limit.limit_h","var_id":9702,"required":true},
+				{"cell":"B13","source":"param.temp_coefficient","required":true},
+				{"cell":"C13","source":"param.humidity_coefficient","required":true}
+			]
+		}
+	}`
+	if err := db.Create(&query.ReportTemplate{TemplateCode: "TEMP-HUM-FORMULA", Name: "Temp Humidity Formula", DisplayName: "温湿度公式报表", FileRef: templatePath, FileKind: "xlsx", Version: 1, ParamsSchemaJSON: templateMappingJSON, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	paramsJSON := `{"temp_coefficient":1.1,"humidity_coefficient":0.95}`
+	request := query.DetectionRunReportRequest{
+		TemplateCode:    "TEMP-HUM-FORMULA",
+		TemplateVersion: 1,
+		VarID:           9701,
+		VarName:         "temp",
+		ReportName:      "温湿度公式报表",
+		VariablesJSON:   `[{"var_id":"9701"},{"var_id":"9702"}]`,
+		ParamsJSON:      paramsJSON,
+		Status:          "pending",
+	}
+	project, task := seedReportTaskWithRequests(t, db, "AC-RPT-FORMULA", "edge-a", []query.DetectionRunReportRequest{request})
+	ended := *task.EndedAt
+	seedReportTaskSnapshots(t, db, project, task, ended, []reportVarSeed{
+		{VarID: 9701, VarName: "temp", DisplayName: "温度", Unit: "C", LimitL: floatPtr(0), LimitH: floatPtr(100), Values: []float64{20, 22, 24}},
+		{VarID: 9702, VarName: "humidity", DisplayName: "湿度", Unit: "%RH", LimitL: floatPtr(0), LimitH: floatPtr(100), Values: []float64{40, 50, 60}},
+	})
+
+	service := NewService(db, query.NewStationViewQuery(db), Options{ArtifactDir: artifactDir, WaitingDelay: time.Millisecond, RetryDelay: time.Millisecond})
+	if _, err := service.EnqueueTask(task.ID, "edge-a", false); err != nil {
+		t.Fatal(err)
+	}
+	processed, err := service.RunDueOnce(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processed) != 1 || processed[0].Status != StatusSuccess {
+		t.Fatalf("expected formula report success, got %+v", processed)
+	}
+	workbook := openReportWorkbook(t, artifactPath(t, service, processed[0]))
+	defer func() { _ = workbook.Close() }()
+	if firstSheet := workbook.GetSheetName(0); firstSheet != "TempHumidity" {
+		t.Fatalf("customer sheet should remain the first visible sheet, got %q", firstSheet)
+	}
+	for _, sheet := range []string{"Report_Run", "Report_Request", "Readiness_Checks", "Features", "Manifest_JSON", "Report_Package"} {
+		visible, err := workbook.GetSheetVisible(sheet)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if visible {
+			t.Fatalf("internal sheet %s should be hidden from customer workbook tabs", sheet)
+		}
+	}
+	assertCellValue(t, workbook, "TempHumidity", "B7", "22")
+	assertCellValue(t, workbook, "TempHumidity", "B5", "F-AC-RPT-FORMULA")
+	assertCellValue(t, workbook, "TempHumidity", "C7", "50")
+	assertCellValue(t, workbook, "TempHumidity", "B8", "0")
+	assertCellValue(t, workbook, "TempHumidity", "C9", "100")
+	assertCellValue(t, workbook, "TempHumidity", "B13", "1.1")
+	assertCellValue(t, workbook, "TempHumidity", "C13", "0.95")
+	assertCellFormula(t, workbook, "TempHumidity", "B16", "B7*B13")
+	assertCellFormula(t, workbook, "TempHumidity", "C16", "C7*C13")
+	assertCalculatedCellFloat(t, workbook, "TempHumidity", "B16", 24.2)
+	assertCalculatedCellFloat(t, workbook, "TempHumidity", "C16", 47.5)
+	pictures, err := workbook.GetPictures("TempHumidity", "D3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pictures) == 0 {
+		t.Fatalf("expected first page to include report curve image at TempHumidity!D3")
+	}
+	secondPictures, err := workbook.GetPictures("TempHumidity", "D15")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPictures) == 0 {
+		t.Fatalf("expected humidity curve image on same sheet at TempHumidity!D15")
 	}
 }
 
@@ -798,7 +1109,11 @@ func newReportTestDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&query.Project{},
+		&query.TagConfig{},
 		&query.DetectionTask{},
+		&query.DetectionPlan{},
+		&query.DetectionStandard{},
+		&query.DetectionStandardItem{},
 		&query.DetectionRunStandardItem{},
 		&query.DetectionRunReportRequest{},
 		&query.DetectionRunStorageRoute{},
@@ -852,6 +1167,32 @@ func assertCellValue(t *testing.T, workbook *excelize.File, sheet string, cell s
 	}
 }
 
+func assertCellFormula(t *testing.T, workbook *excelize.File, sheet string, cell string, expectedContains string) {
+	t.Helper()
+	formula, err := workbook.GetCellFormula(sheet, cell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(formula, expectedContains) {
+		t.Fatalf("unexpected %s!%s formula: got %q want to contain %q", sheet, cell, formula, expectedContains)
+	}
+}
+
+func assertCalculatedCellFloat(t *testing.T, workbook *excelize.File, sheet string, cell string, expected float64) {
+	t.Helper()
+	value, err := workbook.CalcCellValue(sheet, cell)
+	if err != nil {
+		t.Fatalf("calculate %s!%s: %v", sheet, cell, err)
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		t.Fatalf("calculated %s!%s should be numeric, got %q", sheet, cell, value)
+	}
+	if math.Abs(parsed-expected) > 0.000001 {
+		t.Fatalf("unexpected calculated %s!%s: got %v want %v", sheet, cell, parsed, expected)
+	}
+}
+
 func openReportWorkbook(t *testing.T, path string) *excelize.File {
 	t.Helper()
 	workbook, err := excelize.OpenFile(path)
@@ -861,12 +1202,18 @@ func openReportWorkbook(t *testing.T, path string) *excelize.File {
 	return workbook
 }
 
-func assertReportArtifactPackage(t *testing.T, job MainReportJob, expectedVarIDs []int64) ReportPackage {
+func artifactPath(t *testing.T, service *Service, job MainReportJob) string {
 	t.Helper()
-	if _, err := os.Stat(job.ArtifactRef); err != nil {
-		t.Fatalf("xlsx artifact missing: %v", err)
+	path, _, _, err := service.Artifact(job.ID)
+	if err != nil {
+		t.Fatalf("artifact should be available: %v", err)
 	}
-	workbook := openReportWorkbook(t, job.ArtifactRef)
+	return path
+}
+
+func assertReportArtifactPackage(t *testing.T, service *Service, job MainReportJob, expectedVarIDs []int64) ReportPackage {
+	t.Helper()
+	workbook := openReportWorkbook(t, artifactPath(t, service, job))
 	defer func() { _ = workbook.Close() }()
 	packageJSON, err := workbook.GetCellValue("Report_Package", "A2")
 	if err != nil {
@@ -900,8 +1247,7 @@ func assertReportArtifactPackage(t *testing.T, job MainReportJob, expectedVarIDs
 			t.Fatalf("expected variable %d in package variables %+v", expected, packagePayload.Reports[0].Variables)
 		}
 	}
-	manifestPath := filepath.Join(filepath.Dir(job.ArtifactRef), fmt.Sprintf("task-%d-request-%d-manifest.json", job.TaskID, job.RequestID))
-	rawManifest, err := os.ReadFile(manifestPath)
+	rawManifest, _, err := service.store.Get(context.Background(), companionManifestKey(job))
 	if err != nil {
 		t.Fatalf("manifest should exist: %v", err)
 	}
@@ -917,10 +1263,9 @@ func assertReportArtifactPackage(t *testing.T, job MainReportJob, expectedVarIDs
 	return packagePayload
 }
 
-func readManifestReportPackage(t *testing.T, job MainReportJob) ReportPackage {
+func readManifestReportPackage(t *testing.T, service *Service, job MainReportJob) ReportPackage {
 	t.Helper()
-	manifestPath := filepath.Join(filepath.Dir(job.ArtifactRef), fmt.Sprintf("task-%d-request-%d-manifest.json", job.TaskID, job.RequestID))
-	rawManifest, err := os.ReadFile(manifestPath)
+	rawManifest, _, err := service.store.Get(context.Background(), companionManifestKey(job))
 	if err != nil {
 		t.Fatalf("manifest should exist: %v", err)
 	}
@@ -934,6 +1279,45 @@ func readManifestReportPackage(t *testing.T, job MainReportJob) ReportPackage {
 		t.Fatalf("manifest should include report_package: %s", string(rawManifest))
 	}
 	return manifest.ReportPackage
+}
+
+func companionManifestKey(job MainReportJob) string {
+	name := fmt.Sprintf("task-%d-request-%d-manifest.json", job.TaskID, job.RequestID)
+	return strings.TrimSuffix(job.ArtifactRef, job.ArtifactName) + name
+}
+
+func seedBasicReportTemplate(t *testing.T, db *gorm.DB, artifactDir string, code string) string {
+	t.Helper()
+	path := filepath.Join(artifactDir, "templates", safeArtifactName(code)+".xlsx")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workbook := excelize.NewFile()
+	if err := workbook.SetSheetName("Sheet1", "Template"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SetCellValue("Template", "A1", code+" template"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SaveAs(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.Close(); err != nil {
+		t.Fatal(err)
+	}
+	template := query.ReportTemplate{
+		TemplateCode: code,
+		Name:         code,
+		DisplayName:  code,
+		FileRef:      path,
+		FileKind:     "xlsx",
+		Version:      1,
+		Enabled:      true,
+	}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func writeCustomerTemplateWorkbook(t *testing.T, path string) {
@@ -974,6 +1358,56 @@ func writeCustomerTemplateWorkbook(t *testing.T, path string) {
 	}
 }
 
+func writeTempHumidityFormulaTemplateWorkbook(t *testing.T, path string) {
+	t.Helper()
+	workbook := excelize.NewFile()
+	defer func() { _ = workbook.Close() }()
+	if err := workbook.SetSheetName("Sheet1", "TempHumidity"); err != nil {
+		t.Fatal(err)
+	}
+	rows := [][]any{
+		{"温湿度检测报表模板"},
+		{"字段", "温度", "湿度"},
+		{"检测编号", "", ""},
+		{"项目编码", "", ""},
+		{},
+		{"指标", "温度", "湿度"},
+		{"合格时段平均值", "", ""},
+		{"下限", "", ""},
+		{"上限", "", ""},
+		{},
+		{"任务参数", "温度系数", "湿度系数"},
+		{"参数说明", "开始检测时传入", "开始检测时传入"},
+		{"系数", "", ""},
+		{},
+		{"公式结果", "温度修正值", "湿度修正值"},
+		{"结果", "", ""},
+	}
+	for rowIndex, row := range rows {
+		for colIndex, value := range row {
+			cell, err := excelize.CoordinatesToCellName(colIndex+1, rowIndex+1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := workbook.SetCellValue("TempHumidity", cell, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := workbook.SetCellFormula("TempHumidity", "B16", "=B7*B13"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SetCellFormula("TempHumidity", "C16", "=C7*C13"); err != nil {
+		t.Fatal(err)
+	}
+	_ = workbook.SetColWidth("TempHumidity", "A", "A", 18)
+	_ = workbook.SetColWidth("TempHumidity", "B", "C", 14)
+	_ = workbook.SetColWidth("TempHumidity", "D", "J", 12)
+	if err := workbook.SaveAs(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type reportVarSeed struct {
 	VarID       int64
 	VarName     string
@@ -993,7 +1427,7 @@ func seedReportTaskWithRequests(t *testing.T, db *gorm.DB, projectCode string, e
 	}
 	ended := time.Now().Add(-time.Minute).Truncate(time.Second)
 	started := ended.Add(-3 * time.Hour)
-	task := query.DetectionTask{TestNo: "RUN-" + projectCode, ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &started, EndedAt: &ended}
+	task := query.DetectionTask{TestNo: "RUN-" + projectCode, FactoryNo: "F-" + projectCode, CustomerName: "Customer " + projectCode, DeviceModel: "Model " + projectCode, ProjectID: project.ID, ProjectCode: project.ProjectCode, Mode: "standard", Status: query.DetectionStatusStopped, StartedAt: &started, EndedAt: &ended}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}

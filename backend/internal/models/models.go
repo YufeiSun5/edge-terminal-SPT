@@ -25,6 +25,11 @@ const (
 	DetectionStatusPaused  = "paused"
 	DetectionStatusStopped = "stopped"
 
+	DetectionPlanStatusPending   = "pending"
+	DetectionPlanStatusStarting  = "starting"
+	DetectionPlanStatusStarted   = "started"
+	DetectionPlanStatusCancelled = "cancelled"
+
 	DetectionEndManualStop    = "manual_stop"
 	DetectionEndAbnormalStop  = "abnormal_stop"
 	DetectionEndFixedDuration = "fixed_duration"

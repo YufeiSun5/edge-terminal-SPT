@@ -13,7 +13,7 @@ import (
 
 func (r *Repository) ListProjects() ([]models.Project, error) {
 	var Projects []models.Project
-	err := r.db.Order("id asc").Find(&Projects).Error
+	err := r.db.Where("enabled = ?", true).Order("id asc").Find(&Projects).Error
 	return Projects, err
 }
 

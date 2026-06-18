@@ -72,6 +72,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.report-settings-layout {
+  grid-template-columns: minmax(360px, 0.84fr) minmax(0, 1.5fr);
+}
+
 .report-panel {
   min-width: 0;
   min-height: 0;
@@ -267,6 +271,57 @@
   flex: 1;
   height: auto;
   min-height: 480px;
+}
+
+.report-upload-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eaecf0;
+}
+
+.report-full-input {
+  width: 100%;
+}
+
+.report-grid-one {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 8px;
+  background: #fcfcfd;
+}
+
+.report-actions-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.report-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.report-summary-grid .ant-statistic {
+  padding: 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.report-import-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.report-empty-panel {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-height: 360px;
 }
 
 .luckysheet-isolated-frame {

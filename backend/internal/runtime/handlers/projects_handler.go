@@ -27,6 +27,7 @@ type createProjectRequest struct {
 	DisplayNameEN  string `json:"display_name_en"`
 	DisplayNameJA  string `json:"display_name_ja"`
 	ModelName      string `json:"model_name"`
+	ProjectGroup   string `json:"project_group"`
 	ImageRef       string `json:"image_ref"`
 	Placeholder    bool   `json:"placeholder"`
 }
@@ -39,6 +40,7 @@ type ProjectPatchRequest struct {
 	DisplayNameEN  *string `json:"display_name_en"`
 	DisplayNameJA  *string `json:"display_name_ja"`
 	ModelName      *string `json:"model_name"`
+	ProjectGroup   *string `json:"project_group"`
 	ImageRef       *string `json:"image_ref"`
 	Enabled        *bool   `json:"enabled"`
 	Blocked        *bool   `json:"blocked"`
@@ -91,6 +93,7 @@ func (h *ProjectsHandler) create(c *gin.Context) {
 		DisplayNameEN:  req.DisplayNameEN,
 		DisplayNameJA:  req.DisplayNameJA,
 		ModelName:      req.ModelName,
+		ProjectGroup:   strings.TrimSpace(req.ProjectGroup),
 		ImageRef:       req.ImageRef,
 		Enabled:        true,
 		Blocked:        false,
@@ -198,6 +201,7 @@ func ProjectUpdates(req ProjectPatchRequest) (map[string]interface{}, error) {
 	setStringUpdate(updates, "display_name_en", req.DisplayNameEN)
 	setStringUpdate(updates, "display_name_ja", req.DisplayNameJA)
 	setStringUpdate(updates, "model_name", req.ModelName)
+	setStringUpdate(updates, "project_group", req.ProjectGroup)
 	setStringUpdate(updates, "image_ref", req.ImageRef)
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled

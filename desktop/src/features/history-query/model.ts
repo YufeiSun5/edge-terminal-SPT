@@ -167,8 +167,8 @@ export function buildTaskLanes(runs: DetectionRun[]): { lanes: TaskLane[], minTi
 
   const timestamps = datedRuns.flatMap((run) => {
     const start = Date.parse(run.started_at ?? '')
-    const end = Date.parse(run.ended_at || run.expected_end_at || run.updated_at || run.started_at || '')
-    return [start, Number.isFinite(end) ? end : start]
+    const rawEnd = Date.parse(run.ended_at || run.expected_end_at || run.updated_at || run.started_at || '')
+    return [start, Number.isFinite(rawEnd) ? rawEnd : start]
   }).filter(Number.isFinite)
 
   const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 7 * 24 * 3600 * 1000
@@ -199,7 +199,7 @@ export function buildTaskLanes(runs: DetectionRun[]): { lanes: TaskLane[], minTi
   return {
     lanes: Array.from(byProject.entries()).map(([projectCode, blocks]) => ({
       projectCode,
-      blocks,
+      blocks: blocks.sort((left, right) => left.startMs - right.startMs || left.id - right.id),
     })),
     minTime,
     maxTime,

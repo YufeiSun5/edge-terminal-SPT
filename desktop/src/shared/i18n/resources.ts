@@ -12,7 +12,18 @@ export const resources = {
         station: '工位操作',
         modelCockpit: '3D 驾驶舱',
         history: '历史查询',
+        historyAndPlans: '历史与计划',
+        historyChildren: {
+          gantt: '甘特图',
+          historyList: '历史',
+          plans: '计划',
+        },
         reports: '报表',
+        reportSettings: '报表设置',
+        reportSettingsChildren: {
+          templates: '模板管理',
+          planImports: '导入计划',
+        },
         notifications: '通知中心',
         alarms: '报警中心',
         variables: '变量设置',
@@ -32,7 +43,8 @@ export const resources = {
       },
       auth: {
         title: '边缘端登录',
-        subtitle: '登录后进入本地工位、历史查询和数据源管理。主站跳转只通过后端签发的一次性 SSO ticket。',
+        subtitle:
+          '登录后进入本地工位、历史查询和数据源管理。主站跳转只通过后端签发的一次性 SSO ticket。',
         username: '账号',
         password: '密码',
         usernameRequired: '请输入账号',
@@ -71,6 +83,7 @@ export const resources = {
           runStopped: '检测停止',
           resultOk: '结果 OK',
           resultNg: '结果 NG',
+          reportJob: '报表任务',
         },
         levels: {
           info: '信息',
@@ -161,8 +174,10 @@ export const resources = {
       reports: {
         eyebrow: '主服务器报表任务',
         title: '报表',
-        subtitle: '读取主服务器同步库中的报表请求、主服务器报表 job、readiness、事件和后端生成的 xlsx 产物。',
-        edgeModeNotice: '边缘端仅维护报表模板和检测启动时的报表请求；报表 job、readiness 和 xlsx 产物生成在主服务器端查看。',
+        subtitle:
+          '读取主服务器同步库中的报表请求、主服务器报表 job、readiness、事件和后端生成的 xlsx 产物。',
+        edgeModeNotice:
+          '边缘端仅维护报表模板和检测启动时的报表请求；报表 job、readiness 和 xlsx 产物生成在主服务器端查看。',
         filters: {
           taskId: '任务 ID',
           edge: '边缘实例',
@@ -238,6 +253,91 @@ export const resources = {
           finishedAt: '完成时间',
         },
       },
+      reportSettings: {
+        eyebrow: '报表设置',
+        mainServerOnly:
+          '报表设置只在主服务器模式开放；边缘端只执行检测，不管理主服务器报表资产。',
+        templates: {
+          title: '模板管理',
+          subtitle:
+            '上传客户 Excel 模板，保存模板副本和单元格映射；正式报表由后端基于模板生成。',
+          listTitle: '报表模板',
+          uploadTitle: '导入模板',
+          pickFile: '选择 xlsx',
+          upload: '上传模板',
+          preview: '模板预览',
+          previewFailed: '模板预览失败',
+          empty: '暂无模板',
+          selectTemplate: '请选择模板',
+          enabled: '启用',
+          disabled: '停用',
+          download: '导出模板副本',
+          downloadHint: '下载后端保存的原始模板副本',
+          downloadStarted: '模板副本已开始下载',
+          downloadFailed: '模板副本下载失败',
+          fileRequired: '请先选择 xlsx 模板文件',
+          uploaded: '模板已上传',
+          uploadFailed: '模板上传失败',
+          mappingTitle: '单元格映射 JSON',
+          mappingPlaceholder:
+            '{"cell_mapping":{"sheet":"Sheet1","items":[{"cell":"A2","source":"task.test_no"}]}}',
+          saveMapping: '保存映射',
+          mappingSaved: '映射已保存',
+          mappingFailed: '映射保存失败',
+          fields: {
+            templateCode: '模板编号',
+            name: '内部名称',
+            displayName: '显示名称',
+            version: '版本',
+            remark: '备注',
+            enabled: '启用模板',
+          },
+          columns: {
+            template: '模板',
+            version: '版本',
+            file: '文件',
+            updatedAt: '更新时间',
+          },
+        },
+        planImport: {
+          title: '导入计划',
+          subtitle:
+            '解析上传 Excel 中的检测任务、检测规则、上下限和报表请求，确认后创建检测配置与待检测计划。',
+          pickFile: '选择计划 xlsx',
+          edge: '目标边缘，可选',
+          parse: '解析',
+          confirm: '确认创建',
+          allowNeedsConfirmation: '允许需人工确认的行',
+          fileRequired: '请先选择计划 Excel',
+          parsed: '已解析 {{count}} 行',
+          parseFailed: '计划解析失败',
+          confirmed: '已创建 {{standards}} 个检测配置、{{plans}} 个待检测计划',
+          confirmFailed: '确认导入失败',
+          empty: '上传计划 Excel 后查看解析结果',
+          ready: '可确认',
+          needsConfirmation: '需确认',
+          issueSummary: '发现 {{count}} 个问题',
+          resultTitle: '导入完成',
+          resultDesc:
+            '检测配置 {{standards}} 个，待检测计划 {{plans}} 个，状态 {{status}}。',
+          summary: {
+            total: '总行数',
+            ready: '可确认行',
+            issues: '问题行',
+            confirm: '需确认',
+          },
+          columns: {
+            row: '行',
+            plan: '计划',
+            project: '项目',
+            projectGroup: '项目组',
+            variable: '变量',
+            limit: '上下限',
+            template: '模板',
+            status: '状态',
+          },
+        },
+      },
       status: {
         online: '在线',
         offline: '离线',
@@ -254,19 +354,22 @@ export const resources = {
       detectionConfig: {
         eyebrow: '标准项与上下限',
         title: '检测配置',
-        subtitle: '按项目维护不同检测标准、上下限、检测方法、保持时间和存储策略。旧 Vue 前端里的检测项已作为参考池保留。',
+        subtitle:
+          '按项目维护不同检测标准、上下限、检测方法、保持时间和存储策略。旧 Vue 前端里的检测项已作为参考池保留。',
         standardList: '检测标准',
         noStandards: '暂无检测标准',
         legacySource: '旧系统检测项',
         noSelection: '未选择标准',
         selectStandard: '选择一个检测标准',
         allStandards: '全部配置',
-        itemsHint: '从变量中选择标准项；判定间隔、超限确认时长、恢复确认时长和存储参与状态分别配置。',
+        itemsHint:
+          '从变量中选择标准项；判定间隔、超限确认时长、恢复确认时长和存储参与状态分别配置。',
       },
       taskFlows: {
         eyebrow: '条件事件与脚本编排',
         title: '任务',
-        subtitle: '按项目维护变量触发、手动触发和脚本动作。任务执行经过后端受控 API、审计和队列，不在前端直接访问数据库或 MQTT。',
+        subtitle:
+          '按项目维护变量触发、手动触发和脚本动作。任务执行经过后端受控 API、审计和队列，不在前端直接访问数据库或 MQTT。',
         projects: {
           title: '项目',
           subtitle: '任务范围',
@@ -323,43 +426,60 @@ export const resources = {
           hint: '正式业务参数会写入 watched STRING 虚拟变量，再由任务系统触发；不会调用手动运行接口，也不会绕过后端直接下设 PLC。',
           requestVariable: '请求变量',
           watchFlowsEmpty: '请选择一个 watched STRING 请求变量。',
-          watchFlowsNone: '当前没有启用任务流监听这个请求变量；写入后不会触发业务。',
+          watchFlowsNone:
+            '当前没有启用任务流监听这个请求变量；写入后不会触发业务。',
           watchFlowsFound: '已找到 {{count}} 个启用任务流监听这个请求变量。',
           command: '指令',
           configParams: '配置参数',
-          configParamsHint: '配置参数包含检测配置和过程参数：检测配置决定标准、时长、合格保持、是否启用存储/报警；过程参数例如进风口面积 inlet_area_m2，可冻结到检测追溯，也可被 PLC 下设计划引用。',
+          configParamsHint:
+            '配置参数包含检测配置和过程参数：检测配置决定标准、时长、合格保持、是否启用存储/报警；过程参数例如进风口面积 inlet_area_m2，可冻结到检测追溯，也可被 PLC 下设计划引用。',
           runControl: '运行控制参数',
-          runControlHint: '用于暂停、恢复、结束、静音和特征值刷新；可填 task_id 精确指定任务，或保留 project_id 由后端定位当前任务。',
+          runControlHint:
+            '用于暂停、恢复、结束、静音和特征值刷新；可填 task_id 精确指定任务，或保留 project_id 由后端定位当前任务。',
           limitAdjust: '运行中限值调整',
-          limitAdjustHint: '只调整当前 running 任务的检测快照，不修改全局变量默认属性或原始检测标准。单变量可直接填 var_id 和限值，批量调整可填 items JSON。',
-          limitItemsPlaceholder: '[{"var_id":1,"limit_h":30,"alarm_enabled":true}]',
+          limitAdjustHint:
+            '只调整当前 running 任务的检测快照，不修改全局变量默认属性或原始检测标准。单变量可直接填 var_id 和限值，批量调整可填 items JSON。',
+          limitItemsPlaceholder:
+            '[{"var_id":1,"limit_h":30,"alarm_enabled":true}]',
           reportRegister: '报表结果登记',
-          reportRegisterHint: '登记某次检测生成的 Excel 报表文件引用，只保存 file_ref，不写入二进制文件。',
+          reportRegisterHint:
+            '登记某次检测生成的 Excel 报表文件引用，只保存 file_ref，不写入二进制文件。',
           storagePrepare: '项目宽表准备',
-          storagePrepareHint: '触发后端 storage_prepare 模块，按项目或任务运行快照准备宽表和动态列；不直接写入采样数据。',
+          storagePrepareHint:
+            '触发后端 storage_prepare 模块，按项目或任务运行快照准备宽表和动态列；不直接写入采样数据。',
           httpRequest: 'HTTP 调用参数',
-          httpRequestHint: '开发者任务模块，用于调用受控 HTTP 接口；headers 必须是 JSON 对象，正式现场控制仍应优先走内置业务模块。',
+          httpRequestHint:
+            '开发者任务模块，用于调用受控 HTTP 接口；headers 必须是 JSON 对象，正式现场控制仍应优先走内置业务模块。',
           processParams: '工艺/报表参数',
-          processParamsHint: '例如进风口面积 inlet_area_m2；这些参数会随本次检测冻结，用于计算、报表和追溯。',
+          processParamsHint:
+            '例如进风口面积 inlet_area_m2；这些参数会随本次检测冻结，用于计算、报表和追溯。',
           reportRequests: '报表请求',
-          reportRequestsHint: '按 report_request.reports[] 生成一张或多张报表；每份报表独立选择模板、变量和 params。',
+          reportRequestsHint:
+            '按 report_request.reports[] 生成一张或多张报表；每份报表独立选择模板、变量和 params。',
           reportName: '报表名称',
           reportVariables: '本次报表变量',
           addReportRequest: '添加报表请求',
           plcWrites: 'PLC 下设计划',
-          plcWritesHint: 'PLC 写入通过后端变量写 service 执行。value_from 可引用 process_params.inlet_area_m2，避免同一个值填两遍。',
-          plcWritesRequireVar: 'PLC 下设行必须选择变量 var_id 才会进入最终 JSON；未选变量的行会被自动忽略。',
+          plcWritesHint:
+            'PLC 写入通过后端变量写 service 执行。value_from 可引用 process_params.inlet_area_m2，避免同一个值填两遍。',
+          plcWritesRequireVar:
+            'PLC 下设行必须选择变量 var_id 才会进入最终 JSON；未选变量的行会被自动忽略。',
           value: '参数值',
           literalValue: '直接值',
           addProcessParam: '添加参数',
           addPLCWrite: '添加下设',
           preview: '请求 JSON 预览',
-          previewHint: '这里就是最终写入 STRING 虚拟变量的内容，提交前请确认字段来源和数值。',
+          previewHint:
+            '这里就是最终写入 STRING 虚拟变量的内容，提交前请确认字段来源和数值。',
           send: '写入并触发',
           sent: '任务请求已写入虚拟变量',
           failed: '任务请求写入失败',
           errors: {
             requestVariableRequired: '请选择 watched STRING 虚拟变量',
+            startTaskFlowRequired:
+              '当前项目没有启用的 start_detection 任务流，请先配置 watched STRING 虚拟变量和启动检测任务流。',
+            taskRequestFlowNotTriggered:
+              '任务请求已写入，但没有命中 watched STRING 任务流，请检查请求变量和任务流配置。',
             invalidJson: '任务请求 JSON 无效，请检查 custom_items 或参数值。',
           },
         },
@@ -382,9 +502,11 @@ export const resources = {
         },
         scripts: {
           condition: '条件脚本',
-          conditionHint: '返回 true 时执行动作。可先使用简单 JavaScript 表达式。',
+          conditionHint:
+            '返回 true 时执行动作。可先使用简单 JavaScript 表达式。',
           action: '动作脚本',
-          actionHint: 'action_type=javascript 时执行；内置动作可只填写 action_payload。',
+          actionHint:
+            'action_type=javascript 时执行；内置动作可只填写 action_payload。',
         },
         messages: {
           saved: '任务已保存',
@@ -411,7 +533,8 @@ export const resources = {
       modelCockpit: {
         eyebrow: '实时感知 · 数据驱动 · 智能运维',
         title: '3D 模型实时驾驶舱',
-        subtitle: '加载现场模型，支持 360 度拖拽查看；模型保持不透明，内部流体作为独立 3D 诊断层显影到模型表面，测点浮窗按模型空间投影并按深度遮挡。',
+        subtitle:
+          '加载现场模型，支持 360 度拖拽查看；模型保持不透明，内部流体作为独立 3D 诊断层显影到模型表面，测点浮窗按模型空间投影并按深度遮挡。',
         metric: {
           limit: '上下限',
           optimizationLabel: '优化率',
@@ -459,7 +582,8 @@ export const resources = {
           fit: '自适应视角',
         },
         messages: {
-          sampleFallback: '本地后端实时变量暂不可用，当前使用样例波形驱动浮窗。',
+          sampleFallback:
+            '本地后端实时变量暂不可用，当前使用样例波形驱动浮窗。',
         },
         fluid: {
           eyebrow: '内部可视化',
@@ -481,7 +605,8 @@ export const resources = {
           eyebrow: '探索结论',
           title: '可继续工程化',
           drag: 'OrbitControls 已接入，用户可 360 度拖动查看。',
-          fluid: '流体层作为独立 Three.js group，以诊断显影方式叠加，可替换为真实管线或 CFD 数据。',
+          fluid:
+            '流体层作为独立 Three.js group，以诊断显影方式叠加，可替换为真实管线或 CFD 数据。',
           labels: '浮窗锚点位于模型空间，通过射线检测判断是否被模型遮挡。',
         },
       },
@@ -528,8 +653,10 @@ export const resources = {
         sidecarMissing: '未找到 edge-backend.exe。请先运行后端打包脚本。',
         backendOffline: '本地后端暂不可用，界面会继续轮询健康状态。',
         mainServerMode: '主服务器模式只检查后端健康，不启动边缘端 sidecar。',
-        authPending: '本地登录/JWT 已接入，当前页面通过内存 token 和 capability 守卫访问。',
-        ssoPending: '主站跳转使用后端一次性 SSO ticket；主站地址或 service token 未配置时只提示，不拼接 token。',
+        authPending:
+          '本地登录/JWT 已接入，当前页面通过内存 token 和 capability 守卫访问。',
+        ssoPending:
+          '主站跳转使用后端一次性 SSO ticket；主站地址或 service token 未配置时只提示，不拼接 token。',
         noData: '暂无数据',
       },
       station: {
@@ -563,6 +690,8 @@ export const resources = {
           idle: '未运行检测',
           running: '检测运行中',
           startTitle: '开始检测任务',
+          plan: '待检测任务',
+          planPlaceholder: '选择派发计划',
           project: '项目',
           factoryNo: '出厂编号',
           customerName: '客户名称',
@@ -575,9 +704,17 @@ export const resources = {
           configName: '检测配置',
           reportTemplate: '报表模板',
           reportRequests: '报表请求',
-          reportRequestsHint: '每一行会冻结为 report_request.reports[] 中的一份报表请求。',
+          reportRequestsHint:
+            '每一行会冻结为 report_request.reports[] 中的一份报表请求。',
           reportName: '报表名称',
           reportVariables: '本次报表变量',
+          reportVariablesPlaceholder: '默认使用当前检测配置变量，也可手动选择',
+          reportVariablesAutoHint:
+            '留空时会自动使用当前检测配置中的 {{count}} 个变量生成报表请求。',
+          reportVariablesRequiredHint:
+            '当前检测配置没有可用变量，请手动选择报表变量，否则不会生成报表请求。',
+          reportAutoVariables: '检测配置变量 {{count}} 个',
+          fillReportVariables: '按检测配置填充变量',
           reportParams: '报表 params JSON',
           addReportRequest: '添加报表',
           removeReportRequest: '移除报表',
@@ -591,7 +728,8 @@ export const resources = {
           stopTitle: '结束当前检测？',
           stopDesc: '结束后该项目停止写入本次检测历史，其他项目运行不受影响。',
           abnormalStopTitle: '异常停止当前检测？',
-          abnormalStopDesc: '用于故障、停机或现场中断场景，会以异常结束记录本次任务。',
+          abnormalStopDesc:
+            '用于故障、停机或现场中断场景，会以异常结束记录本次任务。',
           manualStopReason: '现场手动结束',
           abnormalDefaultReason: '现场异常停止',
         },
@@ -678,9 +816,11 @@ export const resources = {
         },
         view: {
           emptyCardsTitle: '当前工位未配置卡片变量',
-          emptyCardsHint: '当前项目暂无可显示的实时变量，请检查项目变量绑定和实时采集状态。',
+          emptyCardsHint:
+            '当前项目暂无可显示的实时变量，请检查项目变量绑定和实时采集状态。',
           emptyTableTitle: '当前没有检测表格项',
-          emptyTableHint: '运行中的检测任务会优先显示标准快照；未运行时显示当前项目的检测项。',
+          emptyTableHint:
+            '运行中的检测任务会优先显示标准快照；未运行时显示当前项目的检测项。',
         },
         alarms: {
           title: '报警日志',
@@ -802,6 +942,13 @@ export const resources = {
           hint: '点击任意真实检测任务，即可查询该任务的历史数据。',
           empty: '暂无检测任务',
           gantt: '甘特图',
+          compactMode: '紧凑',
+          realtimeMode: '真实时间',
+          compactedGap: '已压缩间隔',
+          gapTooltip: '真实间隔：{{gap}}',
+          gapDaysHours: '{{days}} 天 {{hours}} 小时',
+          gapHoursMinutes: '{{hours}} 小时 {{minutes}} 分钟',
+          gapMinutes: '{{minutes}} 分钟',
           taskList: '任务列表',
           summaryList: '任务摘要列表',
           standardTest: '带标准测试',
@@ -813,6 +960,35 @@ export const resources = {
           result: '结果',
           operation: '操作',
           viewDetail: '查看详情',
+        },
+        plans: {
+          planNo: '计划编号',
+          sourceSystem: '来源系统',
+          externalPlanId: '外部计划 ID',
+          externalOrderNo: '外部订单号',
+          deviceModel: '机型',
+          customerName: '客户',
+          testItem: '检测项',
+          testItemCode: '检测项编码',
+          testSequence: '检测顺序',
+          mode: '检测模式',
+          standardCode: '标准编码',
+          status: '状态',
+          owner: '开工边缘',
+          allStatuses: '全部状态',
+          keyword: '按出厂编号/计划编号搜索',
+          apiUnavailable: '待检测计划接口暂不可用',
+          edit: '编辑计划',
+          editTitle: '编辑待检测计划',
+          saveSuccess: '计划已保存',
+          saveFailed: '计划保存失败',
+          mainServerOnly: '计划编辑只在主服务器开放',
+          statuses: {
+            pending: '待开始',
+            starting: '开工中',
+            started: '已开工',
+            cancelled: '已取消',
+          },
         },
         detail: {
           back: '返回',
@@ -841,17 +1017,30 @@ export const resources = {
             requestFallback: '报表请求 #{{id}}',
             reportFallback: '报表 #{{id}}',
             remoteTitle: 'Excel 报表由主服务器生成和归档',
-            remoteDescription: '当前边缘端只负责现场检测和历史查看。任务开始时勾选的报表、生成状态、报表附件下载都需要进入主服务器 Web 操作。',
+            remoteDescription:
+              '当前边缘端只负责现场检测和历史查看。任务开始时勾选的报表、生成状态、报表附件下载都需要进入主服务器 Web 操作。',
             remoteEmpty: '请在主服务器 Web 的历史任务中查看 Excel 报表',
             emptyRequests: '当前任务暂无报表请求',
             selectReport: '请选择左侧报表',
             lastUpdated: '最后更新',
+            generationHistory: '生成版本',
+            latestGeneration: '最新版本',
+            generation: '历史版本',
             retryGenerate: '重试生成',
-            downloadCurrent: '下载当前报表',
             retrySubmitted: '已提交重试',
             retryFailed: '重试失败',
-            downloadStarted: '报表已开始下载',
-            downloadFailed: '下载失败',
+            regenerateWithParams: '修改参数重新生成',
+            submitRegenerate: '提交重新生成',
+            regenerateSubmitted: '已提交重新生成',
+            regenerateFailed: '重新生成失败',
+            regenerateReason: '变更原因，可选',
+            regenerateParamsHint:
+              '编辑本次报表参数 JSON。提交后会生成新的报表版本，不覆盖旧 Excel，也不修改检测开始时冻结的原始请求。',
+            invalidParamsJson: '参数 JSON 格式不正确',
+            paramsMustBeObject: '参数必须是 JSON 对象',
+            noGeneratedArtifact: '当前报表还没有生成物',
+            waitingForGeneratedArtifact: '报表生成成功后会在这里加载实际 Excel',
+            previewFailed: 'Excel 报表预览失败',
             taskId: '任务 ID',
             testNo: '测试编号',
             project: '项目',
@@ -915,16 +1104,26 @@ export const resources = {
           downloads: {
             title: '数据下载归档',
             remoteTitle: '数据下载由主服务器统一提供',
-            remoteDescription: '当前边缘端显示该入口用于保持同一套前端结构；实际下载全部或勾选下载内容，需要进入主服务器 Web 操作。',
+            remoteDescription:
+              '当前边缘端显示该入口用于保持同一套前端结构；实际下载全部或勾选下载内容，需要进入主服务器 Web 操作。',
             remoteEmpty: '请在主服务器 Web 的历史任务中执行数据下载',
             downloadSelected: '下载所选',
             downloadAll: '下载全部',
+            selectedCount: '已选择 {{count}} 项',
+            selectAtLeastOne: '请先勾选至少一项下载内容',
+            packageStarted: '下载包已生成',
+            packageFailed: '下载包生成失败',
+            packageScope:
+              '当前下载包由主服务器后端生成，包含正式 Excel 报表、任务快照、历史数据 CSV 和事件记录；暂未独立落盘的曲线图片会写入 manifest 的 skipped 列表。',
+            notImplementedInPackage: '该数据项尚未接入下载包后端，未生成伪文件',
             data: '详细数据',
             rawSamples: '原始采样数据 (CSV)',
             filteredData: '当前筛选变量数据 (CSV)',
             chartImage: '曲线图片 (PNG)',
             detailedTable: '详细数据表 (Excel)',
             reports: 'Excel 报表',
+            reportArtifact: '报表文件',
+            noReportArtifacts: '暂无已生成报表文件',
             performanceReport: '性能测试报告_V1.xlsx',
             longRunDaily: '长测记录日报_Day1.xlsx',
             alarms: '报警与事件',
@@ -978,7 +1177,8 @@ export const resources = {
           connection: '历史数据库连接',
           notImplemented: '后端管理',
           externalSync: '历史数据由本地 MySQL 与外部数据库同步软件承载',
-          boundary: '当前页面通过后端受控 API 读取和保存配置文件，渲染层不直连数据库。',
+          boundary:
+            '当前页面通过后端受控 API 读取和保存配置文件，渲染层不直连数据库。',
           host: '主机',
           port: '端口',
           user: '用户名',
@@ -988,7 +1188,8 @@ export const resources = {
           passwordSet: '密码已配置',
           passwordMissing: '密码未配置',
           restartRequired: '保存后需要重启后端生效',
-          restartRequiredDesc: '修改会写入后端配置文件；当前已建立的 MySQL 连接不会热切换，请重启 sidecar 后使用新连接。',
+          restartRequiredDesc:
+            '修改会写入后端配置文件；当前已建立的 MySQL 连接不会热切换，请重启 sidecar 后使用新连接。',
           restartRequiredSaved: '配置已保存，等待重启后端生效',
           test: '测试连接',
           testSuccess: '数据库连接测试通过',
@@ -1000,7 +1201,8 @@ export const resources = {
           notes: '说明',
           noteExternal: '历史同步由外部数据库同步软件负责。',
           noteNoRendererDb: 'Renderer 不允许直接访问 MySQL。',
-          noteFutureApi: '连接修改由后端写入配置文件，运行中的历史库连接重启后生效。',
+          noteFutureApi:
+            '连接修改由后端写入配置文件，运行中的历史库连接重启后生效。',
         },
         summary: {
           gateways: 'MQTT 站点',
@@ -1034,9 +1236,11 @@ export const resources = {
           title: 'MQTT 站点',
           new: '新增站点',
           empty: '暂无站点配置',
-          emptyHint: '启动本地后端后会读取已有 MQTT 站点；新增仅用于首次接入采集源。',
+          emptyHint:
+            '启动本地后端后会读取已有 MQTT 站点；新增仅用于首次接入采集源。',
           apiOffline: '本地后端未连接',
-          apiOfflineDesc: '当前 127.0.0.1:18080 无响应，无法加载站点、分组和变量。',
+          apiOfflineDesc:
+            '当前 127.0.0.1:18080 无响应，无法加载站点、分组和变量。',
           createMode: '新建配置',
           detail: '站点详情',
           noSelection: '未选择站点',
@@ -1057,7 +1261,8 @@ export const resources = {
           setdataTopic: '写入 Topic',
           writeResultTopic: '写入结果 Topic',
           queryAllTopic: '全量查询 Topic',
-          mainServerReadonly: '主服务器角色不直接维护 MQTT/KIO 网关。现场采集配置保留在边缘端，控制请求由主服务器后端受控转发。',
+          mainServerReadonly:
+            '主服务器角色不直接维护 MQTT/KIO 网关。现场采集配置保留在边缘端，控制请求由主服务器后端受控转发。',
         },
         groups: {
           title: '项目分组',
@@ -1066,6 +1271,7 @@ export const resources = {
           name: '名称',
           site: '站点/项目',
           model: '型号',
+          projectGroup: '项目组',
           create: '创建分组',
           allVariables: '全部变量',
         },
@@ -1099,7 +1305,8 @@ export const resources = {
           save: '保存变量配置',
           readonly: '只读',
           afterAssign: '分配后配置',
-          unassignedReadonly: '未分配变量只展示采集来源和基础属性；分配到项目后才能编辑显示、单位、精度和存储策略。',
+          unassignedReadonly:
+            '未分配变量只展示采集来源和基础属性；分配到项目后才能编辑显示、单位、精度和存储策略。',
           varName: '变量名',
           displayName: '中文显示名',
           displayNameEn: '英文显示名',
@@ -1111,16 +1318,22 @@ export const resources = {
           storeCycle: '存储周期(秒)',
           storeDeadband: '死区',
           basicSection: '基础属性',
-          basicSectionHint: '显示名、数据类型、单位、精度、缩放和检测入库触发。',
+          basicSectionHint:
+            '显示名、数据类型、单位、精度、缩放和检测入库触发。',
           storageSection: '存储映射',
-          storageSectionHint: '描述变量进入历史表、检测表单、报表字段或宽表时使用的业务字段。',
+          storageSectionHint:
+            '描述变量进入历史表、检测表单、报表字段或宽表时使用的业务字段。',
           writeSection: '写入约束',
-          writeSectionHint: '只有明确配置写入模式、路径和数据类型后，变量才允许作为控制命令目标。',
+          writeSectionHint:
+            '只有明确配置写入模式、路径和数据类型后，变量才允许作为控制命令目标。',
           runtimeSection: '运行保护',
-          runtimeSectionHint: '防抖、死区和启动快照用于降低异常值和冷启动噪声。',
+          runtimeSectionHint:
+            '防抖、死区和启动快照用于降低异常值和冷启动噪声。',
           defaultAlarmSection: '默认报警',
-          defaultAlarmSectionHint: '变量资产默认报警值，只作为检测配置或运行快照的默认参考，不替代检测标准上下限。',
-          defaultAlarmHint: '默认报警属于变量资产属性；检测任务实际判定仍以检测标准和本次运行快照为准。',
+          defaultAlarmSectionHint:
+            '变量资产默认报警值，只作为检测配置或运行快照的默认参考，不替代检测标准上下限。',
+          defaultAlarmHint:
+            '默认报警属于变量资产属性；检测任务实际判定仍以检测标准和本次运行快照为准。',
           defaultAlarmEnabled: '启用默认报警',
           defaultLimitLL: '默认低低限',
           defaultLimitL: '默认低限',
@@ -1130,7 +1343,8 @@ export const resources = {
           defaultViolationHold: '默认超限保持(ms)',
           defaultRecoverHold: '默认恢复保持(ms)',
           applyToRunning: '同步到当前运行任务快照',
-          applyToRunningWarning: '只会同步当前 running 任务里的变量默认报警快照，不修改检测标准业务限值；运行中调整会影响当前任务后续判断，请确认现场状态。',
+          applyToRunningWarning:
+            '只会同步当前 running 任务里的变量默认报警快照，不修改检测标准业务限值；运行中调整会影响当前任务后续判断，请确认现场状态。',
           storageName: '存储业务名',
           storageTarget: '存储目标',
           storageTable: '目标表',
@@ -1157,7 +1371,8 @@ export const resources = {
           writePathRequired: '允许写入时必须填写写入路径。',
           writeDataTypeRequired: '允许写入时必须选择写入数据类型。',
           unassignedPool: '未分配变量池',
-          unassignedPoolHint: '只展示采集来源和基础属性，选择后可批量分配到同一项目。',
+          unassignedPoolHint:
+            '只展示采集来源和基础属性，选择后可批量分配到同一项目。',
           selectAll: '全选当前结果',
           clearSelection: '清空选择',
           batchAssign: '批量分配 {{count}} 个',
@@ -1165,10 +1380,12 @@ export const resources = {
           batchAssignHint: '将所选未分配变量一次性绑定到同一项目。',
           emptyUnassigned: '当前筛选下没有未分配变量',
           createVirtual: '创建虚变量',
-          virtualHint: '虚变量用于检测开始、检测状态、判定结果等非 MQTT 发现变量，必须先绑定到项目。',
+          virtualHint:
+            '虚变量用于检测开始、检测状态、判定结果等非 MQTT 发现变量，必须先绑定到项目。',
           kioRemap: 'KIO 项目初始化',
           kioRemapTitle: 'KIO 变量批量归属到项目',
-          kioRemapHint: '按“台N_xx”原始变量名匹配项目 N，可先预览命中结果，再执行真实归属和业务名重映射。',
+          kioRemapHint:
+            '按“台N_xx”原始变量名匹配项目 N，可先预览命中结果，再执行真实归属和业务名重映射。',
           kioProjectCount: '项目数量',
           kioProjectCodePrefix: '项目编码前缀',
           kioProjectDisplayPrefix: '项目名称前缀',
@@ -1178,10 +1395,12 @@ export const resources = {
           kioDryRun: '预览',
           kioExecute: '执行初始化',
           kioExecuted: '已执行',
-          kioExecuteConfirm: '确认执行真实 KIO 项目初始化？这会修改变量项目归属、业务名和默认存储路由建议。',
+          kioExecuteConfirm:
+            '确认执行真实 KIO 项目初始化？这会修改变量项目归属、业务名和默认存储路由建议。',
           kioRemapDryRunDone: 'KIO 项目初始化预览完成',
           kioRemapDone: 'KIO 项目初始化完成，更新 {{count}} 个变量',
-          kioResultSummary: '匹配 {{matched}}，更新 {{updated}}，跳过 {{skipped}}，创建项目 {{created_projects}}，更新项目 {{updated_projects}}',
+          kioResultSummary:
+            '匹配 {{matched}}，更新 {{updated}}，跳过 {{skipped}}，创建项目 {{created_projects}}，更新项目 {{updated_projects}}',
           kioAction: '动作',
           kioReason: '原因',
         },
@@ -1198,7 +1417,8 @@ export const resources = {
           mode: '模式',
           version: '版本',
           items: '标准项',
-          itemsHint: '从变量中选择标准项，分别维护判定间隔、超限确认时长、恢复确认时长、上下限和存储参与状态。',
+          itemsHint:
+            '从变量中选择标准项，分别维护判定间隔、超限确认时长、恢复确认时长、上下限和存储参与状态。',
           addVariable: '选择变量加入标准',
           add: '加入',
           check: '检测',
@@ -1226,6 +1446,11 @@ export const resources = {
             failOnBad: '异常质量判失败',
           },
           remark: '备注',
+          scope: '适用范围',
+          scopeCurrentProject: '本项目',
+          scopeProject: '项目 {{project}}',
+          scopeProjectGroup: '项目组 {{group}}',
+          scopeGlobal: '全局',
           global: '通用',
           deleteConfirm: '确认删除检测标准 {{code}}？',
         },
@@ -1235,7 +1460,8 @@ export const resources = {
           create: '新增路由',
           edit: '编辑路由',
           save: '保存路由',
-          routeHint: '存储路由只控制历史入库节奏；合格判定间隔和超限确认时长在检测标准中配置。',
+          routeHint:
+            '存储路由只控制历史入库节奏；合格判定间隔和超限确认时长在检测标准中配置。',
           project: '项目',
           variable: '变量',
           routeCode: '路由编号',
@@ -1336,15 +1562,18 @@ export const resources = {
           sidecar: '后端服务',
           sidecarDesc: '管理 Go sidecar 启动、健康检查和异常恢复策略。',
           backend: '后端服务',
-          backendDesc: '当前运行角色只检查后端健康状态，不从桌面壳启动边缘端 sidecar。',
+          backendDesc:
+            '当前运行角色只检查后端健康状态，不从桌面壳启动边缘端 sidecar。',
           restartSidecar: '重启后端',
           refreshBackend: '刷新状态',
           startup: '开机启动',
           startupDesc: '随 Windows 登录自动启动边缘端，并以隐藏窗口启动。',
           minimizeToTray: '最小化到托盘',
-          minimizeToTrayDesc: '关闭主窗口时保持后台采集和本地 API，双击托盘图标恢复。',
+          minimizeToTrayDesc:
+            '关闭主窗口时保持后台采集和本地 API，双击托盘图标恢复。',
           watchdog: '异常重拉起',
-          watchdogDesc: 'sidecar 异常退出后最多自动重启 5 次；当前计数 {{count}}。',
+          watchdogDesc:
+            'sidecar 异常退出后最多自动重启 5 次；当前计数 {{count}}。',
           logs: '日志与诊断',
           logsDesc: '打开后端运行日志所在目录，用于现场排障。',
           refreshLogs: '刷新日志',
@@ -1354,7 +1583,8 @@ export const resources = {
           logEmpty: '暂无可预览的运行日志。浏览器预览态无法读取本机日志文件。',
           browserPreview: '当前是浏览器预览',
           auditLogs: '后端审计日志',
-          auditLogsDesc: '显示最近 80 条后端登录、写操作和命令审计记录；当前匹配 {{count}} 条。',
+          auditLogsDesc:
+            '显示最近 80 条后端登录、写操作和命令审计记录；当前匹配 {{count}} 条。',
           refreshAuditLogs: '刷新审计',
           auditEmpty: '暂无后端审计日志。',
           auditTime: '时间',
@@ -1369,7 +1599,8 @@ export const resources = {
             failed: '失败',
           },
           workerDiagnostics: '后台 Worker 诊断',
-          workerDiagnosticsDesc: '显示后端后台 worker 的存活、panic 和恢复建议；当前 {{count}} 个 worker。',
+          workerDiagnosticsDesc:
+            '显示后端后台 worker 的存活、panic 和恢复建议；当前 {{count}} 个 worker。',
           refreshDiagnostics: '刷新诊断',
           workerEmpty: '暂无 worker 诊断数据。',
           workerName: 'Worker',
@@ -1385,7 +1616,8 @@ export const resources = {
             stopped_after_panic: 'Panic 后停止',
           },
           runtimeDiagnostics: '运行队列诊断',
-          runtimeDiagnosticsDesc: '显示后端核心队列、通知扇出和任务流队列；当前 {{queues}} 个核心队列，{{pressure}} 个过压。',
+          runtimeDiagnosticsDesc:
+            '显示后端核心队列、通知扇出和任务流队列；当前 {{queues}} 个核心队列，{{pressure}} 个过压。',
           queueEmpty: '暂无运行队列诊断数据。',
           queueName: '队列',
           queueUsage: '占用',
@@ -1424,7 +1656,18 @@ export const resources = {
         station: 'Station operation',
         modelCockpit: '3D cockpit',
         history: 'History query',
+        historyAndPlans: 'History and plans',
+        historyChildren: {
+          gantt: 'Gantt',
+          historyList: 'History',
+          plans: 'Plans',
+        },
         reports: 'Reports',
+        reportSettings: 'Report settings',
+        reportSettingsChildren: {
+          templates: 'Templates',
+          planImports: 'Plan import',
+        },
         notifications: 'Notifications',
         alarms: 'Alarm center',
         variables: 'Variables',
@@ -1444,7 +1687,8 @@ export const resources = {
       },
       auth: {
         title: 'Edge login',
-        subtitle: 'Sign in to use local station, history, and data-source management. Main-site handoff only uses backend-issued one-time SSO tickets.',
+        subtitle:
+          'Sign in to use local station, history, and data-source management. Main-site handoff only uses backend-issued one-time SSO tickets.',
         username: 'Username',
         password: 'Password',
         usernameRequired: 'Enter username',
@@ -1455,11 +1699,13 @@ export const resources = {
         loginFailed: 'Sign-in failed',
         guest: 'Guest',
         forbiddenTitle: 'Permission denied',
-        forbiddenDesc: 'This account does not have the capability required for this page or operation.',
+        forbiddenDesc:
+          'This account does not have the capability required for this page or operation.',
         openMainSite: 'Open main site',
         ssoNotConfigured: 'Main-site SSO URL is not configured',
         ssoFailed: 'Main-site handoff failed',
-        localCredentialHint: 'Local test account: {{username}} / board password',
+        localCredentialHint:
+          'Local test account: {{username}} / board password',
       },
       notifications: {
         title: 'Notifications',
@@ -1483,6 +1729,7 @@ export const resources = {
           runStopped: 'Run stopped',
           resultOk: 'Result OK',
           resultNg: 'Result NG',
+          reportJob: 'Report job',
         },
         levels: {
           info: 'Info',
@@ -1573,8 +1820,10 @@ export const resources = {
       reports: {
         eyebrow: 'Main-server report jobs',
         title: 'Reports',
-        subtitle: 'Reads synchronized report requests, main-server report jobs, readiness, events, and backend-generated xlsx artifacts.',
-        edgeModeNotice: 'The edge terminal only maintains report templates and report requests at detection start. Report jobs, readiness, and generated xlsx artifacts are viewed on the main server.',
+        subtitle:
+          'Reads synchronized report requests, main-server report jobs, readiness, events, and backend-generated xlsx artifacts.',
+        edgeModeNotice:
+          'The edge terminal only maintains report templates and report requests at detection start. Report jobs, readiness, and generated xlsx artifacts are viewed on the main server.',
         filters: {
           taskId: 'Task ID',
           edge: 'Edge instance',
@@ -1650,6 +1899,93 @@ export const resources = {
           finishedAt: 'Finished at',
         },
       },
+      reportSettings: {
+        eyebrow: 'Report settings',
+        mainServerOnly:
+          'Report settings are only available in main-server mode. Edge terminals execute tests but do not manage main-server report assets.',
+        templates: {
+          title: 'Template management',
+          subtitle:
+            'Upload customer Excel templates, keep template copies, and save cell mappings. Final reports are generated by the backend from these templates.',
+          listTitle: 'Report templates',
+          uploadTitle: 'Import template',
+          pickFile: 'Choose xlsx',
+          upload: 'Upload template',
+          preview: 'Template preview',
+          previewFailed: 'Template preview failed',
+          empty: 'No templates',
+          selectTemplate: 'Select a template',
+          enabled: 'Enabled',
+          disabled: 'Disabled',
+          download: 'Export template copy',
+          downloadHint:
+            'Download the original template copy stored by the backend',
+          downloadStarted: 'Template copy download started',
+          downloadFailed: 'Template copy download failed',
+          fileRequired: 'Choose an xlsx template first',
+          uploaded: 'Template uploaded',
+          uploadFailed: 'Template upload failed',
+          mappingTitle: 'Cell mapping JSON',
+          mappingPlaceholder:
+            '{"cell_mapping":{"sheet":"Sheet1","items":[{"cell":"A2","source":"task.test_no"}]}}',
+          saveMapping: 'Save mapping',
+          mappingSaved: 'Mapping saved',
+          mappingFailed: 'Failed to save mapping',
+          fields: {
+            templateCode: 'Template code',
+            name: 'Internal name',
+            displayName: 'Display name',
+            version: 'Version',
+            remark: 'Remark',
+            enabled: 'Enable template',
+          },
+          columns: {
+            template: 'Template',
+            version: 'Version',
+            file: 'File',
+            updatedAt: 'Updated at',
+          },
+        },
+        planImport: {
+          title: 'Plan import',
+          subtitle:
+            'Parse detection tasks, rules, limits, and report requests from an uploaded Excel file, then create detection configs and pending plans.',
+          pickFile: 'Choose plan xlsx',
+          edge: 'Target edge, optional',
+          parse: 'Parse',
+          confirm: 'Confirm create',
+          allowNeedsConfirmation: 'Allow rows needing confirmation',
+          fileRequired: 'Choose a plan Excel file first',
+          parsed: 'Parsed {{count}} rows',
+          parseFailed: 'Plan parse failed',
+          confirmed:
+            'Created {{standards}} detection configs and {{plans}} pending plans',
+          confirmFailed: 'Plan import confirmation failed',
+          empty: 'Upload a plan Excel file to view parsed rows',
+          ready: 'Ready',
+          needsConfirmation: 'Needs confirmation',
+          issueSummary: '{{count}} issues found',
+          resultTitle: 'Import complete',
+          resultDesc:
+            '{{standards}} configs, {{plans}} plans, status {{status}}.',
+          summary: {
+            total: 'Rows',
+            ready: 'Ready rows',
+            issues: 'Issue rows',
+            confirm: 'Need confirm',
+          },
+          columns: {
+            row: 'Row',
+            plan: 'Plan',
+            project: 'Project',
+            projectGroup: 'Project group',
+            variable: 'Variable',
+            limit: 'Limits',
+            template: 'Template',
+            status: 'Status',
+          },
+        },
+      },
       status: {
         online: 'Online',
         offline: 'Offline',
@@ -1666,19 +2002,22 @@ export const resources = {
       detectionConfig: {
         eyebrow: 'Standard items and limits',
         title: 'Detection config',
-        subtitle: 'Maintain detection standards, limits, check methods, hold times, and storage policy by project. Legacy Vue detection items are retained as a reference pool.',
+        subtitle:
+          'Maintain detection standards, limits, check methods, hold times, and storage policy by project. Legacy Vue detection items are retained as a reference pool.',
         standardList: 'Detection standards',
         noStandards: 'No standards',
         legacySource: 'Legacy detection items',
         noSelection: 'No standard selected',
         selectStandard: 'Select a detection standard',
         allStandards: 'All configs',
-        itemsHint: 'Select variables, then configure evaluation interval, violation confirmation duration, recovery confirmation duration, and storage participation separately.',
+        itemsHint:
+          'Select variables, then configure evaluation interval, violation confirmation duration, recovery confirmation duration, and storage participation separately.',
       },
       taskFlows: {
         eyebrow: 'Conditional events and scripts',
         title: 'Tasks',
-        subtitle: 'Maintain project-scoped variable triggers, manual runs, and script actions. Execution goes through backend APIs, audit, and queues; the renderer never touches the database or MQTT directly.',
+        subtitle:
+          'Maintain project-scoped variable triggers, manual runs, and script actions. Execution goes through backend APIs, audit, and queues; the renderer never touches the database or MQTT directly.',
         projects: {
           title: 'Projects',
           subtitle: 'Task scope',
@@ -1735,44 +2074,63 @@ export const resources = {
           hint: 'Production parameters are written into a watched STRING virtual variable and then handled by task flows. This does not use the manual run endpoint or bypass backend PLC control.',
           requestVariable: 'Request variable',
           watchFlowsEmpty: 'Select a watched STRING request variable.',
-          watchFlowsNone: 'No enabled task flow watches this request variable. Writing it will not trigger business logic.',
-          watchFlowsFound: '{{count}} enabled task flow(s) watch this request variable.',
+          watchFlowsNone:
+            'No enabled task flow watches this request variable. Writing it will not trigger business logic.',
+          watchFlowsFound:
+            '{{count}} enabled task flow(s) watch this request variable.',
           command: 'Command',
           configParams: 'Configuration parameters',
-          configParamsHint: 'Configuration parameters include detection settings and process values. Detection settings control standard, duration, qualified hold, storage, and alarm options. Process values such as inlet_area_m2 are frozen for traceability and can be referenced by the PLC write plan.',
+          configParamsHint:
+            'Configuration parameters include detection settings and process values. Detection settings control standard, duration, qualified hold, storage, and alarm options. Process values such as inlet_area_m2 are frozen for traceability and can be referenced by the PLC write plan.',
           runControl: 'Run control parameters',
-          runControlHint: 'Used for pause, resume, stop, mute, and feature refresh. Fill task_id to target one run exactly, or keep project_id so the backend can locate the active run.',
+          runControlHint:
+            'Used for pause, resume, stop, mute, and feature refresh. Fill task_id to target one run exactly, or keep project_id so the backend can locate the active run.',
           limitAdjust: 'Runtime limit adjustment',
-          limitAdjustHint: 'Adjusts only the current running task snapshot, not the global variable defaults or original detection standard. Use var_id fields for one variable or items JSON for batch updates.',
-          limitItemsPlaceholder: '[{"var_id":1,"limit_h":30,"alarm_enabled":true}]',
+          limitAdjustHint:
+            'Adjusts only the current running task snapshot, not the global variable defaults or original detection standard. Use var_id fields for one variable or items JSON for batch updates.',
+          limitItemsPlaceholder:
+            '[{"var_id":1,"limit_h":30,"alarm_enabled":true}]',
           reportRegister: 'Report result registration',
-          reportRegisterHint: 'Registers the generated Excel report reference for a detection run. Only file_ref is saved; no binary file is stored.',
+          reportRegisterHint:
+            'Registers the generated Excel report reference for a detection run. Only file_ref is saved; no binary file is stored.',
           storagePrepare: 'Project wide-table preparation',
-          storagePrepareHint: 'Triggers the backend storage_prepare module to prepare the project wide table and dynamic columns from project or run snapshots. It does not write sample data directly.',
+          storagePrepareHint:
+            'Triggers the backend storage_prepare module to prepare the project wide table and dynamic columns from project or run snapshots. It does not write sample data directly.',
           httpRequest: 'HTTP request parameters',
-          httpRequestHint: 'Developer task module for calling controlled HTTP endpoints. headers must be a JSON object; production site control should prefer built-in business modules.',
+          httpRequestHint:
+            'Developer task module for calling controlled HTTP endpoints. headers must be a JSON object; production site control should prefer built-in business modules.',
           processParams: 'Process/report parameters',
-          processParamsHint: 'For example inlet_area_m2. These values are frozen with the detection run for calculation, reports, and traceability.',
+          processParamsHint:
+            'For example inlet_area_m2. These values are frozen with the detection run for calculation, reports, and traceability.',
           reportRequests: 'Report requests',
-          reportRequestsHint: 'Creates one or more reports through report_request.reports[]; each report has its own template, variables, and params.',
+          reportRequestsHint:
+            'Creates one or more reports through report_request.reports[]; each report has its own template, variables, and params.',
           reportName: 'Report name',
           reportVariables: 'Report variables for this run',
           addReportRequest: 'Add report request',
           plcWrites: 'PLC write plan',
-          plcWritesHint: 'PLC writes go through the backend variable write service. value_from can reference process_params.inlet_area_m2 so the same value is entered once.',
-          plcWritesRequireVar: 'A PLC write row is included in the final JSON only after a variable var_id is selected. Rows without variables are ignored.',
+          plcWritesHint:
+            'PLC writes go through the backend variable write service. value_from can reference process_params.inlet_area_m2 so the same value is entered once.',
+          plcWritesRequireVar:
+            'A PLC write row is included in the final JSON only after a variable var_id is selected. Rows without variables are ignored.',
           value: 'Value',
           literalValue: 'Literal value',
           addProcessParam: 'Add parameter',
           addPLCWrite: 'Add PLC write',
           preview: 'Request JSON preview',
-          previewHint: 'This is the exact content written into the STRING virtual variable. Confirm field sources and values before submitting.',
+          previewHint:
+            'This is the exact content written into the STRING virtual variable. Confirm field sources and values before submitting.',
           send: 'Write and trigger',
           sent: 'Task request written to virtual variable',
           failed: 'Failed to write task request',
           errors: {
             requestVariableRequired: 'Select a watched STRING virtual variable',
-            invalidJson: 'Task request JSON is invalid. Check custom_items or parameter values.',
+            startTaskFlowRequired:
+              'No enabled start_detection task flow is configured for this project. Configure a watched STRING virtual variable and start-detection task flow first.',
+            taskRequestFlowNotTriggered:
+              'The task request was written, but no watched STRING task flow was triggered. Check the request variable and task flow configuration.',
+            invalidJson:
+              'Task request JSON is invalid. Check custom_items or parameter values.',
           },
         },
         steps: {
@@ -1783,7 +2141,8 @@ export const resources = {
           title: 'Module parameters',
           hint: 'Rendered from backend task-modules.params_schema; objects, arrays, and code stay as JSON/text editors.',
           source: 'Source',
-          empty: 'The selected action module has no parameter schema. Steps JSON will still be preserved.',
+          empty:
+            'The selected action module has no parameter schema. Steps JSON will still be preserved.',
           jsonPlaceholder: 'Enter JSON',
         },
         vars: {
@@ -1794,9 +2153,11 @@ export const resources = {
         },
         scripts: {
           condition: 'Condition script',
-          conditionHint: 'The action runs when this script returns true. Simple JavaScript expressions are enough for now.',
+          conditionHint:
+            'The action runs when this script returns true. Simple JavaScript expressions are enough for now.',
           action: 'Action script',
-          actionHint: 'Executed when action_type=javascript. Built-in actions can use only action_payload.',
+          actionHint:
+            'Executed when action_type=javascript. Built-in actions can use only action_payload.',
         },
         messages: {
           saved: 'Task saved',
@@ -1823,7 +2184,8 @@ export const resources = {
       modelCockpit: {
         eyebrow: 'Realtime sensing · Data-driven · Smart operations',
         title: 'Realtime 3D model cockpit',
-        subtitle: 'Loads the site model with 360 degree drag viewing. The model stays opaque while internal flow renders as an independent 3D diagnostic overlay on the surface; telemetry callouts project from model-space anchors with depth-aware occlusion.',
+        subtitle:
+          'Loads the site model with 360 degree drag viewing. The model stays opaque while internal flow renders as an independent 3D diagnostic overlay on the surface; telemetry callouts project from model-space anchors with depth-aware occlusion.',
         metric: {
           limit: 'Limits',
           optimizationLabel: 'Optimization',
@@ -1871,7 +2233,8 @@ export const resources = {
           fit: 'Fit view',
         },
         messages: {
-          sampleFallback: 'Realtime variables are unavailable from the local backend, so sample waves are driving the callouts.',
+          sampleFallback:
+            'Realtime variables are unavailable from the local backend, so sample waves are driving the callouts.',
         },
         fluid: {
           eyebrow: 'Internal view',
@@ -1879,7 +2242,8 @@ export const resources = {
           desc: 'The model material stays opaque. Internal pipes and particles are still 3D objects, rendered as a diagnostic overlay so the inner flow appears on the equipment surface.',
           refrigerant: 'Cyan paths: refrigerant loop',
           airflow: 'Light particles: airflow direction',
-          visibility: 'Diagnostic overlay: internal paths visible on the solid model',
+          visibility:
+            'Diagnostic overlay: internal paths visible on the solid model',
         },
         telemetry: {
           eyebrow: 'Model anchored',
@@ -1893,8 +2257,10 @@ export const resources = {
           eyebrow: 'Exploration result',
           title: 'Ready to harden',
           drag: 'OrbitControls is wired for full 360 degree inspection.',
-          fluid: 'The fluid layer is an independent Three.js group rendered as a diagnostic overlay, ready to swap for real pipe or CFD data.',
-          labels: 'Callout anchors live in model space and use raycasting to decide whether the model blocks them.',
+          fluid:
+            'The fluid layer is an independent Three.js group rendered as a diagnostic overlay, ready to swap for real pipe or CFD data.',
+          labels:
+            'Callout anchors live in model space and use raycasting to decide whether the model blocks them.',
         },
       },
       panels: {
@@ -1936,12 +2302,18 @@ export const resources = {
         updatedAt: 'Updated',
       },
       messages: {
-        bridgeUnavailable: 'Running in browser preview; Electron preload is not available.',
-        sidecarMissing: 'edge-backend.exe was not found. Run the backend build script first.',
-        backendOffline: 'Local backend is unavailable. The UI will keep polling health status.',
-        mainServerMode: 'Main server mode only checks backend health and does not start the edge sidecar.',
-        authPending: 'Local login/JWT is connected. Pages are guarded by the in-memory token and capabilities.',
-        ssoPending: 'Main-site handoff uses backend-issued one-time SSO tickets. If the main-site URL or service token is not configured, the renderer only shows a prompt.',
+        bridgeUnavailable:
+          'Running in browser preview; Electron preload is not available.',
+        sidecarMissing:
+          'edge-backend.exe was not found. Run the backend build script first.',
+        backendOffline:
+          'Local backend is unavailable. The UI will keep polling health status.',
+        mainServerMode:
+          'Main server mode only checks backend health and does not start the edge sidecar.',
+        authPending:
+          'Local login/JWT is connected. Pages are guarded by the in-memory token and capabilities.',
+        ssoPending:
+          'Main-site handoff uses backend-issued one-time SSO tickets. If the main-site URL or service token is not configured, the renderer only shows a prompt.',
         noData: 'No data',
       },
       station: {
@@ -1975,6 +2347,8 @@ export const resources = {
           idle: 'No active run',
           running: 'Detection running',
           startTitle: 'Start detection run',
+          plan: 'Pending plan',
+          planPlaceholder: 'Select dispatched plan',
           project: 'Project',
           factoryNo: 'Factory no.',
           customerName: 'Customer name',
@@ -1987,9 +2361,18 @@ export const resources = {
           configName: 'Detection config',
           reportTemplate: 'Report template',
           reportRequests: 'Report requests',
-          reportRequestsHint: 'Each row is frozen as one item in report_request.reports[].',
+          reportRequestsHint:
+            'Each row is frozen as one item in report_request.reports[].',
           reportName: 'Report name',
           reportVariables: 'Report variables for this run',
+          reportVariablesPlaceholder:
+            'Use current detection config variables by default, or select manually',
+          reportVariablesAutoHint:
+            'When left empty, {{count}} variables from the current detection config will be used.',
+          reportVariablesRequiredHint:
+            'The current detection config has no usable variables. Select report variables manually or no report request will be created.',
+          reportAutoVariables: '{{count}} config variables',
+          fillReportVariables: 'Fill from config',
           reportParams: 'Report params JSON',
           addReportRequest: 'Add report',
           removeReportRequest: 'Remove report',
@@ -2001,9 +2384,11 @@ export const resources = {
           standardMode: 'Standard run',
           performanceMode: 'Performance run',
           stopTitle: 'Stop the current run?',
-          stopDesc: 'This stops history storage for this project only. Other projects keep running.',
+          stopDesc:
+            'This stops history storage for this project only. Other projects keep running.',
           abnormalStopTitle: 'Abnormally stop the current run?',
-          abnormalStopDesc: 'Use this for faults, shutdowns, or interrupted site tests. The run will be recorded as abnormal.',
+          abnormalStopDesc:
+            'Use this for faults, shutdowns, or interrupted site tests. The run will be recorded as abnormal.',
           manualStopReason: 'Manual site stop',
           abnormalDefaultReason: 'Abnormal site stop',
         },
@@ -2023,7 +2408,8 @@ export const resources = {
           variablePlaceholder: 'Select project variables',
           saveSuccess: 'Station display config saved',
           saveFailed: 'Failed to save station display config',
-          noTemplate: 'No writable station display template is available for this project',
+          noTemplate:
+            'No writable station display template is available for this project',
         },
         pid: {
           title: 'PID realtime write',
@@ -2090,9 +2476,11 @@ export const resources = {
         },
         view: {
           emptyCardsTitle: 'No card variables configured',
-          emptyCardsHint: 'No realtime variables are available for this project. Check project variable bindings and acquisition status.',
+          emptyCardsHint:
+            'No realtime variables are available for this project. Check project variable bindings and acquisition status.',
           emptyTableTitle: 'No detection table items',
-          emptyTableHint: 'An active run shows its standard snapshot first. When idle, the page shows detection items for the current project.',
+          emptyTableHint:
+            'An active run shows its standard snapshot first. When idle, the page shows detection items for the current project.',
         },
         alarms: {
           title: 'Alarm log',
@@ -2214,6 +2602,13 @@ export const resources = {
           hint: 'Click a real detection run to query its history data.',
           empty: 'No detection runs',
           gantt: 'Gantt',
+          compactMode: 'Compact',
+          realtimeMode: 'Real time',
+          compactedGap: 'Compacted gap',
+          gapTooltip: 'Actual gap: {{gap}}',
+          gapDaysHours: '{{days}} d {{hours}} h',
+          gapHoursMinutes: '{{hours}} h {{minutes}} min',
+          gapMinutes: '{{minutes}} min',
           taskList: 'Task list',
           summaryList: 'Task summary list',
           standardTest: 'Standard test',
@@ -2225,6 +2620,35 @@ export const resources = {
           result: 'Result',
           operation: 'Actions',
           viewDetail: 'View details',
+        },
+        plans: {
+          planNo: 'Plan No.',
+          sourceSystem: 'Source system',
+          externalPlanId: 'External plan ID',
+          externalOrderNo: 'External order no.',
+          deviceModel: 'Model',
+          customerName: 'Customer',
+          testItem: 'Test item',
+          testItemCode: 'Test item code',
+          testSequence: 'Sequence',
+          mode: 'Mode',
+          standardCode: 'Standard code',
+          status: 'Status',
+          owner: 'Started edge',
+          allStatuses: 'All statuses',
+          keyword: 'Search factory or plan no.',
+          apiUnavailable: 'Detection plan API is unavailable',
+          edit: 'Edit plan',
+          editTitle: 'Edit detection plan',
+          saveSuccess: 'Plan saved',
+          saveFailed: 'Failed to save plan',
+          mainServerOnly: 'Plan editing is only available on the main server',
+          statuses: {
+            pending: 'Pending',
+            starting: 'Starting',
+            started: 'Started',
+            cancelled: 'Cancelled',
+          },
         },
         detail: {
           back: 'Back',
@@ -2252,18 +2676,34 @@ export const resources = {
             title: 'Task reports ({{count}}/7)',
             requestFallback: 'Report request #{{id}}',
             reportFallback: 'Report #{{id}}',
-            remoteTitle: 'Excel reports are generated and archived on the main server',
-            remoteDescription: 'This edge terminal only handles on-site detection and history viewing. Reports selected at task start, generation status, and report attachment downloads must be handled in the main-server Web app.',
-            remoteEmpty: 'View Excel reports in the main-server Web history task',
+            remoteTitle:
+              'Excel reports are generated and archived on the main server',
+            remoteDescription:
+              'This edge terminal only handles on-site detection and history viewing. Reports selected at task start, generation status, and report attachment downloads must be handled in the main-server Web app.',
+            remoteEmpty:
+              'View Excel reports in the main-server Web history task',
             emptyRequests: 'No report requests for this task',
             selectReport: 'Select a report on the left',
             lastUpdated: 'Last updated',
+            generationHistory: 'Generation history',
+            latestGeneration: 'Latest generation',
+            generation: 'Generation',
             retryGenerate: 'Retry generation',
-            downloadCurrent: 'Download current report',
             retrySubmitted: 'Retry submitted',
             retryFailed: 'Retry failed',
-            downloadStarted: 'Report download started',
-            downloadFailed: 'Download failed',
+            regenerateWithParams: 'Regenerate with parameters',
+            submitRegenerate: 'Submit regeneration',
+            regenerateSubmitted: 'Regeneration submitted',
+            regenerateFailed: 'Regeneration failed',
+            regenerateReason: 'Change reason, optional',
+            regenerateParamsHint:
+              'Edit the JSON parameters for this report. Submitting creates a new report version without overwriting the old Excel or changing the original request frozen at detection start.',
+            invalidParamsJson: 'Invalid parameter JSON',
+            paramsMustBeObject: 'Parameters must be a JSON object',
+            noGeneratedArtifact: 'No generated artifact for this report yet',
+            waitingForGeneratedArtifact:
+              'The generated Excel will be loaded here after the report succeeds',
+            previewFailed: 'Excel report preview failed',
             taskId: 'Task ID',
             testNo: 'Test No.',
             project: 'Project',
@@ -2327,16 +2767,28 @@ export const resources = {
           downloads: {
             title: 'Data download archive',
             remoteTitle: 'Data downloads are provided by the main server',
-            remoteDescription: 'This edge terminal shows the entry to keep one shared frontend structure. Downloading all data or selected content must be done in the main-server Web app.',
-            remoteEmpty: 'Use the main-server Web history task to download data',
+            remoteDescription:
+              'This edge terminal shows the entry to keep one shared frontend structure. Downloading all data or selected content must be done in the main-server Web app.',
+            remoteEmpty:
+              'Use the main-server Web history task to download data',
             downloadSelected: 'Download selected',
             downloadAll: 'Download all',
+            selectedCount: '{{count}} items selected',
+            selectAtLeastOne: 'Select at least one item first',
+            packageStarted: 'Download package generated',
+            packageFailed: 'Failed to generate download package',
+            packageScope:
+              'The package is generated by the main-server backend and includes official Excel reports, task snapshots, history CSV, and events. Chart images without standalone artifacts are listed in manifest.skipped.',
+            notImplementedInPackage:
+              'This item is not connected to the download package backend yet; no placeholder file was generated',
             data: 'Detailed data',
             rawSamples: 'Raw sample data (CSV)',
             filteredData: 'Current filtered variable data (CSV)',
             chartImage: 'Curve image (PNG)',
             detailedTable: 'Detailed data table (Excel)',
             reports: 'Excel reports',
+            reportArtifact: 'Report file',
+            noReportArtifacts: 'No generated report files',
             performanceReport: 'Performance test report_V1.xlsx',
             longRunDaily: 'Long-run daily report_Day1.xlsx',
             alarms: 'Alarms and events',
@@ -2389,8 +2841,10 @@ export const resources = {
           mysql: 'MySQL',
           connection: 'History database connection',
           notImplemented: 'Backend managed',
-          externalSync: 'History is backed by local MySQL and external database sync software',
-          boundary: 'This page reads and saves the backend config file through controlled backend APIs. The renderer never connects to MySQL directly.',
+          externalSync:
+            'History is backed by local MySQL and external database sync software',
+          boundary:
+            'This page reads and saves the backend config file through controlled backend APIs. The renderer never connects to MySQL directly.',
           host: 'Host',
           port: 'Port',
           user: 'User',
@@ -2400,7 +2854,8 @@ export const resources = {
           passwordSet: 'Password set',
           passwordMissing: 'No password',
           restartRequired: 'Restart backend after saving',
-          restartRequiredDesc: 'Changes are written to the backend config file. The active MySQL connection is not hot-swapped; restart the sidecar to use the new connection.',
+          restartRequiredDesc:
+            'Changes are written to the backend config file. The active MySQL connection is not hot-swapped; restart the sidecar to use the new connection.',
           restartRequiredSaved: 'Config saved; restart backend to apply it',
           test: 'Test connection',
           testSuccess: 'Database connection test passed',
@@ -2410,9 +2865,12 @@ export const resources = {
           schema: 'Main tables',
           integration: 'Integration boundary',
           notes: 'Notes',
-          noteExternal: 'Historical synchronization is handled by external database sync software.',
-          noteNoRendererDb: 'The renderer is not allowed to access MySQL directly.',
-          noteFutureApi: 'Connection changes are saved by the backend and take effect after the running backend is restarted.',
+          noteExternal:
+            'Historical synchronization is handled by external database sync software.',
+          noteNoRendererDb:
+            'The renderer is not allowed to access MySQL directly.',
+          noteFutureApi:
+            'Connection changes are saved by the backend and take effect after the running backend is restarted.',
         },
         summary: {
           gateways: 'MQTT sites',
@@ -2426,9 +2884,11 @@ export const resources = {
           currentProject: 'Current project',
           projectVariables: 'Project variables',
           cardPool: 'Card pool',
-          cardHint: 'Shows up to {{count}} realtime cards, saved in selection order.',
+          cardHint:
+            'Shows up to {{count}} realtime cards, saved in selection order.',
           listLayout: 'List layout',
-          listHint: 'Select variables shown in the station table, saved in selection order.',
+          listHint:
+            'Select variables shown in the station table, saved in selection order.',
           variablePlaceholder: 'Select variables',
           listPreview: 'List preview',
           pinnedConfig: 'Pinned rows',
@@ -2446,9 +2906,11 @@ export const resources = {
           title: 'MQTT sites',
           new: 'New site',
           empty: 'No site configured',
-          emptyHint: 'Existing MQTT sites will load after the local backend starts. New site creation is only for initial acquisition-source setup.',
+          emptyHint:
+            'Existing MQTT sites will load after the local backend starts. New site creation is only for initial acquisition-source setup.',
           apiOffline: 'Local backend is disconnected',
-          apiOfflineDesc: '127.0.0.1:18080 is not responding, so sites, groups, and variables cannot be loaded.',
+          apiOfflineDesc:
+            '127.0.0.1:18080 is not responding, so sites, groups, and variables cannot be loaded.',
           createMode: 'Create mode',
           detail: 'Site detail',
           noSelection: 'No site selected',
@@ -2469,7 +2931,8 @@ export const resources = {
           setdataTopic: 'Write topic',
           writeResultTopic: 'Write result topic',
           queryAllTopic: 'Query-all topic',
-          mainServerReadonly: 'The main server role does not maintain MQTT/KIO gateways directly. Field acquisition remains on the edge side, and control requests are forwarded by the main server backend.',
+          mainServerReadonly:
+            'The main server role does not maintain MQTT/KIO gateways directly. Field acquisition remains on the edge side, and control requests are forwarded by the main server backend.',
         },
         groups: {
           title: 'Projects',
@@ -2478,6 +2941,7 @@ export const resources = {
           name: 'Name',
           site: 'Site/project',
           model: 'Model',
+          projectGroup: 'Project group',
           create: 'Create group',
           allVariables: 'All variables',
         },
@@ -2511,7 +2975,8 @@ export const resources = {
           save: 'Save variable config',
           readonly: 'Read-only',
           afterAssign: 'Configure after assignment',
-          unassignedReadonly: 'Unassigned variables only expose acquisition source and base attributes. Assign them to a project before editing display, unit, precision, and storage policy.',
+          unassignedReadonly:
+            'Unassigned variables only expose acquisition source and base attributes. Assign them to a project before editing display, unit, precision, and storage policy.',
           varName: 'Variable name',
           displayName: 'Chinese display name',
           displayNameEn: 'English display name',
@@ -2523,16 +2988,22 @@ export const resources = {
           storeCycle: 'Storage cycle (s)',
           storeDeadband: 'Deadband',
           basicSection: 'Base attributes',
-          basicSectionHint: 'Display names, data type, unit, precision, scaling, and detection storage trigger.',
+          basicSectionHint:
+            'Display names, data type, unit, precision, scaling, and detection storage trigger.',
           storageSection: 'Storage mapping',
-          storageSectionHint: 'Business fields used when the variable enters history tables, detection forms, reports, or wide tables.',
+          storageSectionHint:
+            'Business fields used when the variable enters history tables, detection forms, reports, or wide tables.',
           writeSection: 'Write constraints',
-          writeSectionHint: 'A variable can be used as a command target only after write mode, path, and data type are explicit.',
+          writeSectionHint:
+            'A variable can be used as a command target only after write mode, path, and data type are explicit.',
           runtimeSection: 'Runtime guards',
-          runtimeSectionHint: 'Debounce, deadband, and startup snapshots reduce outliers and cold-start noise.',
+          runtimeSectionHint:
+            'Debounce, deadband, and startup snapshots reduce outliers and cold-start noise.',
           defaultAlarmSection: 'Default alarm',
-          defaultAlarmSectionHint: 'Variable asset defaults used only as a reference for standards or run snapshots. They do not replace detection limits.',
-          defaultAlarmHint: 'Default alarms belong to the variable asset. Actual detection judgement still uses the detection standard and current run snapshot.',
+          defaultAlarmSectionHint:
+            'Variable asset defaults used only as a reference for standards or run snapshots. They do not replace detection limits.',
+          defaultAlarmHint:
+            'Default alarms belong to the variable asset. Actual detection judgement still uses the detection standard and current run snapshot.',
           defaultAlarmEnabled: 'Enable default alarm',
           defaultLimitLL: 'Default LL',
           defaultLimitL: 'Default L',
@@ -2542,7 +3013,8 @@ export const resources = {
           defaultViolationHold: 'Default violation hold (ms)',
           defaultRecoverHold: 'Default recovery hold (ms)',
           applyToRunning: 'Sync to current running snapshot',
-          applyToRunningWarning: 'This only syncs variable default-alarm snapshot fields in the current running task. It does not change detection-standard business limits. Confirm the site state before applying it.',
+          applyToRunningWarning:
+            'This only syncs variable default-alarm snapshot fields in the current running task. It does not change detection-standard business limits. Confirm the site state before applying it.',
           storageName: 'Storage name',
           storageTarget: 'Storage target',
           storageTable: 'Target table',
@@ -2567,20 +3039,25 @@ export const resources = {
           startupSnapshot: 'Startup snapshot',
           writeModeRequired: 'Writable variables must use W or RW mode.',
           writePathRequired: 'Writable variables require a write path.',
-          writeDataTypeRequired: 'Writable variables require a write data type.',
+          writeDataTypeRequired:
+            'Writable variables require a write data type.',
           unassignedPool: 'Unassigned variable pool',
-          unassignedPoolHint: 'Only acquisition source and base attributes are shown. Select variables to batch assign them to one project.',
+          unassignedPoolHint:
+            'Only acquisition source and base attributes are shown. Select variables to batch assign them to one project.',
           selectAll: 'Select current result',
           clearSelection: 'Clear selection',
           batchAssign: 'Batch assign {{count}}',
           batchAssignTitle: 'Batch assign {{count}} variables',
-          batchAssignHint: 'Bind the selected unassigned variables to one project.',
+          batchAssignHint:
+            'Bind the selected unassigned variables to one project.',
           emptyUnassigned: 'No unassigned variables in the current filter',
           createVirtual: 'Create virtual variable',
-          virtualHint: 'Virtual variables are used for detection start, status, result, and other non-MQTT variables. They must be bound to a project.',
+          virtualHint:
+            'Virtual variables are used for detection start, status, result, and other non-MQTT variables. They must be bound to a project.',
           kioRemap: 'Initialize KIO projects',
           kioRemapTitle: 'Bulk assign KIO variables to projects',
-          kioRemapHint: 'Match raw variable names like "台N_xx" to project N. Preview the matched result first, then execute the real assignment and business-name remap.',
+          kioRemapHint:
+            'Match raw variable names like "台N_xx" to project N. Preview the matched result first, then execute the real assignment and business-name remap.',
           kioProjectCount: 'Project count',
           kioProjectCodePrefix: 'Project code prefix',
           kioProjectDisplayPrefix: 'Project name prefix',
@@ -2590,10 +3067,13 @@ export const resources = {
           kioDryRun: 'Preview',
           kioExecute: 'Execute initialization',
           kioExecuted: 'Executed',
-          kioExecuteConfirm: 'Execute the real KIO project initialization? This changes variable project assignment, business names, and default storage-route suggestions.',
+          kioExecuteConfirm:
+            'Execute the real KIO project initialization? This changes variable project assignment, business names, and default storage-route suggestions.',
           kioRemapDryRunDone: 'KIO project initialization preview completed',
-          kioRemapDone: 'KIO project initialization completed, updated {{count}} variables',
-          kioResultSummary: 'Matched {{matched}}, updated {{updated}}, skipped {{skipped}}, created projects {{created_projects}}, updated projects {{updated_projects}}',
+          kioRemapDone:
+            'KIO project initialization completed, updated {{count}} variables',
+          kioResultSummary:
+            'Matched {{matched}}, updated {{updated}}, skipped {{skipped}}, created projects {{created_projects}}, updated projects {{updated_projects}}',
           kioAction: 'Action',
           kioReason: 'Reason',
         },
@@ -2610,7 +3090,8 @@ export const resources = {
           mode: 'Mode',
           version: 'Version',
           items: 'Items',
-          itemsHint: 'Select variables, then maintain evaluation interval, violation confirmation duration, recovery confirmation duration, limits, and storage participation separately.',
+          itemsHint:
+            'Select variables, then maintain evaluation interval, violation confirmation duration, recovery confirmation duration, limits, and storage participation separately.',
           addVariable: 'Select variable to add',
           add: 'Add',
           check: 'Check',
@@ -2638,6 +3119,11 @@ export const resources = {
             failOnBad: 'Fail on bad quality',
           },
           remark: 'Remark',
+          scope: 'Scope',
+          scopeCurrentProject: 'Current project',
+          scopeProject: 'Project {{project}}',
+          scopeProjectGroup: 'Project group {{group}}',
+          scopeGlobal: 'Global',
           global: 'Global',
           deleteConfirm: 'Delete detection standard {{code}}?',
         },
@@ -2647,7 +3133,8 @@ export const resources = {
           create: 'New route',
           edit: 'Edit route',
           save: 'Save route',
-          routeHint: 'Storage routes only control history persistence cadence. Pass/fail evaluation interval and violation confirmation duration are configured in detection standards.',
+          routeHint:
+            'Storage routes only control history persistence cadence. Pass/fail evaluation interval and violation confirmation duration are configured in detection standards.',
           project: 'Project',
           variable: 'Variable',
           routeCode: 'Route code',
@@ -2663,7 +3150,8 @@ export const resources = {
           queryAlias: 'Query alias',
           storeOnStart: 'Store on start',
           enabled: 'Enabled',
-          searchPlaceholder: 'Search route, variable, table, column, or project',
+          searchPlaceholder:
+            'Search route, variable, table, column, or project',
           statusAll: 'All',
           statusEnabled: 'Enabled',
           statusDisabled: 'Disabled',
@@ -2746,27 +3234,36 @@ export const resources = {
           title: 'System settings',
           local: 'Local',
           sidecar: 'Backend service',
-          sidecarDesc: 'Manage Go sidecar startup, health checks, and recovery policy.',
+          sidecarDesc:
+            'Manage Go sidecar startup, health checks, and recovery policy.',
           backend: 'Backend service',
-          backendDesc: 'The current runtime role only checks backend health and does not start the edge sidecar from the desktop shell.',
+          backendDesc:
+            'The current runtime role only checks backend health and does not start the edge sidecar from the desktop shell.',
           restartSidecar: 'Restart backend',
           refreshBackend: 'Refresh status',
           startup: 'Startup',
-          startupDesc: 'Start the edge terminal when Windows signs in and keep the window hidden.',
+          startupDesc:
+            'Start the edge terminal when Windows signs in and keep the window hidden.',
           minimizeToTray: 'Minimize to tray',
-          minimizeToTrayDesc: 'Keep acquisition and the local API running when the main window is closed; double-click the tray icon to restore.',
+          minimizeToTrayDesc:
+            'Keep acquisition and the local API running when the main window is closed; double-click the tray icon to restore.',
           watchdog: 'Crash recovery',
-          watchdogDesc: 'Automatically restarts the sidecar up to 5 times after an abnormal exit. Current attempts: {{count}}.',
+          watchdogDesc:
+            'Automatically restarts the sidecar up to 5 times after an abnormal exit. Current attempts: {{count}}.',
           logs: 'Logs and diagnostics',
-          logsDesc: 'Open the backend runtime log directory for field diagnostics.',
+          logsDesc:
+            'Open the backend runtime log directory for field diagnostics.',
           refreshLogs: 'Refresh logs',
           logPreview: 'Runtime log preview',
-          logPreviewDesc: 'Shows the latest tail of the local backend log file.',
+          logPreviewDesc:
+            'Shows the latest tail of the local backend log file.',
           logUpdatedAt: 'Updated at: {{time}}',
-          logEmpty: 'No runtime log is available. Browser preview cannot read local log files.',
+          logEmpty:
+            'No runtime log is available. Browser preview cannot read local log files.',
           browserPreview: 'Browser preview',
           auditLogs: 'Backend audit logs',
-          auditLogsDesc: 'Shows the latest 80 backend login, write, and command audit records. Current matches: {{count}}.',
+          auditLogsDesc:
+            'Shows the latest 80 backend login, write, and command audit records. Current matches: {{count}}.',
           refreshAuditLogs: 'Refresh audit',
           auditEmpty: 'No backend audit logs.',
           auditTime: 'Time',
@@ -2781,7 +3278,8 @@ export const resources = {
             failed: 'Failed',
           },
           workerDiagnostics: 'Background worker diagnostics',
-          workerDiagnosticsDesc: 'Shows backend worker liveness, panic count, and recovery guidance. Current workers: {{count}}.',
+          workerDiagnosticsDesc:
+            'Shows backend worker liveness, panic count, and recovery guidance. Current workers: {{count}}.',
           refreshDiagnostics: 'Refresh diagnostics',
           workerEmpty: 'No worker diagnostics.',
           workerName: 'Worker',
@@ -2797,7 +3295,8 @@ export const resources = {
             stopped_after_panic: 'Stopped after panic',
           },
           runtimeDiagnostics: 'Runtime queue diagnostics',
-          runtimeDiagnosticsDesc: 'Shows backend core queues, notification fan-out, and task-flow queue. Core queues: {{queues}}, pressure: {{pressure}}.',
+          runtimeDiagnosticsDesc:
+            'Shows backend core queues, notification fan-out, and task-flow queue. Core queues: {{queues}}, pressure: {{pressure}}.',
           queueEmpty: 'No runtime queue diagnostics.',
           queueName: 'Queue',
           queueUsage: 'Usage',
@@ -2806,7 +3305,8 @@ export const resources = {
           queueNextAction: 'Next action',
           queueThreshold: 'Pressure threshold {{threshold}}',
           notificationSubscribers: 'Notification subscribers',
-          notificationDelivered: 'Delivered {{delivered}} / published {{published}}',
+          notificationDelivered:
+            'Delivered {{delivered}} / published {{published}}',
           taskFlowSubmitted: 'Task-flow submitted',
           taskFlowEnqueued: 'Enqueued {{enqueued}} / dropped {{dropped}}',
           taskFlowGuards: 'Detection guards',
@@ -2836,7 +3336,18 @@ export const resources = {
         station: '工位操作',
         modelCockpit: '3D コックピット',
         history: '履歴検索',
+        historyAndPlans: '履歴と計画',
+        historyChildren: {
+          gantt: 'ガントチャート',
+          historyList: '履歴',
+          plans: '計画',
+        },
         reports: '帳票',
+        reportSettings: '帳票設定',
+        reportSettingsChildren: {
+          templates: 'テンプレート管理',
+          planImports: '計画インポート',
+        },
         notifications: '通知センター',
         alarms: 'アラームセンター',
         variables: '変数設定',
@@ -2856,7 +3367,8 @@ export const resources = {
       },
       auth: {
         title: 'エッジログイン',
-        subtitle: 'ローカル工位、履歴、データソース管理を利用するにはログインしてください。主サイト連携は後端発行の一回限り SSO ticket のみを使います。',
+        subtitle:
+          'ローカル工位、履歴、データソース管理を利用するにはログインしてください。主サイト連携は後端発行の一回限り SSO ticket のみを使います。',
         username: 'アカウント',
         password: 'パスワード',
         usernameRequired: 'アカウントを入力してください',
@@ -2867,11 +3379,13 @@ export const resources = {
         loginFailed: 'ログイン失敗',
         guest: '未ログイン',
         forbiddenTitle: '権限不足',
-        forbiddenDesc: 'このアカウントには、このページまたは操作に必要な capability がありません。',
+        forbiddenDesc:
+          'このアカウントには、このページまたは操作に必要な capability がありません。',
         openMainSite: '主サイトを開く',
         ssoNotConfigured: '主サイト SSO URL が未設定です',
         ssoFailed: '主サイト連携に失敗しました',
-        localCredentialHint: 'ローカル試験アカウント：{{username}} / ボード記載のパスワード',
+        localCredentialHint:
+          'ローカル試験アカウント：{{username}} / ボード記載のパスワード',
       },
       notifications: {
         title: '通知センター',
@@ -2895,6 +3409,7 @@ export const resources = {
           runStopped: '検出停止',
           resultOk: '結果 OK',
           resultNg: '結果 NG',
+          reportJob: 'レポートタスク',
         },
         levels: {
           info: '情報',
@@ -2985,8 +3500,10 @@ export const resources = {
       reports: {
         eyebrow: '主サーバー帳票ジョブ',
         title: '帳票',
-        subtitle: '同期済みの帳票要求、主サーバー帳票ジョブ、readiness、イベント、バックエンド生成 xlsx を表示します。',
-        edgeModeNotice: 'エッジ端末では帳票テンプレートと試験開始時の帳票要求のみを管理します。帳票ジョブ、readiness、生成済み xlsx は主サーバーで確認します。',
+        subtitle:
+          '同期済みの帳票要求、主サーバー帳票ジョブ、readiness、イベント、バックエンド生成 xlsx を表示します。',
+        edgeModeNotice:
+          'エッジ端末では帳票テンプレートと試験開始時の帳票要求のみを管理します。帳票ジョブ、readiness、生成済み xlsx は主サーバーで確認します。',
         filters: {
           taskId: 'タスク ID',
           edge: 'エッジインスタンス',
@@ -3062,6 +3579,93 @@ export const resources = {
           finishedAt: '完了時刻',
         },
       },
+      reportSettings: {
+        eyebrow: '帳票設定',
+        mainServerOnly:
+          '帳票設定は主サーバーモードのみ利用できます。エッジ端末は検出を実行し、主サーバー帳票資産は管理しません。',
+        templates: {
+          title: 'テンプレート管理',
+          subtitle:
+            '顧客 Excel テンプレートをアップロードし、テンプレート副本とセルマッピングを保存します。正式帳票は後端がテンプレートから生成します。',
+          listTitle: '帳票テンプレート',
+          uploadTitle: 'テンプレート取込',
+          pickFile: 'xlsx を選択',
+          upload: 'テンプレートアップロード',
+          preview: 'テンプレートプレビュー',
+          previewFailed: 'テンプレートプレビューに失敗しました',
+          empty: 'テンプレートはありません',
+          selectTemplate: 'テンプレートを選択してください',
+          enabled: '有効',
+          disabled: '無効',
+          download: 'テンプレート副本を出力',
+          downloadHint:
+            '後端に保存された元テンプレート副本をダウンロードします',
+          downloadStarted: 'テンプレート副本のダウンロードを開始しました',
+          downloadFailed: 'テンプレート副本のダウンロードに失敗しました',
+          fileRequired: '先に xlsx テンプレートを選択してください',
+          uploaded: 'テンプレートをアップロードしました',
+          uploadFailed: 'テンプレートアップロードに失敗しました',
+          mappingTitle: 'セルマッピング JSON',
+          mappingPlaceholder:
+            '{"cell_mapping":{"sheet":"Sheet1","items":[{"cell":"A2","source":"task.test_no"}]}}',
+          saveMapping: 'マッピング保存',
+          mappingSaved: 'マッピングを保存しました',
+          mappingFailed: 'マッピング保存に失敗しました',
+          fields: {
+            templateCode: 'テンプレート番号',
+            name: '内部名',
+            displayName: '表示名',
+            version: '版',
+            remark: '備考',
+            enabled: 'テンプレート有効',
+          },
+          columns: {
+            template: 'テンプレート',
+            version: '版',
+            file: 'ファイル',
+            updatedAt: '更新時刻',
+          },
+        },
+        planImport: {
+          title: '計画インポート',
+          subtitle:
+            'アップロード Excel の検出タスク、検出ルール、上下限、帳票要求を解析し、確認後に検出設定と待機計画を作成します。',
+          pickFile: '計画 xlsx を選択',
+          edge: '対象エッジ、省略可',
+          parse: '解析',
+          confirm: '作成確認',
+          allowNeedsConfirmation: '確認必要行を許可',
+          fileRequired: '先に計画 Excel を選択してください',
+          parsed: '{{count}} 行を解析しました',
+          parseFailed: '計画解析に失敗しました',
+          confirmed:
+            '検出設定 {{standards}} 件、待機計画 {{plans}} 件を作成しました',
+          confirmFailed: 'インポート確認に失敗しました',
+          empty: '計画 Excel をアップロードすると解析結果が表示されます',
+          ready: '確認可',
+          needsConfirmation: '確認必要',
+          issueSummary: '{{count}} 件の問題があります',
+          resultTitle: 'インポート完了',
+          resultDesc:
+            '検出設定 {{standards}} 件、待機計画 {{plans}} 件、状態 {{status}}。',
+          summary: {
+            total: '総行数',
+            ready: '確認可',
+            issues: '問題行',
+            confirm: '要確認',
+          },
+          columns: {
+            row: '行',
+            plan: '計画',
+            project: 'プロジェクト',
+            projectGroup: 'プロジェクト組',
+            variable: '変数',
+            limit: '上下限',
+            template: 'テンプレート',
+            status: '状態',
+          },
+        },
+      },
       status: {
         online: 'オンライン',
         offline: 'オフライン',
@@ -3078,19 +3682,22 @@ export const resources = {
       detectionConfig: {
         eyebrow: '標準項目と上下限',
         title: '検出設定',
-        subtitle: 'プロジェクトごとに検出標準、上下限、検出方法、保持時間、保存策略を管理します。旧 Vue 前端の検出項目は参照プールとして保持します。',
+        subtitle:
+          'プロジェクトごとに検出標準、上下限、検出方法、保持時間、保存策略を管理します。旧 Vue 前端の検出項目は参照プールとして保持します。',
         standardList: '検出標準',
         noStandards: '標準なし',
         legacySource: '旧システム検出項目',
         noSelection: '標準未選択',
         selectStandard: '検出標準を選択',
         allStandards: '全設定',
-        itemsHint: '変数を選択し、判定間隔、超限確認時間、復帰確認時間、保存対象を個別に設定します。',
+        itemsHint:
+          '変数を選択し、判定間隔、超限確認時間、復帰確認時間、保存対象を個別に設定します。',
       },
       taskFlows: {
         eyebrow: '条件イベントとスクリプト編成',
         title: 'タスク',
-        subtitle: 'プロジェクト単位の変数トリガー、手動実行、スクリプト動作を管理します。実行は後端 API、監査、キューを通り、renderer は DB や MQTT に直接アクセスしません。',
+        subtitle:
+          'プロジェクト単位の変数トリガー、手動実行、スクリプト動作を管理します。実行は後端 API、監査、キューを通り、renderer は DB や MQTT に直接アクセスしません。',
         projects: {
           title: 'プロジェクト',
           subtitle: 'タスク範囲',
@@ -3147,44 +3754,64 @@ export const resources = {
           hint: '正式な業務パラメータは watched STRING 仮想変数へ書き込み、タスクフローで処理します。手動実行 API や後端を迂回した PLC 制御は使いません。',
           requestVariable: '要求変数',
           watchFlowsEmpty: 'watched STRING 要求変数を選択してください。',
-          watchFlowsNone: 'この要求変数を監視している有効なタスクフローはありません。書き込んでも業務は起動しません。',
-          watchFlowsFound: '{{count}} 件の有効なタスクフローがこの要求変数を監視しています。',
+          watchFlowsNone:
+            'この要求変数を監視している有効なタスクフローはありません。書き込んでも業務は起動しません。',
+          watchFlowsFound:
+            '{{count}} 件の有効なタスクフローがこの要求変数を監視しています。',
           command: 'コマンド',
           configParams: '設定パラメータ',
-          configParamsHint: '設定パラメータには検出設定と工程値が含まれます。検出設定は標準、時間、合格保持、保存、アラームを制御し、inlet_area_m2 などの工程値は追跡用に凍結され、PLC 書込計画から参照できます。',
+          configParamsHint:
+            '設定パラメータには検出設定と工程値が含まれます。検出設定は標準、時間、合格保持、保存、アラームを制御し、inlet_area_m2 などの工程値は追跡用に凍結され、PLC 書込計画から参照できます。',
           runControl: '実行制御パラメータ',
-          runControlHint: '一時停止、再開、終了、ミュート、特徴値更新に使います。task_id を指定すると対象タスクを固定し、省略時は project_id から後端が現在の実行を探します。',
+          runControlHint:
+            '一時停止、再開、終了、ミュート、特徴値更新に使います。task_id を指定すると対象タスクを固定し、省略時は project_id から後端が現在の実行を探します。',
           limitAdjust: '実行中の上下限調整',
-          limitAdjustHint: '現在 running のタスクスナップショットだけを調整し、全局の変数既定値や元の検出標準は変更しません。単一変数は var_id と上下限、複数は items JSON を使います。',
-          limitItemsPlaceholder: '[{"var_id":1,"limit_h":30,"alarm_enabled":true}]',
+          limitAdjustHint:
+            '現在 running のタスクスナップショットだけを調整し、全局の変数既定値や元の検出標準は変更しません。単一変数は var_id と上下限、複数は items JSON を使います。',
+          limitItemsPlaceholder:
+            '[{"var_id":1,"limit_h":30,"alarm_enabled":true}]',
           reportRegister: '帳票結果登録',
-          reportRegisterHint: '検出実行で生成された Excel 帳票の参照を登録します。保存するのは file_ref のみで、バイナリは保存しません。',
+          reportRegisterHint:
+            '検出実行で生成された Excel 帳票の参照を登録します。保存するのは file_ref のみで、バイナリは保存しません。',
           storagePrepare: 'プロジェクト幅広テーブル準備',
-          storagePrepareHint: '後端 storage_prepare モジュールを起動し、プロジェクトまたは実行スナップショットから幅広テーブルと動的列を準備します。サンプルデータは直接書き込みません。',
+          storagePrepareHint:
+            '後端 storage_prepare モジュールを起動し、プロジェクトまたは実行スナップショットから幅広テーブルと動的列を準備します。サンプルデータは直接書き込みません。',
           httpRequest: 'HTTP 呼び出しパラメータ',
-          httpRequestHint: '制御された HTTP エンドポイントを呼び出す開発者向けタスクモジュールです。headers は JSON オブジェクトで、現場制御は内蔵業務モジュールを優先してください。',
+          httpRequestHint:
+            '制御された HTTP エンドポイントを呼び出す開発者向けタスクモジュールです。headers は JSON オブジェクトで、現場制御は内蔵業務モジュールを優先してください。',
           processParams: '工程/帳票パラメータ',
-          processParamsHint: '例：inlet_area_m2。検出実行と一緒に凍結し、計算、帳票、追跡に使用します。',
+          processParamsHint:
+            '例：inlet_area_m2。検出実行と一緒に凍結し、計算、帳票、追跡に使用します。',
           reportRequests: '帳票要求',
-          reportRequestsHint: 'report_request.reports[] で 1 件以上の帳票を作成します。各帳票はテンプレート、変数、params を個別に持ちます。',
+          reportRequestsHint:
+            'report_request.reports[] で 1 件以上の帳票を作成します。各帳票はテンプレート、変数、params を個別に持ちます。',
           reportName: '帳票名',
           reportVariables: '今回の帳票変数',
           addReportRequest: '帳票要求を追加',
           plcWrites: 'PLC 書込計画',
-          plcWritesHint: 'PLC 書込は後端の変数書込 service を通ります。value_from で process_params.inlet_area_m2 を参照すれば同じ値を二重入力しません。',
-          plcWritesRequireVar: 'PLC 書込行は変数 var_id を選択した場合だけ最終 JSON に入ります。未選択の行は無視されます。',
+          plcWritesHint:
+            'PLC 書込は後端の変数書込 service を通ります。value_from で process_params.inlet_area_m2 を参照すれば同じ値を二重入力しません。',
+          plcWritesRequireVar:
+            'PLC 書込行は変数 var_id を選択した場合だけ最終 JSON に入ります。未選択の行は無視されます。',
           value: '値',
           literalValue: '直接値',
           addProcessParam: 'パラメータ追加',
           addPLCWrite: 'PLC 書込追加',
           preview: '要求 JSON プレビュー',
-          previewHint: 'STRING 仮想変数へ実際に書き込む内容です。送信前にフィールドの参照元と値を確認してください。',
+          previewHint:
+            'STRING 仮想変数へ実際に書き込む内容です。送信前にフィールドの参照元と値を確認してください。',
           send: '書き込み実行',
           sent: 'タスク要求を仮想変数へ書き込みました',
           failed: 'タスク要求の書き込みに失敗しました',
           errors: {
-            requestVariableRequired: 'watched STRING 仮想変数を選択してください',
-            invalidJson: 'タスク要求 JSON が無効です。custom_items またはパラメータ値を確認してください。',
+            requestVariableRequired:
+              'watched STRING 仮想変数を選択してください',
+            startTaskFlowRequired:
+              'このプロジェクトには有効な start_detection タスクフローがありません。watched STRING 仮想変数と検査開始タスクフローを先に設定してください。',
+            taskRequestFlowNotTriggered:
+              'タスク要求は書き込まれましたが、watched STRING タスクフローに一致しません。要求変数とタスクフロー設定を確認してください。',
+            invalidJson:
+              'タスク要求 JSON が無効です。custom_items またはパラメータ値を確認してください。',
           },
         },
         steps: {
@@ -3195,7 +3822,8 @@ export const resources = {
           title: 'モジュール引数',
           hint: '後端 task-modules.params_schema から描画します。オブジェクト、配列、コードは JSON/テキストで編集します。',
           source: 'ソース',
-          empty: '選択したアクションモジュールには引数 schema がありません。ステップ JSON は保持されます。',
+          empty:
+            '選択したアクションモジュールには引数 schema がありません。ステップ JSON は保持されます。',
           jsonPlaceholder: 'JSON を入力',
         },
         vars: {
@@ -3206,14 +3834,17 @@ export const resources = {
         },
         scripts: {
           condition: '条件スクリプト',
-          conditionHint: 'true を返すとアクションを実行します。まずは簡単な JavaScript 式で十分です。',
+          conditionHint:
+            'true を返すとアクションを実行します。まずは簡単な JavaScript 式で十分です。',
           action: 'アクションスクリプト',
-          actionHint: 'action_type=javascript の場合に実行します。組み込み動作は action_payload だけでも使えます。',
+          actionHint:
+            'action_type=javascript の場合に実行します。組み込み動作は action_payload だけでも使えます。',
         },
         messages: {
           saved: 'タスクを保存しました',
           queued: '後端実行キューに投入しました',
-          invalidStepsJson: 'ステップ JSON はオブジェクトまたは配列である必要があります',
+          invalidStepsJson:
+            'ステップ JSON はオブジェクトまたは配列である必要があります',
         },
         logs: {
           runs: '実行記録',
@@ -3235,7 +3866,8 @@ export const resources = {
       modelCockpit: {
         eyebrow: 'リアルタイム感知 · データ駆動 · スマート運用',
         title: 'リアルタイム 3D モデルコックピット',
-        subtitle: '現場モデルを読み込み、360 度ドラッグで確認できます。モデルは不透明のまま、内部流体を独立した 3D 診断レイヤーとして表面に表示し、測点ポップアップはモデル空間に追従し深度で遮蔽します。',
+        subtitle:
+          '現場モデルを読み込み、360 度ドラッグで確認できます。モデルは不透明のまま、内部流体を独立した 3D 診断レイヤーとして表面に表示し、測点ポップアップはモデル空間に追従し深度で遮蔽します。',
         metric: {
           limit: '上下限',
           optimizationLabel: '最適化率',
@@ -3283,7 +3915,8 @@ export const resources = {
           fit: 'ビュー調整',
         },
         messages: {
-          sampleFallback: 'ローカル後端のリアルタイム変数が利用できないため、サンプル波形でポップアップを駆動しています。',
+          sampleFallback:
+            'ローカル後端のリアルタイム変数が利用できないため、サンプル波形でポップアップを駆動しています。',
         },
         fluid: {
           eyebrow: '内部可視化',
@@ -3305,8 +3938,10 @@ export const resources = {
           eyebrow: '探索結果',
           title: '工程化可能',
           drag: 'OrbitControls により 360 度の確認が可能です。',
-          fluid: '流体レイヤーは独立した Three.js group で、診断表示として重ねられ、実配管や CFD データに置き換えられます。',
-          labels: 'ポップアップのアンカーはモデル空間にあり、レイキャストでモデル遮蔽を判定します。',
+          fluid:
+            '流体レイヤーは独立した Three.js group で、診断表示として重ねられ、実配管や CFD データに置き換えられます。',
+          labels:
+            'ポップアップのアンカーはモデル空間にあり、レイキャストでモデル遮蔽を判定します。',
         },
       },
       panels: {
@@ -3348,12 +3983,18 @@ export const resources = {
         updatedAt: '更新時刻',
       },
       messages: {
-        bridgeUnavailable: 'ブラウザ表示中のため Electron preload は利用できません。',
-        sidecarMissing: 'edge-backend.exe が見つかりません。先にバックエンドをビルドしてください。',
-        backendOffline: 'ローカルバックエンドに接続できません。画面はヘルス状態を継続確認します。',
-        mainServerMode: '主サーバーモードではバックエンドのヘルスのみ確認し、エッジ sidecar は起動しません。',
-        authPending: 'ローカルログイン/JWT は接続済みです。画面はメモリ token と capability で保護されます。',
-        ssoPending: '主サイト連携は後端発行の一回限り SSO ticket を使います。主サイト URL または service token が未設定の場合、renderer は案内のみ表示します。',
+        bridgeUnavailable:
+          'ブラウザ表示中のため Electron preload は利用できません。',
+        sidecarMissing:
+          'edge-backend.exe が見つかりません。先にバックエンドをビルドしてください。',
+        backendOffline:
+          'ローカルバックエンドに接続できません。画面はヘルス状態を継続確認します。',
+        mainServerMode:
+          '主サーバーモードではバックエンドのヘルスのみ確認し、エッジ sidecar は起動しません。',
+        authPending:
+          'ローカルログイン/JWT は接続済みです。画面はメモリ token と capability で保護されます。',
+        ssoPending:
+          '主サイト連携は後端発行の一回限り SSO ticket を使います。主サイト URL または service token が未設定の場合、renderer は案内のみ表示します。',
         noData: 'データなし',
       },
       station: {
@@ -3387,6 +4028,8 @@ export const resources = {
           idle: '試験未実行',
           running: '試験実行中',
           startTitle: '試験タスクを開始',
+          plan: '未開始計画',
+          planPlaceholder: '配信済み計画を選択',
           project: 'プロジェクト',
           factoryNo: '製造番号',
           customerName: '顧客名',
@@ -3399,9 +4042,18 @@ export const resources = {
           configName: '試験設定',
           reportTemplate: '帳票テンプレート',
           reportRequests: '帳票要求',
-          reportRequestsHint: '各行は report_request.reports[] の 1 件として凍結されます。',
+          reportRequestsHint:
+            '各行は report_request.reports[] の 1 件として凍結されます。',
           reportName: '帳票名',
           reportVariables: '今回の帳票変数',
+          reportVariablesPlaceholder:
+            '現在の試験設定の変数を既定で使用、または手動選択',
+          reportVariablesAutoHint:
+            '空欄の場合、現在の試験設定の {{count}} 個の変数を使用します。',
+          reportVariablesRequiredHint:
+            '現在の試験設定に使用可能な変数がありません。手動で帳票変数を選択しない場合、帳票要求は作成されません。',
+          reportAutoVariables: '設定変数 {{count}} 個',
+          fillReportVariables: '設定から変数を入力',
           reportParams: '帳票 params JSON',
           addReportRequest: '帳票を追加',
           removeReportRequest: '帳票を削除',
@@ -3413,9 +4065,11 @@ export const resources = {
           standardMode: '標準試験',
           performanceMode: '性能試験',
           stopTitle: '現在の試験を終了しますか？',
-          stopDesc: 'この設備の履歴保存だけを停止します。他の設備の試験には影響しません。',
+          stopDesc:
+            'この設備の履歴保存だけを停止します。他の設備の試験には影響しません。',
           abnormalStopTitle: '現在の試験を異常停止しますか？',
-          abnormalStopDesc: '故障、停止、現場中断時に使用します。このタスクは異常終了として記録されます。',
+          abnormalStopDesc:
+            '故障、停止、現場中断時に使用します。このタスクは異常終了として記録されます。',
           manualStopReason: '現場手動終了',
           abnormalDefaultReason: '現場異常停止',
         },
@@ -3430,12 +4084,14 @@ export const resources = {
           title: '工位表示設定',
           cardPool: 'カードエリア変数',
           listLayout: 'リストエリア変数',
-          cardHint: '最大 {{count}} 個の変数をリアルタイムカードとして使用します。',
+          cardHint:
+            '最大 {{count}} 個の変数をリアルタイムカードとして使用します。',
           listHint: 'これらの変数は検査リストに表示されます。',
           variablePlaceholder: 'プロジェクト変数を選択',
           saveSuccess: '工位表示設定を保存しました',
           saveFailed: '工位表示設定の保存に失敗しました',
-          noTemplate: 'このプロジェクトに保存可能な工位表示テンプレートがありません',
+          noTemplate:
+            'このプロジェクトに保存可能な工位表示テンプレートがありません',
         },
         pid: {
           title: 'PID リアルタイム書込み',
@@ -3502,9 +4158,11 @@ export const resources = {
         },
         view: {
           emptyCardsTitle: 'カード変数が未設定です',
-          emptyCardsHint: 'このプロジェクトで表示できるリアルタイム変数がありません。プロジェクトの変数紐付けと収集状態を確認してください。',
+          emptyCardsHint:
+            'このプロジェクトで表示できるリアルタイム変数がありません。プロジェクトの変数紐付けと収集状態を確認してください。',
           emptyTableTitle: '検査テーブル項目がありません',
-          emptyTableHint: '実行中の検査では標準スナップショットを優先表示します。未実行時は現在のプロジェクトの検査項目を表示します。',
+          emptyTableHint:
+            '実行中の検査では標準スナップショットを優先表示します。未実行時は現在のプロジェクトの検査項目を表示します。',
         },
         alarms: {
           title: '警報ログ',
@@ -3626,6 +4284,13 @@ export const resources = {
           hint: '実際の検査タスクをクリックすると、その履歴データを検索します。',
           empty: '検査タスクはありません',
           gantt: 'ガント',
+          compactMode: 'コンパクト',
+          realtimeMode: '実時間',
+          compactedGap: '圧縮済み間隔',
+          gapTooltip: '実際の間隔：{{gap}}',
+          gapDaysHours: '{{days}} 日 {{hours}} 時間',
+          gapHoursMinutes: '{{hours}} 時間 {{minutes}} 分',
+          gapMinutes: '{{minutes}} 分',
           taskList: 'タスクリスト',
           summaryList: 'タスク概要リスト',
           standardTest: '標準付き試験',
@@ -3637,6 +4302,35 @@ export const resources = {
           result: '結果',
           operation: '操作',
           viewDetail: '詳細を見る',
+        },
+        plans: {
+          planNo: '計画番号',
+          sourceSystem: 'ソースシステム',
+          externalPlanId: '外部計画 ID',
+          externalOrderNo: '外部注文番号',
+          deviceModel: '型式',
+          customerName: '顧客',
+          testItem: '検査項目',
+          testItemCode: '検査項目コード',
+          testSequence: '検査順序',
+          mode: '検査モード',
+          standardCode: '標準コード',
+          status: '状態',
+          owner: '開始エッジ',
+          allStatuses: 'すべての状態',
+          keyword: '製造番号/計画番号で検索',
+          apiUnavailable: '検査計画 API を利用できません',
+          edit: '計画編集',
+          editTitle: '検査計画を編集',
+          saveSuccess: '計画を保存しました',
+          saveFailed: '計画の保存に失敗しました',
+          mainServerOnly: '計画編集はメインサーバーでのみ利用できます',
+          statuses: {
+            pending: '未開始',
+            starting: '開始中',
+            started: '開始済み',
+            cancelled: '取消済み',
+          },
         },
         detail: {
           back: '戻る',
@@ -3665,17 +4359,33 @@ export const resources = {
             requestFallback: '帳票要求 #{{id}}',
             reportFallback: '帳票 #{{id}}',
             remoteTitle: 'Excel 帳票はメインサーバーで生成・保管されます',
-            remoteDescription: 'このエッジ端末は現場検査と履歴表示のみを担当します。タスク開始時に選択した帳票、生成状態、帳票添付のダウンロードはメインサーバー Web で操作してください。',
-            remoteEmpty: 'メインサーバー Web の履歴タスクで Excel 帳票を確認してください',
+            remoteDescription:
+              'このエッジ端末は現場検査と履歴表示のみを担当します。タスク開始時に選択した帳票、生成状態、帳票添付のダウンロードはメインサーバー Web で操作してください。',
+            remoteEmpty:
+              'メインサーバー Web の履歴タスクで Excel 帳票を確認してください',
             emptyRequests: 'このタスクには帳票要求がありません',
             selectReport: '左側の帳票を選択してください',
             lastUpdated: '最終更新',
+            generationHistory: '生成履歴',
+            latestGeneration: '最新バージョン',
+            generation: '履歴バージョン',
             retryGenerate: '生成を再試行',
-            downloadCurrent: '現在の帳票をダウンロード',
             retrySubmitted: '再試行を送信しました',
             retryFailed: '再試行に失敗しました',
-            downloadStarted: '帳票のダウンロードを開始しました',
-            downloadFailed: 'ダウンロードに失敗しました',
+            regenerateWithParams: 'パラメータを変更して再生成',
+            submitRegenerate: '再生成を送信',
+            regenerateSubmitted: '再生成を送信しました',
+            regenerateFailed: '再生成に失敗しました',
+            regenerateReason: '変更理由、省略可',
+            regenerateParamsHint:
+              'この帳票の JSON パラメータを編集します。送信すると新しい帳票バージョンを生成し、既存 Excel と検査開始時に凍結された元の要求は変更しません。',
+            invalidParamsJson: 'パラメータ JSON の形式が正しくありません',
+            paramsMustBeObject:
+              'パラメータは JSON オブジェクトである必要があります',
+            noGeneratedArtifact: 'この帳票にはまだ生成物がありません',
+            waitingForGeneratedArtifact:
+              '帳票生成が成功すると、実際の Excel がここに読み込まれます',
+            previewFailed: 'Excel 帳票プレビューに失敗しました',
             taskId: 'タスク ID',
             testNo: '検査番号',
             project: 'プロジェクト',
@@ -3739,16 +4449,28 @@ export const resources = {
           downloads: {
             title: 'データダウンロードアーカイブ',
             remoteTitle: 'データダウンロードはメインサーバーで一元提供されます',
-            remoteDescription: 'このエッジ端末では同一フロントエンド構造を保つため入口を表示します。すべてのダウンロードまたは選択ダウンロードはメインサーバー Web で操作してください。',
-            remoteEmpty: 'メインサーバー Web の履歴タスクでデータをダウンロードしてください',
+            remoteDescription:
+              'このエッジ端末では同一フロントエンド構造を保つため入口を表示します。すべてのダウンロードまたは選択ダウンロードはメインサーバー Web で操作してください。',
+            remoteEmpty:
+              'メインサーバー Web の履歴タスクでデータをダウンロードしてください',
             downloadSelected: '選択項目をダウンロード',
             downloadAll: 'すべてダウンロード',
+            selectedCount: '{{count}} 件選択済み',
+            selectAtLeastOne: '先に少なくとも 1 項目を選択してください',
+            packageStarted: 'ダウンロードパッケージを生成しました',
+            packageFailed: 'ダウンロードパッケージの生成に失敗しました',
+            packageScope:
+              'パッケージは主サーバーのバックエンドで生成され、正式 Excel 帳票、タスクスナップショット、履歴 CSV、イベントを含みます。単独 artifact がない曲線画像は manifest.skipped に記録されます。',
+            notImplementedInPackage:
+              'この項目はまだダウンロードパッケージ後端に接続されていないため、ダミーファイルは生成しません',
             data: '詳細データ',
             rawSamples: '生サンプルデータ (CSV)',
             filteredData: '現在のフィルター変数データ (CSV)',
             chartImage: '曲線画像 (PNG)',
             detailedTable: '詳細データ表 (Excel)',
             reports: 'Excel 帳票',
+            reportArtifact: '帳票ファイル',
+            noReportArtifacts: '生成済み帳票ファイルはありません',
             performanceReport: '性能試験帳票_V1.xlsx',
             longRunDaily: '長時間試験日報_Day1.xlsx',
             alarms: '警報とイベント',
@@ -3801,8 +4523,10 @@ export const resources = {
           mysql: 'MySQL',
           connection: '履歴 DB 接続',
           notImplemented: '後端管理',
-          externalSync: '履歴データはローカル MySQL と外部 DB 同期ソフトで扱います',
-          boundary: 'この画面は後端 API 経由で設定ファイルを読み書きします。renderer は MySQL に直接接続しません。',
+          externalSync:
+            '履歴データはローカル MySQL と外部 DB 同期ソフトで扱います',
+          boundary:
+            'この画面は後端 API 経由で設定ファイルを読み書きします。renderer は MySQL に直接接続しません。',
           host: 'ホスト',
           port: 'ポート',
           user: 'ユーザー',
@@ -3812,8 +4536,10 @@ export const resources = {
           passwordSet: 'パスワード設定済み',
           passwordMissing: 'パスワード未設定',
           restartRequired: '保存後に後端の再起動が必要',
-          restartRequiredDesc: '変更は後端設定ファイルへ保存されます。実行中の MySQL 接続はホットスワップしないため、sidecar 再起動後に新しい接続を使用します。',
-          restartRequiredSaved: '設定を保存しました。後端の再起動後に反映されます',
+          restartRequiredDesc:
+            '変更は後端設定ファイルへ保存されます。実行中の MySQL 接続はホットスワップしないため、sidecar 再起動後に新しい接続を使用します。',
+          restartRequiredSaved:
+            '設定を保存しました。後端の再起動後に反映されます',
           test: '接続テスト',
           testSuccess: 'DB 接続テストに成功しました',
           testFailed: 'DB 接続テストに失敗しました',
@@ -3824,7 +4550,8 @@ export const resources = {
           notes: '説明',
           noteExternal: '履歴同期は外部 DB 同期ソフトが担当します。',
           noteNoRendererDb: 'renderer から MySQL へ直接アクセスしません。',
-          noteFutureApi: '接続変更は後端が設定ファイルへ保存し、稼働中の後端を再起動した後に反映されます。',
+          noteFutureApi:
+            '接続変更は後端が設定ファイルへ保存し、稼働中の後端を再起動した後に反映されます。',
         },
         summary: {
           gateways: 'MQTT サイト',
@@ -3838,7 +4565,8 @@ export const resources = {
           currentProject: '現在のプロジェクト',
           projectVariables: 'プロジェクト変数',
           cardPool: 'カードプール',
-          cardHint: 'リアルタイムカードを最大 {{count}} 枚表示し、選択順で保存します。',
+          cardHint:
+            'リアルタイムカードを最大 {{count}} 枚表示し、選択順で保存します。',
           listLayout: 'リストレイアウト',
           listHint: '工位テーブルに表示する変数を選択し、選択順で保存します。',
           variablePlaceholder: '変数を選択',
@@ -3849,7 +4577,8 @@ export const resources = {
           pinned: '固定',
           normal: '通常',
           emptyList: 'リストレイアウトの変数が未選択です',
-          noTemplate: 'このプロジェクトで保存可能な工位テンプレートがありません',
+          noTemplate:
+            'このプロジェクトで保存可能な工位テンプレートがありません',
           loadFailed: '工位表示設定の読み込みに失敗しました',
           saveSuccess: '工位表示設定を保存しました',
           saveFailed: '工位表示設定の保存に失敗しました',
@@ -3858,9 +4587,11 @@ export const resources = {
           title: 'MQTT サイト',
           new: '新規サイト',
           empty: 'サイト設定なし',
-          emptyHint: 'ローカル後端の起動後に既存 MQTT サイトを読み込みます。新規作成は初回の収集元設定用です。',
+          emptyHint:
+            'ローカル後端の起動後に既存 MQTT サイトを読み込みます。新規作成は初回の収集元設定用です。',
           apiOffline: 'ローカル後端未接続',
-          apiOfflineDesc: '127.0.0.1:18080 が応答していないため、サイト、分組、変数を読み込めません。',
+          apiOfflineDesc:
+            '127.0.0.1:18080 が応答していないため、サイト、分組、変数を読み込めません。',
           createMode: '新規設定',
           detail: 'サイト詳細',
           noSelection: 'サイト未選択',
@@ -3881,7 +4612,8 @@ export const resources = {
           setdataTopic: '書込 Topic',
           writeResultTopic: '書込結果 Topic',
           queryAllTopic: '全量照会 Topic',
-          mainServerReadonly: '主サーバーロールでは MQTT/KIO ゲートウェイを直接管理しません。現場収集設定はエッジ側に残し、制御要求は主サーバーバックエンドが管理下で転送します。',
+          mainServerReadonly:
+            '主サーバーロールでは MQTT/KIO ゲートウェイを直接管理しません。現場収集設定はエッジ側に残し、制御要求は主サーバーバックエンドが管理下で転送します。',
         },
         groups: {
           title: 'プロジェクト分組',
@@ -3890,6 +4622,7 @@ export const resources = {
           name: '名称',
           site: 'サイト/プロジェクト',
           model: '型式',
+          projectGroup: 'プロジェクト組',
           create: '分組を作成',
           allVariables: '全変数',
         },
@@ -3923,7 +4656,8 @@ export const resources = {
           save: '変数設定を保存',
           readonly: '読取専用',
           afterAssign: '割当後に設定',
-          unassignedReadonly: '未割当変数は収集元と基本属性のみ表示します。プロジェクトへ割り当てた後、表示名、単位、精度、保存策略を編集できます。',
+          unassignedReadonly:
+            '未割当変数は収集元と基本属性のみ表示します。プロジェクトへ割り当てた後、表示名、単位、精度、保存策略を編集できます。',
           varName: '変数名',
           displayName: '中国語表示名',
           displayNameEn: '英語表示名',
@@ -3935,16 +4669,22 @@ export const resources = {
           storeCycle: '保存周期(秒)',
           storeDeadband: 'デッドバンド',
           basicSection: '基本属性',
-          basicSectionHint: '表示名、データ型、単位、精度、スケール、検出保存トリガー。',
+          basicSectionHint:
+            '表示名、データ型、単位、精度、スケール、検出保存トリガー。',
           storageSection: '保存マッピング',
-          storageSectionHint: '履歴表、検出フォーム、帳票フィールド、ワイドテーブルに入る業務フィールドを定義します。',
+          storageSectionHint:
+            '履歴表、検出フォーム、帳票フィールド、ワイドテーブルに入る業務フィールドを定義します。',
           writeSection: '書込制約',
-          writeSectionHint: '書込モード、パス、データ型が明確な場合のみ制御コマンド対象にできます。',
+          writeSectionHint:
+            '書込モード、パス、データ型が明確な場合のみ制御コマンド対象にできます。',
           runtimeSection: '実行時保護',
-          runtimeSectionHint: '防振、デッドバンド、起動スナップショットで異常値と起動ノイズを抑えます。',
+          runtimeSectionHint:
+            '防振、デッドバンド、起動スナップショットで異常値と起動ノイズを抑えます。',
           defaultAlarmSection: '既定アラーム',
-          defaultAlarmSectionHint: '変数資産の既定値であり、標準または実行スナップショットの参照値です。検出標準の上下限は置き換えません。',
-          defaultAlarmHint: '既定アラームは変数資産属性です。実際の判定は検出標準と今回の実行スナップショットを使用します。',
+          defaultAlarmSectionHint:
+            '変数資産の既定値であり、標準または実行スナップショットの参照値です。検出標準の上下限は置き換えません。',
+          defaultAlarmHint:
+            '既定アラームは変数資産属性です。実際の判定は検出標準と今回の実行スナップショットを使用します。',
           defaultAlarmEnabled: '既定アラーム有効',
           defaultLimitLL: '既定 LL',
           defaultLimitL: '既定 L',
@@ -3954,7 +4694,8 @@ export const resources = {
           defaultViolationHold: '既定超限保持(ms)',
           defaultRecoverHold: '既定復帰保持(ms)',
           applyToRunning: '現在実行中のスナップショットへ同期',
-          applyToRunningWarning: '現在 running のタスク内の変数既定アラームスナップショットだけを同期します。検出標準の業務上下限は変更しません。現場状態を確認してから適用してください。',
+          applyToRunningWarning:
+            '現在 running のタスク内の変数既定アラームスナップショットだけを同期します。検出標準の業務上下限は変更しません。現場状態を確認してから適用してください。',
           storageName: '保存業務名',
           storageTarget: '保存先',
           storageTable: '対象テーブル',
@@ -3977,22 +4718,27 @@ export const resources = {
           debounceMs: '防振時間(ms)',
           runtimeDeadband: '実行時デッドバンド',
           startupSnapshot: '起動スナップショット',
-          writeModeRequired: '書込許可時は読書モードを W または RW にしてください。',
+          writeModeRequired:
+            '書込許可時は読書モードを W または RW にしてください。',
           writePathRequired: '書込許可時は書込パスが必要です。',
           writeDataTypeRequired: '書込許可時は書込データ型が必要です。',
           unassignedPool: '未割当変数プール',
-          unassignedPoolHint: '収集元と基本属性のみ表示します。選択した変数を同じプロジェクトへ一括割当できます。',
+          unassignedPoolHint:
+            '収集元と基本属性のみ表示します。選択した変数を同じプロジェクトへ一括割当できます。',
           selectAll: '現在の結果を全選択',
           clearSelection: '選択をクリア',
           batchAssign: '{{count}} 件を一括割当',
           batchAssignTitle: '{{count}} 件の変数を一括割当',
-          batchAssignHint: '選択した未割当変数を同じプロジェクトへ割り当てます。',
+          batchAssignHint:
+            '選択した未割当変数を同じプロジェクトへ割り当てます。',
           emptyUnassigned: '現在のフィルターに未割当変数はありません',
           createVirtual: '仮想変数を作成',
-          virtualHint: '仮想変数は検出開始、状態、判定結果など MQTT 検出以外の変数に使います。先にプロジェクトへ紐付ける必要があります。',
+          virtualHint:
+            '仮想変数は検出開始、状態、判定結果など MQTT 検出以外の変数に使います。先にプロジェクトへ紐付ける必要があります。',
           kioRemap: 'KIO プロジェクト初期化',
           kioRemapTitle: 'KIO 変数をプロジェクトへ一括割当',
-          kioRemapHint: '「台N_xx」の原始変数名をプロジェクト N に対応させます。先にプレビューし、その後に実際の割当と業務名リマップを実行します。',
+          kioRemapHint:
+            '「台N_xx」の原始変数名をプロジェクト N に対応させます。先にプレビューし、その後に実際の割当と業務名リマップを実行します。',
           kioProjectCount: 'プロジェクト数',
           kioProjectCodePrefix: 'プロジェクトコード接頭辞',
           kioProjectDisplayPrefix: 'プロジェクト名接頭辞',
@@ -4002,10 +4748,13 @@ export const resources = {
           kioDryRun: 'プレビュー',
           kioExecute: '初期化を実行',
           kioExecuted: '実行済み',
-          kioExecuteConfirm: '実際の KIO プロジェクト初期化を実行しますか？変数のプロジェクト割当、業務名、既定保存ルート候補が変更されます。',
+          kioExecuteConfirm:
+            '実際の KIO プロジェクト初期化を実行しますか？変数のプロジェクト割当、業務名、既定保存ルート候補が変更されます。',
           kioRemapDryRunDone: 'KIO プロジェクト初期化プレビューが完了しました',
-          kioRemapDone: 'KIO プロジェクト初期化が完了しました。{{count}} 件の変数を更新しました',
-          kioResultSummary: '一致 {{matched}}、更新 {{updated}}、スキップ {{skipped}}、作成プロジェクト {{created_projects}}、更新プロジェクト {{updated_projects}}',
+          kioRemapDone:
+            'KIO プロジェクト初期化が完了しました。{{count}} 件の変数を更新しました',
+          kioResultSummary:
+            '一致 {{matched}}、更新 {{updated}}、スキップ {{skipped}}、作成プロジェクト {{created_projects}}、更新プロジェクト {{updated_projects}}',
           kioAction: '動作',
           kioReason: '理由',
         },
@@ -4022,7 +4771,8 @@ export const resources = {
           mode: 'モード',
           version: 'バージョン',
           items: '標準項目',
-          itemsHint: '変数を選択し、判定間隔、超限確認時間、復帰確認時間、上下限、保存対象を個別に設定します。',
+          itemsHint:
+            '変数を選択し、判定間隔、超限確認時間、復帰確認時間、上下限、保存対象を個別に設定します。',
           addVariable: '追加する変数を選択',
           add: '追加',
           check: '検出',
@@ -4050,6 +4800,11 @@ export const resources = {
             failOnBad: '異常品質で不合格',
           },
           remark: '備考',
+          scope: '適用範囲',
+          scopeCurrentProject: '現在のプロジェクト',
+          scopeProject: 'プロジェクト {{project}}',
+          scopeProjectGroup: 'プロジェクト組 {{group}}',
+          scopeGlobal: '全体',
           global: '共通',
           deleteConfirm: '検出標準 {{code}} を削除しますか？',
         },
@@ -4059,7 +4814,8 @@ export const resources = {
           create: 'ルート追加',
           edit: 'ルート編集',
           save: 'ルート保存',
-          routeHint: '保存ルートは履歴保存の周期のみを制御します。合否判定間隔と超限確認時間は検出標準で設定します。',
+          routeHint:
+            '保存ルートは履歴保存の周期のみを制御します。合否判定間隔と超限確認時間は検出標準で設定します。',
           project: 'プロジェクト',
           variable: '変数',
           routeCode: 'ルートコード',
@@ -4158,27 +4914,34 @@ export const resources = {
           title: 'システム設定',
           local: 'ローカル',
           sidecar: 'バックエンドサービス',
-          sidecarDesc: 'Go sidecar の起動、ヘルスチェック、復旧策略を管理します。',
+          sidecarDesc:
+            'Go sidecar の起動、ヘルスチェック、復旧策略を管理します。',
           backend: 'バックエンドサービス',
-          backendDesc: '現在の実行ロールではバックエンドのヘルスのみ確認し、デスクトップシェルからエッジ sidecar は起動しません。',
+          backendDesc:
+            '現在の実行ロールではバックエンドのヘルスのみ確認し、デスクトップシェルからエッジ sidecar は起動しません。',
           restartSidecar: '後端再起動',
           refreshBackend: '状態更新',
           startup: '自動起動',
-          startupDesc: 'Windows サインイン時にエッジ端末を自動起動し、非表示で開始します。',
+          startupDesc:
+            'Windows サインイン時にエッジ端末を自動起動し、非表示で開始します。',
           minimizeToTray: 'トレイへ最小化',
-          minimizeToTrayDesc: 'メイン画面を閉じても収集とローカル API を維持し、トレイアイコンのダブルクリックで復帰します。',
+          minimizeToTrayDesc:
+            'メイン画面を閉じても収集とローカル API を維持し、トレイアイコンのダブルクリックで復帰します。',
           watchdog: '異常復旧',
-          watchdogDesc: 'sidecar 異常終了後、最大 5 回まで自動再起動します。現在の回数：{{count}}。',
+          watchdogDesc:
+            'sidecar 異常終了後、最大 5 回まで自動再起動します。現在の回数：{{count}}。',
           logs: 'ログと診断',
           logsDesc: '現場診断用にバックエンド実行ログの場所を開きます。',
           refreshLogs: 'ログ更新',
           logPreview: '実行ログプレビュー',
           logPreviewDesc: 'ローカル後端ログファイルの末尾を表示します。',
           logUpdatedAt: '更新日時：{{time}}',
-          logEmpty: '表示できる実行ログはありません。ブラウザプレビューではローカルログを読み取れません。',
+          logEmpty:
+            '表示できる実行ログはありません。ブラウザプレビューではローカルログを読み取れません。',
           browserPreview: 'ブラウザプレビュー',
           auditLogs: 'バックエンド監査ログ',
-          auditLogsDesc: '直近 80 件のログイン、書き込み、コマンド監査を表示します。現在の一致数：{{count}}。',
+          auditLogsDesc:
+            '直近 80 件のログイン、書き込み、コマンド監査を表示します。現在の一致数：{{count}}。',
           refreshAuditLogs: '監査更新',
           auditEmpty: 'バックエンド監査ログはありません。',
           auditTime: '時刻',
@@ -4193,7 +4956,8 @@ export const resources = {
             failed: '失敗',
           },
           workerDiagnostics: 'バックグラウンド Worker 診断',
-          workerDiagnosticsDesc: '後端 worker の稼働、panic 数、復旧ガイドを表示します。現在 {{count}} 件。',
+          workerDiagnosticsDesc:
+            '後端 worker の稼働、panic 数、復旧ガイドを表示します。現在 {{count}} 件。',
           refreshDiagnostics: '診断更新',
           workerEmpty: 'worker 診断データはありません。',
           workerName: 'Worker',
@@ -4209,7 +4973,8 @@ export const resources = {
             stopped_after_panic: 'Panic 後停止',
           },
           runtimeDiagnostics: '実行キュー診断',
-          runtimeDiagnosticsDesc: '後端の主要キュー、通知配信、タスクフローキューを表示します。主要キュー {{queues}} 件、過負荷 {{pressure}} 件。',
+          runtimeDiagnosticsDesc:
+            '後端の主要キュー、通知配信、タスクフローキューを表示します。主要キュー {{queues}} 件、過負荷 {{pressure}} 件。',
           queueEmpty: '実行キュー診断データはありません。',
           queueName: 'キュー',
           queueUsage: '使用率',

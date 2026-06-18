@@ -26,11 +26,12 @@ type HistoryFilter struct {
 }
 
 type DetectionStandardFilter struct {
-	ProjectID   *uint
-	ProjectCode string
-	Mode        string
-	Enabled     *bool
-	Keyword     string
+	ProjectID    *uint
+	ProjectCode  string
+	ProjectGroup string
+	Mode         string
+	Enabled      *bool
+	Keyword      string
 }
 
 type DetectionTaskFilter struct {
@@ -91,9 +92,10 @@ type StartDetectionOptions struct {
 }
 
 var (
-	ErrProjectAlreadyRunning = errors.New("project already has a running detection task")
-	ErrReferenced            = errors.New("resource is already referenced")
-	ErrEdgeInstanceMismatch  = errors.New("project and gateway edge_instance_id mismatch")
+	ErrProjectAlreadyRunning   = errors.New("project already has a running detection task")
+	ErrReferenced              = errors.New("resource is already referenced")
+	ErrEdgeInstanceMismatch    = errors.New("project and gateway edge_instance_id mismatch")
+	ErrDetectionPlanNotPending = errors.New("detection plan is not pending")
 )
 
 func NewRepository(db *gorm.DB) *Repository {

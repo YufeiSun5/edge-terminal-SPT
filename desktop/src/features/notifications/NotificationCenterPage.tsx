@@ -7,11 +7,22 @@ import type { Dayjs } from 'dayjs'
 import { useNavigate } from 'react-router'
 import { CheckCheck, RefreshCw, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { getNotificationUnreadCount, getNotifications, getProjects, markAllNotificationsRead, markNotificationRead } from '@/features/edge-status/api'
+import {
+  getMainReportNotificationUnreadCount,
+  getMainReportNotifications,
+  getNotificationUnreadCount,
+  getNotifications,
+  getProjects,
+  markAllMainReportNotificationsRead,
+  markAllNotificationsRead,
+  markMainReportNotificationRead,
+  markNotificationRead,
+} from '@/features/edge-status/api'
 import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
-import type { NotificationListParams, Project, UserNotification } from '@/shared/api/types'
+import type { MainReportNotification, NotificationListParams, NotificationListResponse, Project, UserNotification } from '@/shared/api/types'
 import { queryClient } from '@/app/queryClient'
 import { languageCode } from '@/shared/i18n/language'
+import { env } from '@/shared/config/env'
 import './notification-center.css'
 
 const notificationTypeOptions = [
@@ -22,6 +33,7 @@ const notificationTypeOptions = [
   { value: 'detection.run_stopped', labelKey: 'notifications.types.runStopped' },
   { value: 'detection.result_ok', labelKey: 'notifications.types.resultOk' },
   { value: 'detection.result_ng', labelKey: 'notifications.types.resultNg' },
+  { value: 'report.job', labelKey: 'notifications.types.reportJob' },
 ]
 
 const levelOptions = ['info', 'success', 'warning', 'error']
@@ -34,6 +46,52 @@ type NotificationFilters = {
   keyword?: string
   from?: string
   to?: string
+}
+
+function reportNotificationToUserNotification(notification: MainReportNotification): UserNotification {
+  const payload = notification.payload ?? {}
+  const taskId = Number(payload.task_id ?? 0)
+  const projectId = Number(payload.project_id ?? 0)
+  const reportName = String(payload.report_name ?? notification.title ?? '')
+  return {
+    id: -notification.id,
+    event_uid: `main-report-${notification.id}`,
+    type: 'report.job',
+    level: notification.level,
+    target_type: 'all',
+    target_id: String(notification.job_id),
+    project_id: Number.isFinite(projectId) ? projectId : 0,
+    project_code: typeof payload.project_code === 'string' ? payload.project_code : undefined,
+    task_id: Number.isFinite(taskId) && taskId > 0 ? taskId : undefined,
+    test_no: typeof payload.test_no === 'string' ? payload.test_no : undefined,
+    display_name: reportName || notification.title,
+    message: notification.message,
+    payload: { ...payload, report_notification_id: notification.id, job_id: notification.job_id },
+    occurred_at: notification.created_at,
+    created_at: notification.created_at,
+    read_at: notification.read_at,
+  }
+}
+
+function canIncludeReportNotifications(filters: NotificationFilters) {
+  return env.runtimeRole === 'main_server'
+    && !filters.project_id
+    && !filters.keyword
+    && !filters.from
+    && !filters.to
+    && (!filters.type || filters.type === 'report.job')
+}
+
+function sortNotifications(items: UserNotification[]) {
+  return items.sort((left, right) => {
+    const leftTime = Date.parse(left.occurred_at || left.created_at || '')
+    const rightTime = Date.parse(right.occurred_at || right.created_at || '')
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0)
+  })
+}
+
+function emptyNotificationList(limit: number, offset: number): NotificationListResponse {
+  return { items: [], total: 0, limit, offset }
 }
 
 export function NotificationCenterPage() {
@@ -61,14 +119,52 @@ export function NotificationCenterPage() {
 
   const notificationsQuery = useQuery({
     queryKey: ['notification-center', 'items', queryParams],
-    queryFn: () => getNotifications(queryParams),
+    queryFn: async () => {
+      const limit = queryParams.limit ?? 20
+      const offset = queryParams.offset ?? 0
+      const includeReports = canIncludeReportNotifications(filters)
+      if (filters.type === 'report.job') {
+        if (!includeReports) return emptyNotificationList(limit, offset)
+        const report = await getMainReportNotifications({
+          unread: filters.unread,
+          level: filters.level,
+          limit,
+          offset,
+        })
+        return {
+          items: report.items.map(reportNotificationToUserNotification),
+          total: report.total,
+          limit: report.limit,
+          offset: report.offset,
+        }
+      }
+      if (!includeReports) return getNotifications(queryParams)
+
+      const fetchLimit = offset + limit
+      const [base, report] = await Promise.all([
+        getNotifications({ ...queryParams, limit: fetchLimit, offset: 0 }),
+        getMainReportNotifications({ unread: filters.unread, level: filters.level, limit: fetchLimit, offset: 0 }),
+      ])
+      const merged = sortNotifications([...base.items, ...report.items.map(reportNotificationToUserNotification)]).slice(offset, offset + limit)
+      return { items: merged, total: base.total + report.total, limit, offset }
+    },
     refetchInterval: 10000,
     retry: false,
   })
 
   const unreadQuery = useQuery({
     queryKey: ['notification-center', 'unread', filters],
-    queryFn: () => getNotificationUnreadCount(filters),
+    queryFn: async () => {
+      const includeReports = canIncludeReportNotifications(filters)
+      if (filters.type === 'report.job') {
+        if (!includeReports) return { unread: 0 }
+        return getMainReportNotificationUnreadCount({ level: filters.level })
+      }
+      const base = await getNotificationUnreadCount(filters)
+      if (!includeReports) return base
+      const report = await getMainReportNotificationUnreadCount({ level: filters.level })
+      return { unread: base.unread + report.unread }
+    },
     refetchInterval: 10000,
     retry: false,
   })
@@ -82,14 +178,24 @@ export function NotificationCenterPage() {
   }, [filters.from, filters.to])
 
   const markReadMutation = useMutation({
-    mutationFn: (id: number) => markNotificationRead(id),
+    mutationFn: (id: number) => id < 0 ? markMainReportNotificationRead(Math.abs(id)) : markNotificationRead(id),
     onSuccess: async () => {
       await invalidateNotifications()
     },
   })
 
   const markAllMutation = useMutation({
-    mutationFn: () => markAllNotificationsRead(filters),
+    mutationFn: async () => {
+      const includeReports = canIncludeReportNotifications(filters)
+      if (filters.type === 'report.job') {
+        if (!includeReports) return { updated: 0 }
+        return markAllMainReportNotificationsRead({ unread: filters.unread, level: filters.level })
+      }
+      const base = await markAllNotificationsRead(filters)
+      if (!includeReports) return base
+      const report = await markAllMainReportNotificationsRead({ unread: filters.unread, level: filters.level })
+      return { updated: base.updated + report.updated }
+    },
     onSuccess: async (response) => {
       messageApi.success(t('notifications.center.readAllDone', { count: response.updated }))
       await invalidateNotifications()
@@ -168,6 +274,15 @@ export function NotificationCenterPage() {
       if (notification.task_id) params.set('scope', 'detection')
       params.set('status', 'active')
       navigate(`/alarms?${params.toString()}`)
+      return
+    }
+
+    if (notification.type === 'report.job') {
+      if (notification.task_id) {
+        navigate(`/history/runs/${notification.task_id}?tab=reports`)
+      } else {
+        navigate('/history')
+      }
       return
     }
 

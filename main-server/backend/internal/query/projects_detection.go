@@ -215,7 +215,7 @@ func (i DetectionRunStandardItem) MarshalJSON() ([]byte, error) {
 
 func (q *StationViewQuery) ListProjects(edgeInstanceID string, includeLegacy bool, limit int, offset int) ([]Project, error) {
 	var projects []Project
-	stmt := q.db.Model(&Project{})
+	stmt := q.db.Model(&Project{}).Where("enabled = ?", true)
 	edgeInstanceID = strings.TrimSpace(edgeInstanceID)
 	if edgeInstanceID != "" {
 		if includeLegacy {

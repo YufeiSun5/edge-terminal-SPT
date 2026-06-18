@@ -30,6 +30,9 @@ type ReportTaskIdentity struct {
 	EdgeInstanceID string     `json:"edge_instance_id"`
 	TaskID         uint       `json:"task_id"`
 	TestNo         string     `json:"test_no"`
+	FactoryNo      string     `json:"factory_no,omitempty"`
+	CustomerName   string     `json:"customer_name,omitempty"`
+	DeviceModel    string     `json:"device_model,omitempty"`
 	ProjectID      uint       `json:"project_id"`
 	ProjectCode    string     `json:"project_code"`
 	Status         string     `json:"status"`
@@ -97,9 +100,11 @@ type ReportLimitSnapshot struct {
 }
 
 type CellMappingSpec struct {
-	Version int               `json:"version"`
-	Sheet   string            `json:"sheet"`
-	Items   []CellMappingItem `json:"items"`
+	Version    int               `json:"version"`
+	Sheet      string            `json:"sheet"`
+	ChartSheet string            `json:"chart_sheet"`
+	ChartCell  string            `json:"chart_cell"`
+	Items      []CellMappingItem `json:"items"`
 }
 
 type CellMappingItem struct {
@@ -160,6 +165,9 @@ func buildReportPackage(job MainReportJob, readiness query.ReportReadiness, requ
 			EdgeInstanceID: job.EdgeInstanceID,
 			TaskID:         readiness.Task.ID,
 			TestNo:         readiness.Task.TestNo,
+			FactoryNo:      readiness.Task.FactoryNo,
+			CustomerName:   readiness.Task.CustomerName,
+			DeviceModel:    readiness.Task.DeviceModel,
 			ProjectID:      readiness.Task.ProjectID,
 			ProjectCode:    readiness.Task.ProjectCode,
 			Status:         readiness.Task.Status,
@@ -306,6 +314,36 @@ func parseCellMapping(params map[string]any) (CellMappingSpec, bool, error) {
 	return spec, true, nil
 }
 
+func reportPackageWithTemplateMapping(pkg ReportPackage, templateParamsSchemaJSON string) (ReportPackage, error) {
+	if len(pkg.Reports) == 0 {
+		return pkg, nil
+	}
+	if _, ok, err := parseCellMapping(pkg.Reports[0].Params); ok || err != nil {
+		return pkg, err
+	}
+	templateParams := map[string]any{}
+	if strings.TrimSpace(templateParamsSchemaJSON) == "" {
+		return pkg, nil
+	}
+	if err := json.Unmarshal([]byte(templateParamsSchemaJSON), &templateParams); err != nil {
+		return pkg, fmt.Errorf("parse template params_schema_json: %w", err)
+	}
+	if _, ok, err := parseCellMapping(templateParams); err != nil || !ok {
+		return pkg, err
+	}
+	next := pkg
+	next.Reports = append([]ReportItem(nil), pkg.Reports...)
+	params := map[string]any{}
+	for key, value := range templateParams {
+		params[key] = value
+	}
+	for key, value := range pkg.Reports[0].Params {
+		params[key] = value
+	}
+	next.Reports[0].Params = params
+	return next, nil
+}
+
 func applyCellMapping(file *excelize.File, pkg ReportPackage) error {
 	if len(pkg.Reports) == 0 {
 		return nil
@@ -353,6 +391,12 @@ func resolveCellMappingValue(pkg ReportPackage, item CellMappingItem) (any, bool
 		return pkg.Task.TaskID, true
 	case "task.test_no":
 		return pkg.Task.TestNo, true
+	case "task.factory_no":
+		return pkg.Task.FactoryNo, pkg.Task.FactoryNo != ""
+	case "task.customer_name":
+		return pkg.Task.CustomerName, pkg.Task.CustomerName != ""
+	case "task.device_model":
+		return pkg.Task.DeviceModel, pkg.Task.DeviceModel != ""
 	case "task.project_id":
 		return pkg.Task.ProjectID, true
 	case "task.project_code":

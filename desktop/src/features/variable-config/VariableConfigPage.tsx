@@ -394,7 +394,7 @@ export function VariableConfigPage() {
 
   function openKioRemapModal() {
     kioRemapForm.setFieldsValue({
-      project_count: 12,
+      project_count: 8,
       project_code_prefix: 'AC',
       project_display_prefix: '项目',
       project_en_prefix: 'Project ',
@@ -956,7 +956,7 @@ function KioRemapModal({
       <Alert className="settings-modal-alert" showIcon type="info" title={t('settings.variables.kioRemapHint')} />
       <Form form={form} layout="vertical">
         <div className="settings-form-grid modal-grid">
-          <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}><InputNumber min={1} max={12} /></Form.Item>
+          <Form.Item name="project_count" label={t('settings.variables.kioProjectCount')} rules={[{ required: true }]}><InputNumber min={1} max={8} /></Form.Item>
           <Form.Item name="project_code_prefix" label={t('settings.variables.kioProjectCodePrefix')}><Input /></Form.Item>
           <Form.Item name="project_display_prefix" label={t('settings.variables.kioProjectDisplayPrefix')}><Input /></Form.Item>
           <Form.Item name="raw_project_prefix" label={t('settings.variables.kioRawProjectPrefix')}><Input /></Form.Item>

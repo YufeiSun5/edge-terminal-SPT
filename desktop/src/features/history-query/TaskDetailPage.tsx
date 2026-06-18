@@ -6,7 +6,7 @@ import type { Dayjs } from 'dayjs'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft } from 'lucide-react'
-import { getDetectionRuns } from '@/features/edge-status/api'
+import { getDetectionRun, getDetectionRuns } from '@/features/edge-status/api'
 import { DetailedDataTab } from './components/DetailedDataTab'
 import { ExcelReportsTab } from './components/ExcelReportsTab'
 import { AlarmsEventsTab } from './components/AlarmsEventsTab'
@@ -20,8 +20,16 @@ export function TaskDetailPage() {
   const navigate = useNavigate()
   const { taskId: taskIdStr } = useParams()
   const taskId = Number(taskIdStr)
+  const validTaskId = Number.isFinite(taskId) && taskId > 0 ? taskId : 0
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'data'
+
+  const runDetailQuery = useQuery({
+    queryKey: ['history', 'run', validTaskId],
+    queryFn: () => getDetectionRun(validTaskId),
+    enabled: validTaskId > 0,
+    retry: false,
+  })
 
   const runsQuery = useQuery({
     queryKey: ['history', 'detection-runs'],
@@ -31,13 +39,17 @@ export function TaskDetailPage() {
   })
 
   const runs = useMemo(() => runsQuery.data?.items ?? [], [runsQuery.data?.items])
+  const selectedRun = runDetailQuery.data ?? runs.find((run) => run.id === taskId)
+  const runsForFilters = useMemo(() => {
+    if (!selectedRun) return runs
+    return [selectedRun, ...runs.filter((run) => run.id !== selectedRun.id)]
+  }, [runs, selectedRun])
 
   const [filterFactory, setFilterFactory] = useState<string | null | undefined>(undefined)
   const [filterConfig, setFilterConfig] = useState<string | null | undefined>(undefined)
   const [filterProject, setFilterProject] = useState<string | null | undefined>(undefined)
   const [filterTimeRange, setFilterTimeRange] = useState<TimeRange | undefined>(undefined)
 
-  const selectedRun = runs.find((run) => run.id === taskId)
   const defaultTimeRange = useMemo<TimeRange>(() => {
     if (!selectedRun?.started_at) return null
     const day = dayjs(selectedRun.started_at)
@@ -50,22 +62,22 @@ export function TaskDetailPage() {
   const effectiveTimeRange = filterTimeRange === undefined ? defaultTimeRange : filterTimeRange
 
   const factoryOptions = useMemo(() => {
-    const factories = new Set(runs.map(r => r.factory_no).filter(Boolean))
+    const factories = new Set(runsForFilters.map(r => r.factory_no).filter(Boolean))
     return Array.from(factories).map(f => ({ label: f, value: f }))
-  }, [runs])
+  }, [runsForFilters])
 
   const configOptions = useMemo(() => {
-    const configs = new Set(runs.map(r => r.config_name || r.standard_code).filter(Boolean))
+    const configs = new Set(runsForFilters.map(r => r.config_name || r.standard_code).filter(Boolean))
     return Array.from(configs).map(c => ({ label: c, value: c }))
-  }, [runs])
+  }, [runsForFilters])
 
   const projectOptions = useMemo(() => {
-    const codes = new Set(runs.map(r => r.project_code).filter(Boolean))
+    const codes = new Set(runsForFilters.map(r => r.project_code).filter(Boolean))
     return Array.from(codes).map(c => ({ label: c, value: c }))
-  }, [runs])
+  }, [runsForFilters])
 
   const filteredRuns = useMemo(() => {
-    return runs.filter(r => {
+    return runsForFilters.filter(r => {
       if (effectiveFactory && r.factory_no !== effectiveFactory) return false;
       if (effectiveConfig && (r.config_name || r.standard_code) !== effectiveConfig) return false;
       if (effectiveProject && r.project_code !== effectiveProject) return false;
@@ -77,17 +89,20 @@ export function TaskDetailPage() {
       }
       return true;
     })
-  }, [runs, effectiveFactory, effectiveConfig, effectiveProject, effectiveTimeRange])
+  }, [runsForFilters, effectiveFactory, effectiveConfig, effectiveProject, effectiveTimeRange])
 
   const handleTabChange = (key: string) => {
     setSearchParams({ tab: key }, { replace: true })
   }
 
+  const hasManualFilter = filterFactory !== undefined || filterConfig !== undefined || filterProject !== undefined || filterTimeRange !== undefined
+
   useEffect(() => {
+    if (!hasManualFilter) return
     if (filteredRuns.length > 0 && !filteredRuns.find(r => r.id === taskId)) {
       navigate(`/history/runs/${filteredRuns[0].id}?tab=${activeTab}`)
     }
-  }, [activeTab, filteredRuns, navigate, taskId])
+  }, [activeTab, filteredRuns, hasManualFilter, navigate, taskId])
 
   return (
     <ConfigProvider

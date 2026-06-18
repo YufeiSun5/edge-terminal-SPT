@@ -17,6 +17,7 @@ import {
   updateDetectionStandard,
 } from '@/features/edge-status/api'
 import type { DetectionStandard, DetectionStandardItemPayload, DetectionStandardPayload, Project, ReportTemplate, VarIdentifier, VariableConfig } from '@/shared/api/types'
+import { detectionStandardScopeColor, detectionStandardScopeLabel } from '@/shared/detection/standardScope'
 import { languageCode } from '@/shared/i18n/language'
 import '@/features/settings/settings.css'
 import './detection-config.css'
@@ -210,6 +211,7 @@ export function DetectionConfigPage() {
         display_name_ja: detail.display_name_ja,
         project_id: standardProjectId(detail),
         project_code: standardProjectCode(detail),
+        project_group: detail.project_group,
         mode: detail.mode,
         report_template_id: detail.report_template_id,
         version: detail.version,
@@ -221,6 +223,9 @@ export function DetectionConfigPage() {
     } else {
       standardForm.setFieldsValue({
         standard_code: `STD-${Date.now().toString().slice(-6)}`,
+        project_id: undefined,
+        project_code: '',
+        project_group: '',
         mode: 'standard',
         version: 1,
         enabled: true,
@@ -299,6 +304,7 @@ export function DetectionConfigPage() {
       const payload: DetectionStandardPayload = {
         ...values,
         project_code: projectCode(project) || values.project_code || '',
+        project_group: values.project_group || project?.project_group || '',
         mode: values.mode || 'standard',
         version: editingStandard?.version ?? 1,
         enabled: values.enabled ?? true,
@@ -335,6 +341,7 @@ export function DetectionConfigPage() {
         display_name_ja: selectedStandardDetail.display_name_ja,
         project_id: standardProjectId(selectedStandardDetail),
         project_code: standardProjectCode(selectedStandardDetail),
+        project_group: selectedStandardDetail.project_group,
         mode: selectedStandardDetail.mode || 'standard',
         report_template_id: selectedStandardDetail.report_template_id,
         version: selectedStandardDetail.version ?? 1,
@@ -541,7 +548,7 @@ export function DetectionConfigPage() {
                 >
                   <strong>{displayStandardName(standard)}</strong>
                   <span>{standard.standard_code} · {standard.mode || 'standard'}</span>
-                  <em>{standardProjectId(standard) ? standardProjectCode(standard) : t('settings.standards.global')}</em>
+                  <em>{detectionStandardScopeLabel(standard, t)}</em>
                 </button>
               )) : (
                 <div className="detection-empty">{t('detectionConfig.noStandards')}</div>
@@ -558,6 +565,9 @@ export function DetectionConfigPage() {
               {selectedStandardDetail ? (
                 <Space>
                   {selectedStandardDirty ? <Tag color="processing">{t('settings.standards.save')}</Tag> : null}
+                  <Tag color={detectionStandardScopeColor(selectedStandardDetail)}>
+                    {detectionStandardScopeLabel(selectedStandardDetail, t)}
+                  </Tag>
                   <Tag color={selectedStandardDetail.enabled ? 'success' : 'default'}>{selectedStandardDetail.enabled ? t('status.online') : t('status.offline')}</Tag>
                   <Tag>{selectedStandardDetail.mode || 'standard'}</Tag>
                 </Space>
@@ -586,7 +596,9 @@ export function DetectionConfigPage() {
                 </div>
 
                 <div className="detection-inline-meta">
-                  <Tag>{standardProjectId(selectedStandardDetail) ? standardProjectCode(selectedStandardDetail) : t('settings.standards.global')}</Tag>
+                  <Tag color={detectionStandardScopeColor(selectedStandardDetail)}>
+                    {detectionStandardScopeLabel(selectedStandardDetail, t)}
+                  </Tag>
                   <Tag>V{selectedStandardDetail.version}</Tag>
                   <Tag>{selectedReportTemplateName || t('settings.standards.reportTemplate')}</Tag>
                   {selectedStandardDetail.remark ? <Tag>{selectedStandardDetail.remark}</Tag> : null}
@@ -659,7 +671,17 @@ export function DetectionConfigPage() {
               <Input />
             </Form.Item>
             <Form.Item name="project_id" label={t('settings.variables.selectProject')}>
-              <Select allowClear options={projectOptions} />
+              <Select
+                allowClear
+                options={projectOptions}
+                onChange={(projectId) => {
+                  const project = projects.find((item) => item.id === projectId)
+                  standardForm.setFieldValue('project_group', project?.project_group || '')
+                }}
+              />
+            </Form.Item>
+            <Form.Item name="project_group" label={t('settings.groups.projectGroup')}>
+              <Input />
             </Form.Item>
             <Form.Item name="mode" label={t('settings.standards.mode')}>
               <Input />

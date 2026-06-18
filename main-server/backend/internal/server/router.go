@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -153,6 +154,160 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			"readiness":        readiness,
 		})
 	})
+	protected.GET("/main-server/report-templates", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		filter, err := parseReportTemplateFilter(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_query"})
+			return
+		}
+		templates, err := stationViewQuery.ListReportTemplates(filter)
+		if err != nil {
+			writeSyncedReadError(c, err, "report templates query failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": templates, "count": len(templates)})
+	})
+	protected.POST("/main-server/report-templates/upload", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		file, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file is required", "code": "invalid_report_template_file"})
+			return
+		}
+		opened, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file cannot be opened", "code": "invalid_report_template_file"})
+			return
+		}
+		defer func() { _ = opened.Close() }()
+		const maxTemplateUploadBytes = 50 << 20
+		raw, err := io.ReadAll(io.LimitReader(opened, maxTemplateUploadBytes+1))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file cannot be read", "code": "invalid_report_template_file"})
+			return
+		}
+		if len(raw) > maxTemplateUploadBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file is too large", "code": "report_template_file_too_large"})
+			return
+		}
+		enabled := true
+		if rawEnabled := strings.TrimSpace(c.PostForm("enabled")); rawEnabled != "" {
+			parsed, err := strconv.ParseBool(rawEnabled)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "enabled must be a boolean", "code": "invalid_enabled"})
+				return
+			}
+			enabled = parsed
+		}
+		version := 0
+		if rawVersion := strings.TrimSpace(c.PostForm("version")); rawVersion != "" {
+			parsed, err := strconv.Atoi(rawVersion)
+			if err != nil || parsed <= 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "version must be a positive integer", "code": "invalid_version"})
+				return
+			}
+			version = parsed
+		}
+		paramsSchema := firstNonEmpty(c.PostForm("params_schema_json"), c.PostForm("mapping_json"))
+		template, meta, err := reportService.UploadTemplate(c.Request.Context(), reports.TemplateUploadInput{
+			TemplateCode:     c.PostForm("template_code"),
+			Name:             c.PostForm("name"),
+			DisplayName:      c.PostForm("display_name"),
+			Version:          version,
+			ParamsSchemaJSON: paramsSchema,
+			Remark:           c.PostForm("remark"),
+			Enabled:          enabled,
+		}, raw, file.Filename)
+		if err != nil {
+			writeReportTemplateError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"template": template, "artifact": meta})
+	})
+	protected.PATCH("/main-server/report-templates/:id/mapping", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		templateID, err := parseUintParam(c, "id")
+		if err != nil || templateID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report template id", "code": "invalid_report_template_id"})
+			return
+		}
+		var req struct {
+			ParamsSchemaJSON string          `json:"params_schema_json"`
+			Mapping          json.RawMessage `json:"mapping"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json body", "code": "invalid_body"})
+			return
+		}
+		paramsSchema := strings.TrimSpace(req.ParamsSchemaJSON)
+		if paramsSchema == "" && len(req.Mapping) > 0 {
+			paramsSchema = string(req.Mapping)
+		}
+		template, err := reportService.UpdateTemplateMapping(uint(templateID), paramsSchema)
+		if err != nil {
+			writeReportTemplateError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, template)
+	})
+	protected.GET("/main-server/report-templates/:id/artifact", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		templateID, err := parseUintParam(c, "id")
+		if err != nil || templateID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report template id", "code": "invalid_report_template_id"})
+			return
+		}
+		path, name, contentType, err := reportService.TemplateArtifact(uint(templateID))
+		if err != nil {
+			writeReportTemplateError(c, err)
+			return
+		}
+		c.Header("Content-Type", contentType)
+		c.FileAttachment(path, name)
+	})
+	protected.POST("/main-server/report-plan-imports/parse", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		file, err := c.FormFile("file")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file is required", "code": "invalid_plan_import_file"})
+			return
+		}
+		opened, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file cannot be opened", "code": "invalid_plan_import_file"})
+			return
+		}
+		defer func() { _ = opened.Close() }()
+		const maxPlanImportBytes = 50 << 20
+		raw, err := io.ReadAll(io.LimitReader(opened, maxPlanImportBytes+1))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file cannot be read", "code": "invalid_plan_import_file"})
+			return
+		}
+		if len(raw) > maxPlanImportBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "file is too large", "code": "plan_import_file_too_large"})
+			return
+		}
+		edgeInstanceID := firstNonEmpty(c.PostForm("edge_instance_id"), edgeContext(c, cfg))
+		draft, err := reportService.ParsePlanImport(c.Request.Context(), raw, file.Filename, edgeInstanceID)
+		if err != nil {
+			writePlanImportError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, draft)
+	})
+	protected.POST("/main-server/report-plan-imports/confirm", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		var req reports.PlanImportConfirmInput
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json body", "code": "invalid_body"})
+			return
+		}
+		if strings.TrimSpace(req.EdgeInstanceID) == "" {
+			req.EdgeInstanceID = edgeContext(c, cfg)
+		}
+		result, err := reportService.ConfirmPlanImport(c.Request.Context(), req, syncWriteMeta(c))
+		if err != nil {
+			writePlanImportError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	})
 	protected.POST("/main-server/report-jobs/enqueue", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
 		var req struct {
 			TaskID         uint   `json:"task_id"`
@@ -244,6 +399,80 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			return
 		}
 		c.JSON(http.StatusOK, job)
+	})
+	protected.POST("/main-server/report-jobs/:id/regenerate", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		jobID, err := parseUintParam(c, "id")
+		if err != nil || jobID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid report job id", "code": "invalid_report_job_id"})
+			return
+		}
+		var req struct {
+			ParamsJSON string          `json:"params_json"`
+			Params     json.RawMessage `json:"params"`
+			Reason     string          `json:"reason"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json body", "code": "invalid_body"})
+			return
+		}
+		paramsJSON := strings.TrimSpace(req.ParamsJSON)
+		if paramsJSON == "" && len(req.Params) > 0 {
+			paramsJSON = string(req.Params)
+		}
+		if paramsJSON == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "params or params_json is required", "code": "invalid_report_params"})
+			return
+		}
+		operator := ""
+		if principal, ok := auth.PrincipalFromContext(c); ok {
+			operator = principal.Username
+		}
+		job, err := reportService.RegenerateJobWithParams(jobID, reports.RegenerateReportInput{
+			ParamsJSON: paramsJSON,
+			Reason:     req.Reason,
+			Operator:   operator,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "invalid report params_json") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_report_params"})
+				return
+			}
+			writeReportJobError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, job)
+	})
+	protected.POST("/main-server/download-packages", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
+		var req struct {
+			TaskID         uint     `json:"task_id"`
+			EdgeInstanceID string   `json:"edge_instance_id"`
+			Keys           []string `json:"keys"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.TaskID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "task_id is required", "code": "invalid_task_id"})
+			return
+		}
+		if strings.TrimSpace(req.EdgeInstanceID) == "" {
+			req.EdgeInstanceID = edgeContext(c, cfg)
+		}
+		operator := ""
+		if principal, ok := auth.PrincipalFromContext(c); ok {
+			operator = principal.Username
+		}
+		pkg, err := reportService.BuildDownloadPackage(c.Request.Context(), reports.DownloadPackageInput{
+			TaskID:         req.TaskID,
+			EdgeInstanceID: req.EdgeInstanceID,
+			Keys:           req.Keys,
+			Operator:       operator,
+		})
+		if err != nil {
+			writeReportJobError(c, err)
+			return
+		}
+		c.Header("Content-Type", pkg.ContentType)
+		c.DataFromReader(http.StatusOK, int64(len(pkg.Data)), pkg.ContentType, bytes.NewReader(pkg.Data), map[string]string{
+			"Content-Disposition": `attachment; filename="` + pkg.Name + `"`,
+		})
 	})
 	protected.GET("/main-server/report-notifications", authService.RequirePermission(auth.PermViewHistory), func(c *gin.Context) {
 		principal, ok := auth.PrincipalFromContext(c)
@@ -801,6 +1030,98 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			return
 		}
 		c.JSON(http.StatusOK, tasks)
+	})
+
+	protected.GET("/detection-plans", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		filter, err := parseDetectionPlanFilter(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_query"})
+			return
+		}
+		plans, total, limit, offset, err := stationViewQuery.ListDetectionPlans(filter)
+		if err != nil {
+			writeSyncedReadError(c, err, "detection plans query failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"items": plans, "count": len(plans), "total": total, "limit": limit, "offset": offset})
+	})
+
+	protected.GET("/detection-plans/:id", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		planID, err := parseUintParam(c, "id")
+		if err != nil || planID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid plan id", "code": "invalid_plan_id"})
+			return
+		}
+		plan, err := stationViewQuery.GetDetectionPlan(uint(planID))
+		if err != nil {
+			writeSyncedReadError(c, err, "detection plan query failed")
+			return
+		}
+		c.JSON(http.StatusOK, plan)
+	})
+
+	protected.PATCH("/detection-plans/:id", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
+		planID, err := parseUintParam(c, "id")
+		if err != nil || planID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid plan id", "code": "invalid_plan_id"})
+			return
+		}
+		var req struct {
+			PlanNo          string `json:"plan_no"`
+			SourceSystem    string `json:"source_system"`
+			ExternalPlanID  string `json:"external_plan_id"`
+			ExternalOrderNo string `json:"external_order_no"`
+			FactoryNo       string `json:"factory_no"`
+			CustomerName    string `json:"customer_name"`
+			DeviceModel     string `json:"device_model"`
+			TestItemCode    string `json:"test_item_code"`
+			TestItemName    string `json:"test_item_name"`
+			TestSequence    int    `json:"test_sequence"`
+			Mode            string `json:"mode"`
+			StandardCode    string `json:"standard_code"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_payload"})
+			return
+		}
+		principal, _ := auth.PrincipalFromContext(c)
+		plan, err := stationViewQuery.UpdatePendingDetectionPlan(uint(planID), query.DetectionPlanUpdate{
+			PlanNo:          req.PlanNo,
+			SourceSystem:    req.SourceSystem,
+			ExternalPlanID:  req.ExternalPlanID,
+			ExternalOrderNo: req.ExternalOrderNo,
+			FactoryNo:       req.FactoryNo,
+			CustomerName:    req.CustomerName,
+			DeviceModel:     req.DeviceModel,
+			TestItemCode:    req.TestItemCode,
+			TestItemName:    req.TestItemName,
+			TestSequence:    req.TestSequence,
+			Mode:            req.Mode,
+			StandardCode:    req.StandardCode,
+			UpdatedByUser:   principal.Username,
+		})
+		if err != nil {
+			if errors.Is(err, query.ErrDetectionPlanNotEditable) {
+				c.JSON(http.StatusConflict, gin.H{"error": "detection plan is not editable", "code": "detection_plan_not_editable"})
+				return
+			}
+			if errors.Is(err, query.ErrDetectionPlanInvalid) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_payload"})
+				return
+			}
+			writeSyncedReadError(c, err, "detection plan update failed")
+			return
+		}
+		c.JSON(http.StatusOK, plan)
+	})
+
+	protected.POST("/detection-plans/:id/start", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
+		planID, err := parseUintParam(c, "id")
+		if err != nil || planID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid plan id", "code": "invalid_plan_id"})
+			return
+		}
+		forwardUserDetectionControl(c, edges, stationViewQuery, "api/v1/edge-control/detection-plans/"+strconv.FormatUint(planID, 10)+"/start", "")
 	})
 
 	protected.GET("/detection-runs/current", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
@@ -1510,6 +1831,28 @@ func parseDetectionRunFilter(c *gin.Context) (query.DetectionRunFilter, error) {
 	return filter, nil
 }
 
+func parseDetectionPlanFilter(c *gin.Context) (query.DetectionPlanFilter, error) {
+	var filter query.DetectionPlanFilter
+	filter.Status = strings.TrimSpace(c.Query("status"))
+	filter.FactoryNo = strings.TrimSpace(c.Query("factory_no"))
+	filter.Keyword = strings.TrimSpace(c.Query("keyword"))
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return filter, errors.New("invalid limit")
+		}
+		filter.Limit = value
+	}
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return filter, errors.New("invalid offset")
+		}
+		filter.Offset = value
+	}
+	return filter, nil
+}
+
 func parseVariableFilter(c *gin.Context) (query.VariableFilter, error) {
 	var filter query.VariableFilter
 	if _, exists := c.GetQuery("device_id"); exists {
@@ -1920,7 +2263,14 @@ func validateReportJobStatus(status string) error {
 		return nil
 	}
 	switch status {
-	case reports.StatusPending, reports.StatusWaiting, reports.StatusRunning, reports.StatusSuccess, reports.StatusFailed:
+	case reports.StatusPending,
+		reports.StatusWaitingForSync,
+		reports.StatusGenerating,
+		reports.StatusSucceeded,
+		reports.StatusFailed,
+		reports.StatusWaitingLegacy,
+		reports.StatusRunningLegacy,
+		reports.StatusSuccessLegacy:
 		return nil
 	default:
 		return errors.New("invalid report job status")
@@ -2031,6 +2381,7 @@ func parseDetectionStandardFilter(c *gin.Context) (query.DetectionStandardFilter
 	}
 	filter.ProjectID = projectID
 	filter.ProjectCode = strings.TrimSpace(c.Query("project_code"))
+	filter.ProjectGroup = strings.TrimSpace(c.Query("project_group"))
 	filter.Mode = strings.TrimSpace(c.Query("mode"))
 	if raw := strings.TrimSpace(c.Query("enabled")); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -2073,6 +2424,7 @@ func detectionStandardDefinitionUpdates(req query.DetectionStandard) map[string]
 		"display_name_ja":    req.DisplayNameJA,
 		"project_id":         req.ProjectID,
 		"project_code":       req.ProjectCode,
+		"project_group":      req.ProjectGroup,
 		"mode":               req.Mode,
 		"report_template_id": req.ReportTemplateID,
 		"enabled":            req.Enabled,
@@ -2238,6 +2590,30 @@ func writeReportJobError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "report artifact is unavailable", "code": "report_artifact_unavailable"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "report job operation failed", "code": "internal_error"})
+	}
+}
+
+func writeReportTemplateError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, reports.ErrTemplateNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "report template not found", "code": "report_template_not_found"})
+	case errors.Is(err, reports.ErrInvalidReportTemplate):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_report_template"})
+	case errors.Is(err, reports.ErrArtifactUnavailable):
+		c.JSON(http.StatusNotFound, gin.H{"error": "report template artifact is unavailable", "code": "report_template_artifact_unavailable"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "report template operation failed", "code": "internal_error"})
+	}
+}
+
+func writePlanImportError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, reports.ErrInvalidReportTemplate):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_plan_import"})
+	case errors.Is(err, reports.ErrPlanImportNotReady):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "plan_import_not_ready"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "plan import operation failed", "code": "internal_error"})
 	}
 }
 

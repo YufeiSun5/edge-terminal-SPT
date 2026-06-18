@@ -143,6 +143,50 @@ func (tm *TaskManager) AllActive() []models.ActiveTask {
 	return tasks
 }
 
+func (tm *TaskManager) ActiveTaskQualified(tags *TagManager, taskID uint) bool {
+	if tags == nil {
+		return false
+	}
+	var active models.ActiveTask
+	found := false
+	tm.mu.RLock()
+	for _, item := range tm.byProject {
+		if item.ID != taskID {
+			continue
+		}
+		active = item
+		found = true
+		break
+	}
+	tm.mu.RUnlock()
+	if !found {
+		return false
+	}
+	checked := 0
+	for varID, item := range active.StandardItems {
+		if !item.CheckEnabled || !item.AlarmEnabled || item.CheckMethod != models.CheckMethodNumericRange {
+			continue
+		}
+		tag, ok := tags.Get(varID)
+		if !ok {
+			return false
+		}
+		state := tag.RuntimeState()
+		if !state.Initialized || state.IsString {
+			return false
+		}
+		if state.Quality != 1 && item.QualityPolicy == models.QualityPolicyIgnoreBad {
+			return false
+		}
+		_, _, _, violated := limitAlarmForValue(state.Value, item)
+		if violated {
+			return false
+		}
+		checked++
+	}
+	return checked > 0
+}
+
 func (tm *TaskManager) MuteActiveLimitAlarms(taskID uint) int {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()

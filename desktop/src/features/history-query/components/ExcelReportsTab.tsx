@@ -1,9 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Descriptions, Empty, Space, Spin, Table, Tag, Timeline, Typography, message } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
-import { Download, FileSpreadsheet, RefreshCw } from 'lucide-react'
-import { saveAs } from 'file-saver'
+import { Alert, Button, Empty, Input, Modal, Select, Spin, Tag, Typography, message } from 'antd'
+import { FileSpreadsheet, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import {
@@ -12,13 +10,14 @@ import {
   getDetectionRunReportRequests,
   getMainReportJobEvents,
   getMainReportJobs,
+  regenerateMainReportJob,
   retryMainReportJob,
 } from '@/features/edge-status/api'
+import { createLuckysheetAdapter } from '@/features/spreadsheet/luckysheetAdapter'
 import { env } from '@/shared/config/env'
 import type {
   DetectionRunReport,
   DetectionRunReportRequest,
-  DetectionRunReportRequestVariable,
   MainReportJob,
   MainReportJobEvent,
 } from '@/shared/api/types'
@@ -41,9 +40,9 @@ function compactDate(value?: string) {
 }
 
 function statusColor(status: string) {
-  if (status === 'success' || status === 'ready' || status === 'generated') return 'green'
+  if (status === 'success' || status === 'succeeded' || status === 'ready' || status === 'generated') return 'green'
   if (status === 'running' || status === 'generating') return 'blue'
-  if (status === 'waiting') return 'gold'
+  if (status === 'waiting' || status === 'waiting_for_sync') return 'gold'
   if (status === 'failed' || status === 'error') return 'red'
   return 'default'
 }
@@ -52,9 +51,11 @@ function statusLabel(status: string, t: TFunction) {
   const labels: Record<string, string> = {
     pending: t('history.detail.reports.status.pending'),
     waiting: t('history.detail.reports.status.waiting'),
+    waiting_for_sync: t('history.detail.reports.status.waiting'),
     running: t('history.detail.reports.status.running'),
     generating: t('history.detail.reports.status.running'),
     success: t('history.detail.reports.status.success'),
+    succeeded: t('history.detail.reports.status.success'),
     ready: t('history.detail.reports.status.ready'),
     generated: t('history.detail.reports.status.success'),
     failed: t('history.detail.reports.status.failed'),
@@ -63,20 +64,8 @@ function statusLabel(status: string, t: TFunction) {
   return labels[status] ?? (status || t('history.detail.reports.status.unknown'))
 }
 
-function requestVariables(request?: DetectionRunReportRequest): DetectionRunReportRequestVariable[] {
-  if (!request) return []
-  if (request.variables?.length) return request.variables
-  if (!request.var_id && !request.var_name) return []
-  return [
-    {
-      var_id: request.var_id,
-      var_name: request.var_name,
-      report_name: request.report_name,
-      ext_1: request.ext_1,
-      ext_2: request.ext_2,
-      ext_3: request.ext_3,
-    },
-  ]
+function isSucceeded(status?: string) {
+  return status === 'success' || status === 'succeeded' || status === 'ready' || status === 'generated'
 }
 
 function createReportItems(
@@ -85,7 +74,12 @@ function createReportItems(
   jobs: MainReportJob[],
   t: TFunction,
 ): ReportListItem[] {
-  const jobByRequestId = new Map(jobs.map((job) => [job.request_id, job]))
+  const jobByRequestId = new Map<number, MainReportJob>()
+  for (const job of jobs) {
+    if (!jobByRequestId.has(job.request_id)) {
+      jobByRequestId.set(job.request_id, job)
+    }
+  }
   const items: ReportListItem[] = requests.slice(0, 7).map((request) => {
     const job = jobByRequestId.get(request.id)
     return {
@@ -118,10 +112,115 @@ function createReportItems(
   return [...items, ...fileItems]
 }
 
+function prettyJSONString(value: unknown) {
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2)
+    } catch {
+      return value
+    }
+  }
+  return JSON.stringify(value ?? {}, null, 2)
+}
+
+function editableParamsJSON(report?: ReportListItem) {
+  if (report?.job?.params_override_json) {
+    return prettyJSONString(report.job.params_override_json)
+  }
+  return prettyJSONString(report?.request?.params ?? {})
+}
+
+function ReportArtifactPreview({ job }: { job?: MainReportJob }) {
+  const { t } = useTranslation()
+  const adapterRef = useRef<ReturnType<typeof createLuckysheetAdapter> | null>(null)
+  const containerId = `history-report-preview-${useId().replace(/:/g, '')}`
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const artifactQuery = useQuery({
+    queryKey: ['history', 'run', 'report-artifact-preview', job?.id],
+    queryFn: () => downloadMainReportArtifact(job!.id),
+    enabled: Boolean(job?.id) && isSucceeded(job?.status),
+    retry: false,
+  })
+
+  useEffect(() => {
+    const adapter = createLuckysheetAdapter()
+    adapterRef.current = adapter
+    let disposed = false
+
+    async function waitForContainer() {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        if (disposed) return false
+        if (document.getElementById(containerId)) return true
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+      }
+      return Boolean(document.getElementById(containerId))
+    }
+
+    async function mountPreview() {
+      setPreviewError(null)
+      const hasContainer = await waitForContainer()
+      if (disposed) return
+      if (!hasContainer) {
+        setPreviewError(t('history.detail.reports.previewFailed'))
+        return
+      }
+
+      await adapter.mount({
+        containerId,
+        data: [{ name: job?.report_name || job?.template_code || 'Report', index: '0', status: 1, order: 0 }],
+        readonly: true,
+        toolbar: false,
+        sheetbar: true,
+      })
+
+      if (disposed || !artifactQuery.data || !job) return
+      const file = new File([artifactQuery.data.blob], artifactQuery.data.filename, { type: artifactQuery.data.contentType })
+      await adapter.importFile(file)
+    }
+
+    void mountPreview()
+      .catch((error) => {
+        if (disposed) return
+        setPreviewError(error instanceof Error ? error.message : t('history.detail.reports.previewFailed'))
+      })
+
+    return () => {
+      disposed = true
+      adapter.unmount()
+      adapterRef.current = null
+    }
+  }, [artifactQuery.data, containerId, job, t])
+
+  if (!job) {
+    return <Empty description={t('history.detail.reports.noGeneratedArtifact')} />
+  }
+
+  if (!isSucceeded(job.status)) {
+    return <Empty description={t('history.detail.reports.waitingForGeneratedArtifact')} />
+  }
+
+  return (
+    <div className="history-report-luckysheet">
+      {artifactQuery.isError || previewError ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={artifactQuery.error instanceof Error ? artifactQuery.error.message : previewError || t('history.detail.reports.previewFailed')}
+        />
+      ) : null}
+      <div id={containerId} className="report-luckysheet-host" />
+    </div>
+  )
+}
+
 export function ExcelReportsTab({ taskId }: { taskId: number }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [selectedReportKey, setSelectedReportKey] = useState<string | null>(null)
+  const [paramsModalOpen, setParamsModalOpen] = useState(false)
+  const [paramsDraft, setParamsDraft] = useState('{}')
+  const [paramsReason, setParamsReason] = useState('')
+  const [selectedGenerationJobId, setSelectedGenerationJobId] = useState<number | null>(null)
   const reportGenerationEnabled = env.runtimeFeatures.reportGeneration
   const isMainServer = env.runtimeRole === 'main_server'
 
@@ -162,10 +261,37 @@ export function ExcelReportsTab({ taskId }: { taskId: number }) {
     [reportItems, selectedReportKey],
   )
 
+  const selectedReportGenerations = useMemo(() => {
+    const requestId = selectedReport?.request?.id
+    if (!requestId) return []
+    return (jobsQuery.data?.items ?? []).filter((job) => job.request_id === requestId)
+  }, [jobsQuery.data?.items, selectedReport?.request?.id])
+
+  const selectedGenerationJob = useMemo(() => {
+    if (selectedGenerationJobId) {
+      const matched = selectedReportGenerations.find((job) => job.id === selectedGenerationJobId)
+      if (matched) return matched
+    }
+    return selectedReport?.job
+  }, [selectedGenerationJobId, selectedReport?.job, selectedReportGenerations])
+
+  const selectedReportWithGeneration = useMemo<ReportListItem | undefined>(() => {
+    if (!selectedReport) return undefined
+    if (!selectedGenerationJob || selectedGenerationJob.id === selectedReport.job?.id) return selectedReport
+    return {
+      ...selectedReport,
+      job: selectedGenerationJob,
+      status: selectedGenerationJob.status || selectedReport.status,
+      updatedAt: selectedGenerationJob.updated_at || selectedReport.updatedAt,
+      templateCode: selectedGenerationJob.template_code || selectedReport.templateCode,
+      templateVersion: selectedGenerationJob.template_version || selectedReport.templateVersion,
+    }
+  }, [selectedGenerationJob, selectedReport])
+
   const eventsQuery = useQuery({
-    queryKey: ['history', 'run', 'report-job-events', selectedReport?.job?.id],
-    queryFn: () => getMainReportJobEvents(selectedReport!.job!.id, 50),
-    enabled: isMainServer && reportGenerationEnabled && Boolean(selectedReport?.job?.id),
+    queryKey: ['history', 'run', 'report-job-events', selectedGenerationJob?.id],
+    queryFn: () => getMainReportJobEvents(selectedGenerationJob!.id, 50),
+    enabled: isMainServer && reportGenerationEnabled && Boolean(selectedGenerationJob?.id),
     retry: false,
   })
 
@@ -186,55 +312,45 @@ export function ExcelReportsTab({ taskId }: { taskId: number }) {
     },
   })
 
-  const downloadMutation = useMutation({
-    mutationFn: (jobId: number) => downloadMainReportArtifact(jobId),
-    onSuccess: (artifact) => {
-      saveAs(artifact.blob, artifact.filename)
-      message.success(t('history.detail.reports.downloadStarted'))
+  const regenerateMutation = useMutation({
+    mutationFn: ({ jobId, params, reason }: { jobId: number; params: Record<string, unknown>; reason: string }) =>
+      regenerateMainReportJob(jobId, { params, reason }),
+    onSuccess: () => {
+      message.success(t('history.detail.reports.regenerateSubmitted'))
+      setParamsModalOpen(false)
+      refreshReports()
     },
     onError: (error) => {
-      message.error(error instanceof Error ? error.message : t('history.detail.reports.downloadFailed'))
+      message.error(error instanceof Error ? error.message : t('history.detail.reports.regenerateFailed'))
     },
   })
 
-  const variableColumns: ColumnsType<DetectionRunReportRequestVariable> = [
-    {
-      title: t('history.detail.reports.variable'),
-      dataIndex: 'var_name',
-      render: (value: string | undefined, record) => value || record.var_id || '-',
-    },
-    {
-      title: t('history.detail.reports.reportName'),
-      dataIndex: 'report_name',
-      render: (value: string | undefined) => value || '-',
-    },
-    {
-      title: t('history.detail.reports.ext1'),
-      dataIndex: 'ext_1',
-      render: (value: string | undefined) => value || '-',
-    },
-    {
-      title: t('history.detail.reports.ext2'),
-      dataIndex: 'ext_2',
-      render: (value: string | undefined) => value || '-',
-    },
-  ]
+  const openParamsModal = () => {
+    setParamsDraft(editableParamsJSON(selectedReportWithGeneration))
+    setParamsReason('')
+    setParamsModalOpen(true)
+  }
 
-  const eventItems = (eventsQuery.data?.items ?? []).map((event: MainReportJobEvent) => ({
-    content: (
-      <Space orientation="vertical" size={0}>
-        <Typography.Text>{event.message}</Typography.Text>
-        <Typography.Text type="secondary">
-          {compactDate(event.created_at)} · {event.event_type}
-        </Typography.Text>
-      </Space>
-    ),
-    color: event.level === 'error' ? 'red' : event.level === 'warn' ? 'orange' : 'blue',
-  }))
+  const submitRegenerate = () => {
+    if (!selectedGenerationJob?.id) return
+    let params: Record<string, unknown>
+    try {
+      const parsed = JSON.parse(paramsDraft)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        message.error(t('history.detail.reports.paramsMustBeObject'))
+        return
+      }
+      params = parsed as Record<string, unknown>
+    } catch {
+      message.error(t('history.detail.reports.invalidParamsJson'))
+      return
+    }
+    regenerateMutation.mutate({ jobId: selectedGenerationJob.id, params, reason: paramsReason })
+  }
+
+  const latestEvent = (eventsQuery.data?.items ?? [])[0] as MainReportJobEvent | undefined
 
   const loading = runQuery.isFetching || requestsQuery.isFetching || jobsQuery.isFetching
-  const selectedVariables = requestVariables(selectedReport?.request)
-  const canDownload = selectedReport?.job?.status === 'success'
 
   if (!isMainServer) {
     return (
@@ -266,7 +382,10 @@ export function ExcelReportsTab({ taskId }: { taskId: number }) {
                   type="button"
                   key={item.key}
                   className={`history-report-item ${item.key === selectedReport?.key ? 'active' : ''}`}
-                  onClick={() => setSelectedReportKey(item.key)}
+                  onClick={() => {
+                    setSelectedReportKey(item.key)
+                    setSelectedGenerationJobId(null)
+                  }}
                 >
                   <FileSpreadsheet size={16} className="history-muted-icon" />
                   <div className="history-report-item-info">
@@ -287,91 +406,94 @@ export function ExcelReportsTab({ taskId }: { taskId: number }) {
       </div>
 
       <div className="history-split-right">
-        {!selectedReport ? (
+        {!selectedReportWithGeneration ? (
           <Empty description={t('history.detail.reports.selectReport')} />
         ) : (
           <div className="history-report-preview">
-            <div className="history-report-header">
-              <FileSpreadsheet size={40} className="history-report-large-icon" />
-              <Typography.Title level={4}>{selectedReport.name}</Typography.Title>
-              <div className="history-report-tags">
-                <Tag color="blue">{selectedReport.templateCode}</Tag>
-                {selectedReport.templateVersion ? <Tag>v{selectedReport.templateVersion}</Tag> : null}
-                <Tag color={statusColor(selectedReport.status)}>{statusLabel(selectedReport.status, t)}</Tag>
+            <div className="history-report-topbar">
+              <div className="history-report-summary">
+                <FileSpreadsheet size={18} className="history-muted-icon" />
+                <div className="history-report-summary-main">
+                  <div className="history-report-summary-title">
+                    <Typography.Text strong ellipsis>{selectedReportWithGeneration.name}</Typography.Text>
+                    <Tag color={statusColor(selectedReportWithGeneration.status)}>{statusLabel(selectedReportWithGeneration.status, t)}</Tag>
+                  </div>
+                  <div className="history-report-summary-meta">
+                    <span>{selectedReportWithGeneration.templateCode}{selectedReportWithGeneration.templateVersion ? ` v${selectedReportWithGeneration.templateVersion}` : ''}</span>
+                    <span>{t('history.detail.reports.lastUpdated')}: {compactDate(selectedReportWithGeneration.updatedAt)}</span>
+                    {latestEvent ? <span>{latestEvent.event_type}: {compactDate(latestEvent.created_at)}</span> : null}
+                  </div>
+                </div>
               </div>
-              <p className="history-report-time">{t('history.detail.reports.lastUpdated')}: {compactDate(selectedReport.updatedAt)}</p>
-            </div>
-
-            <div className="history-report-actions">
-              <Button icon={<RefreshCw size={16} />} onClick={refreshReports} loading={loading}>
-                {t('actions.refresh')}
-              </Button>
-              {selectedReport.job?.status === 'failed' ? (
-                <Button
-                  danger
-                  icon={<RefreshCw size={16} />}
-                  loading={retryMutation.isPending}
-                  onClick={() => retryMutation.mutate(selectedReport.job!.id)}
-                >
-                  {t('history.detail.reports.retryGenerate')}
+              <div className="history-report-actions">
+                {selectedReportGenerations.length > 1 ? (
+                  <Select
+                    size="small"
+                    className="history-report-generation-select"
+                    value={selectedGenerationJob?.id}
+                    aria-label={t('history.detail.reports.generationHistory')}
+                    options={selectedReportGenerations.map((job, index) => ({
+                      value: job.id,
+                      label: `${index === 0 ? t('history.detail.reports.latestGeneration') : t('history.detail.reports.generation')} #${job.id} · ${statusLabel(job.status, t)} · ${compactDate(job.created_at)}`,
+                    }))}
+                    onChange={(value) => setSelectedGenerationJobId(value)}
+                  />
+                ) : null}
+                <Button size="small" icon={<RefreshCw size={14} />} onClick={refreshReports} loading={loading}>
+                  {t('actions.refresh')}
                 </Button>
-              ) : null}
-              <Button
-                type="primary"
-                icon={<Download size={16} />}
-                disabled={!canDownload}
-                loading={downloadMutation.isPending}
-                onClick={() => selectedReport.job && downloadMutation.mutate(selectedReport.job.id)}
-              >
-                {t('history.detail.reports.downloadCurrent')}
-              </Button>
+                {selectedGenerationJob?.status === 'failed' ? (
+                  <Button
+                    size="small"
+                    danger
+                    icon={<RefreshCw size={14} />}
+                    loading={retryMutation.isPending}
+                    onClick={() => retryMutation.mutate(selectedGenerationJob.id)}
+                  >
+                    {t('history.detail.reports.retryGenerate')}
+                  </Button>
+                ) : null}
+                {selectedGenerationJob ? (
+                  <Button
+                    size="small"
+                    icon={<RefreshCw size={14} />}
+                    loading={regenerateMutation.isPending}
+                    onClick={openParamsModal}
+                  >
+                    {t('history.detail.reports.regenerateWithParams')}
+                  </Button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="history-report-detail">
-              <Descriptions
-                size="small"
-                bordered
-                column={2}
-                items={[
-                  { label: t('history.detail.reports.taskId'), children: taskId },
-                  { label: t('history.detail.reports.testNo'), children: selectedReport.request?.test_no || selectedReport.job?.test_no || runQuery.data?.test_no || '-' },
-                  { label: t('history.detail.reports.project'), children: selectedReport.request?.project_code || selectedReport.job?.project_code || runQuery.data?.project_code || '-' },
-                  { label: t('history.detail.reports.requestId'), children: selectedReport.request?.id ?? '-' },
-                  { label: 'Job ID', children: selectedReport.job?.id ?? '-' },
-                  { label: t('history.detail.reports.artifact'), children: selectedReport.job?.artifact_name || selectedReport.report?.file_name || '-' },
-                ]}
-              />
-
-              <Typography.Title level={5}>{t('history.detail.reports.variables')}</Typography.Title>
-              <Table<DetectionRunReportRequestVariable>
-                size="small"
-                rowKey={(record, index) => `${record.var_id ?? record.var_name ?? 'var'}-${index}`}
-                pagination={false}
-                columns={variableColumns}
-                dataSource={selectedVariables}
-                locale={{ emptyText: t('history.detail.reports.emptyVariables') }}
-              />
-
-              {selectedReport.request?.params ? (
-                <>
-                  <Typography.Title level={5}>{t('history.detail.reports.requestParams')}</Typography.Title>
-                  <pre className="history-report-json">{JSON.stringify(selectedReport.request.params, null, 2)}</pre>
-                </>
-              ) : null}
-
-              {reportGenerationEnabled && selectedReport.job ? (
-                <>
-                  <Typography.Title level={5}>{t('history.detail.reports.generationEvents')}</Typography.Title>
-                  {eventsQuery.isFetching ? (
-                    <Spin />
-                  ) : eventItems.length > 0 ? (
-                    <Timeline items={eventItems} />
-                  ) : (
-                    <Empty description={t('history.detail.reports.emptyEvents')} />
-                  )}
-                </>
-              ) : null}
+            <div className="history-report-main">
+              <ReportArtifactPreview job={selectedGenerationJob} />
             </div>
+            <Modal
+              title={t('history.detail.reports.regenerateWithParams')}
+              open={paramsModalOpen}
+              onCancel={() => setParamsModalOpen(false)}
+              onOk={submitRegenerate}
+              confirmLoading={regenerateMutation.isPending}
+              okText={t('history.detail.reports.submitRegenerate')}
+              destroyOnHidden
+            >
+              <Typography.Paragraph type="secondary">
+                {t('history.detail.reports.regenerateParamsHint')}
+              </Typography.Paragraph>
+              <Input
+                value={paramsReason}
+                onChange={(event) => setParamsReason(event.target.value)}
+                placeholder={t('history.detail.reports.regenerateReason')}
+              />
+              <Input.TextArea
+                className="history-report-params-editor"
+                value={paramsDraft}
+                onChange={(event) => setParamsDraft(event.target.value)}
+                rows={14}
+                spellCheck={false}
+              />
+            </Modal>
           </div>
         )}
       </div>

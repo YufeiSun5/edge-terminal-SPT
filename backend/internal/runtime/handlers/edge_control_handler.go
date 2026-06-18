@@ -21,6 +21,7 @@ import (
 type EdgeControlHandler struct {
 	repo            *database.Repository
 	detection       *services.DetectionRunsService
+	detectionPlans  *services.DetectionPlansService
 	variables       *services.VariableWriteService
 	runtimeSettings *services.RuntimeSettingsService
 	notify          *services.NotificationHub
@@ -56,6 +57,11 @@ func (h *EdgeControlHandler) WithNotificationHub(hub *services.NotificationHub) 
 	return h
 }
 
+func (h *EdgeControlHandler) WithDetectionPlans(service *services.DetectionPlansService) *EdgeControlHandler {
+	h.detectionPlans = service
+	return h
+}
+
 type edgeControlAsyncAccepted struct {
 	Status   string         `json:"status"`
 	TargetID string         `json:"target_id,omitempty"`
@@ -75,6 +81,7 @@ func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.
 	control.POST("/detection/apply-config", authService.RequireServiceScope(auth.ScopeEdgeLimitUpdate), h.handle("detection.apply_config", "task", h.applyDetectionConfig))
 	control.POST("/detection/refresh-features", authService.RequireServiceScope(auth.ScopeEdgeFeatureRefresh), h.handle("detection.refresh_features", "task", h.refreshDetectionFeatures))
 	control.POST("/detection/report-requests", authService.RequireServiceScope(auth.ScopeEdgeReportRequest), h.handle("detection.report_request", "task", h.createReportRequests))
+	control.POST("/detection-plans/:id/start", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("detection_plan.start", "plan", h.startDetectionPlan))
 	control.POST("/variables/write", authService.RequireServiceScope(auth.ScopeEdgeVariableWrite), h.handle("variable.write", "variable", h.writeVariable))
 }
 
@@ -308,6 +315,43 @@ func (h *EdgeControlHandler) startDetection(c *gin.Context, envelope edgeControl
 		return nil, "", err
 	}
 	return task, strconv.FormatUint(uint64(task.ID), 10), nil
+}
+
+func (h *EdgeControlHandler) startDetectionPlan(c *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
+	if h.detectionPlans == nil {
+		return nil, "", edgeControlRequestError("detection_plan_service_missing", "detection plan service is not available", true, http.StatusServiceUnavailable)
+	}
+	planID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || planID == 0 {
+		return nil, "", edgeControlRequestError("invalid_plan_id", "plan_id is required", false, http.StatusBadRequest)
+	}
+	var req struct {
+		ProjectID      uint   `json:"project_id"`
+		OperatorNote   string `json:"operator_note"`
+		RequestVarID   int64  `json:"request_var_id"`
+		RequestVarName string `json:"request_var_name"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
+		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
+	}
+	if req.ProjectID == 0 {
+		return nil, "", edgeControlRequestError("invalid_payload", "project_id is required", false, http.StatusBadRequest)
+	}
+	operatorNote := strings.TrimSpace(req.OperatorNote)
+	if operatorNote == "" {
+		operatorNote = envelope.Reason
+	}
+	result, err := h.detectionPlans.Start(services.StartDetectionPlanInput{
+		PlanID:         uint(planID),
+		ProjectID:      req.ProjectID,
+		OperatorNote:   operatorNote,
+		RequestVarID:   req.RequestVarID,
+		RequestVarName: req.RequestVarName,
+	})
+	if err != nil {
+		return nil, strconv.FormatUint(planID, 10), err
+	}
+	return result, strconv.FormatUint(uint64(result.Plan.ID), 10), nil
 }
 
 func (h *EdgeControlHandler) waitAndStartDetection(clientID string, commandID string, opts database.StartDetectionOptions, firstDetail map[string]any) {
@@ -894,6 +938,9 @@ func edgeControlErrorMeta(err error) (string, bool, int) {
 	}
 	if errors.Is(err, database.ErrProjectAlreadyRunning) {
 		return "detection_conflict", false, http.StatusConflict
+	}
+	if errors.Is(err, database.ErrDetectionPlanNotPending) {
+		return "detection_plan_not_pending", false, http.StatusConflict
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "not_found", false, http.StatusNotFound

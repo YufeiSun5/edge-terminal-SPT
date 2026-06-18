@@ -3,8 +3,6 @@ package reports
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"image"
 	"image/color"
 	"image/png"
@@ -18,7 +16,6 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-const reportXLSXContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const pngContentType = "image/png"
 
 func TestReportArtifactStoreExcelizeSpike(t *testing.T) {
@@ -355,9 +352,4 @@ func abs(value int) int {
 		return -value
 	}
 	return value
-}
-
-func sha256Hex(raw []byte) string {
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }

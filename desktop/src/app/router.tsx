@@ -6,7 +6,10 @@ import { EdgeStatusPage } from '@/features/edge-status/EdgeStatusPage'
 import { StationOperationPage } from '@/features/station-operation/StationOperationPage'
 import { HistoryQueryPage } from '@/features/history-query/HistoryQueryPage'
 import { TaskDetailPage } from '@/features/history-query/TaskDetailPage'
-import { ReportsPage } from '@/features/reports/ReportsPage'
+import { LatestHistoryRedirectPage } from '@/features/history-query/LatestHistoryRedirectPage'
+import { DetectionPlansPage } from '@/features/history-query/DetectionPlansPage'
+import { ReportTemplateManagementPage } from '@/features/reports/ReportTemplateManagementPage'
+import { ReportPlanImportPage } from '@/features/reports/ReportPlanImportPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { DetectionConfigPage } from '@/features/detection-config/DetectionConfigPage'
 import { VariableConfigPage } from '@/features/variable-config/VariableConfigPage'
@@ -54,18 +57,34 @@ export const router = createHashRouter([
                 element: <HistoryQueryPage />,
               },
               {
+                path: 'list',
+                element: <LatestHistoryRedirectPage />,
+              },
+              {
+                path: 'plans',
+                element: <DetectionPlansPage />,
+              },
+              {
                 path: 'runs/:taskId',
                 element: <TaskDetailPage />,
               },
             ],
           },
           {
-            path: 'reports',
-            element: <ProtectedRoute permissions={['view_history']} />,
+            path: 'report-settings',
+            element: <ProtectedRoute permissions={['system_settings']} />,
             children: [
               {
                 index: true,
-                element: <ReportsPage />,
+                element: <ReportTemplateManagementPage />,
+              },
+              {
+                path: 'templates',
+                element: <ReportTemplateManagementPage />,
+              },
+              {
+                path: 'plan-imports',
+                element: <ReportPlanImportPage />,
               },
             ],
           },

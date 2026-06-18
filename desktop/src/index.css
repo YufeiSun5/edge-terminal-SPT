@@ -1318,6 +1318,19 @@ body {
   font-size: 12px;
 }
 
+.station-run-report-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.station-run-report-actions .ant-tag {
+  margin-inline-end: 0;
+}
+
 .station-run-report-list {
   display: grid;
   gap: 10px;

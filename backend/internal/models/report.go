@@ -13,6 +13,8 @@ type ReportTemplate struct {
 	DisplayName      string    `gorm:"column:display_name;size:128" json:"display_name"`
 	FileRef          string    `gorm:"column:file_ref;size:512;not null" json:"file_ref"`
 	FileKind         string    `gorm:"column:file_kind;size:32;not null;default:xlsx" json:"file_kind"`
+	FileSHA256       string    `gorm:"column:file_sha256;size:64" json:"file_sha256,omitempty"`
+	FileSize         int64     `gorm:"column:file_size" json:"file_size,omitempty"`
 	Version          int       `gorm:"column:version;default:1;not null" json:"version"`
 	ParamsSchemaJSON string    `gorm:"column:params_schema_json;type:text" json:"params_schema_json,omitempty"`
 	Enabled          bool      `gorm:"column:enabled;default:true;index" json:"enabled"`

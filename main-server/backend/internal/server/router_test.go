@@ -1,12 +1,15 @@
 package server
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/gorilla/websocket"
+	"github.com/xuri/excelize/v2"
 	"gorm.io/gorm"
 )
 
@@ -1229,6 +1233,147 @@ func TestReportTemplatesReadSyncedTables(t *testing.T) {
 	}
 }
 
+func TestMainServerReportTemplateUploadMappingAndDownload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+	cfg := testConfig()
+	cfg.Reports.ArtifactDir = t.TempDir()
+	router := NewRouter(cfg, db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	body, contentType := multipartReportTemplateUploadBody(t, map[string]string{
+		"template_code":      "ROUTE-UPLOAD",
+		"name":               "Route Upload",
+		"display_name":       "路由上传模板",
+		"params_schema_json": `{"cell_mapping":{"sheet":"Template","items":[]}}`,
+	}, buildRouterReportTemplateWorkbook(t), "route-upload.xlsx")
+	upload := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/main-server/report-templates/upload", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(upload, req)
+	if upload.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", upload.Code, upload.Body.String())
+	}
+	var uploadPayload struct {
+		Template query.ReportTemplate `json:"template"`
+		Artifact reports.ArtifactMeta `json:"artifact"`
+	}
+	if err := json.Unmarshal(upload.Body.Bytes(), &uploadPayload); err != nil {
+		t.Fatal(err)
+	}
+	if uploadPayload.Template.ID == 0 || uploadPayload.Template.FileRef != uploadPayload.Artifact.Key || uploadPayload.Template.FileSHA256 == "" || uploadPayload.Template.FileSize == 0 {
+		t.Fatalf("unexpected upload payload: %s", upload.Body.String())
+	}
+
+	list := httptest.NewRecorder()
+	router.ServeHTTP(list, authedRequest(http.MethodGet, "/api/v1/main-server/report-templates?keyword=ROUTE-UPLOAD", token, nil))
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"template_code":"ROUTE-UPLOAD"`) {
+		t.Fatalf("template list status=%d body=%s", list.Code, list.Body.String())
+	}
+
+	mapping := httptest.NewRecorder()
+	router.ServeHTTP(mapping, authedRequest(http.MethodPatch, "/api/v1/main-server/report-templates/"+strconv.FormatUint(uint64(uploadPayload.Template.ID), 10)+"/mapping", token, strings.NewReader(`{"mapping":{"cell_mapping":{"sheet":"Template","items":[{"cell":"A2","source":"task.test_no"}]}}}`)))
+	if mapping.Code != http.StatusOK || !strings.Contains(mapping.Body.String(), "task.test_no") {
+		t.Fatalf("mapping status=%d body=%s", mapping.Code, mapping.Body.String())
+	}
+
+	download := httptest.NewRecorder()
+	router.ServeHTTP(download, authedRequest(http.MethodGet, "/api/v1/main-server/report-templates/"+strconv.FormatUint(uint64(uploadPayload.Template.ID), 10)+"/artifact", token, nil))
+	if download.Code != http.StatusOK || !strings.Contains(download.Header().Get("Content-Disposition"), "ROUTE-UPLOAD-v1.xlsx") || download.Body.Len() == 0 {
+		t.Fatalf("download status=%d headers=%v body_len=%d", download.Code, download.Header(), download.Body.Len())
+	}
+
+	badBody, badContentType := multipartReportTemplateUploadBody(t, map[string]string{"template_code": "BAD-UPLOAD"}, []byte("not xlsx"), "bad.xlsx")
+	bad := httptest.NewRecorder()
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/main-server/report-templates/upload", badBody)
+	badReq.Header.Set("Authorization", "Bearer "+token)
+	badReq.Header.Set("Content-Type", badContentType)
+	router.ServeHTTP(bad, badReq)
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), `"code":"invalid_report_template"`) {
+		t.Fatalf("bad upload status=%d body=%s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestMainServerReportPlanImportParse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+	cfg := testConfig()
+	cfg.Reports.ArtifactDir = t.TempDir()
+	project := query.Project{ProjectCode: "AC-PLAN-ROUTE", Name: "Plan Route Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&query.TagConfig{VarID: 8001, GatewayID: 1, ProjectID: &project.ID, ProjectCode: project.ProjectCode, VarName: "temp", DisplayName: "温度", Unit: "C", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	reportService := reports.NewService(db, query.NewStationViewQuery(db), reports.Options{ArtifactDir: cfg.Reports.ArtifactDir})
+	if _, _, err := reportService.UploadTemplate(context.Background(), reports.TemplateUploadInput{TemplateCode: "PLAN-ROUTE-TPL", Name: "Plan Route Template", Enabled: true}, buildRouterReportTemplateWorkbook(t), "plan-route.xlsx"); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(cfg, db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	body, contentType := multipartReportTemplateUploadBody(t, map[string]string{"edge_instance_id": "edge-a"}, buildRouterPlanImportWorkbook(t), "plan-import.xlsx")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/main-server/report-plan-imports/parse", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", contentType)
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan import status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"artifact_key"`) || !strings.Contains(body, `"project_matched_rows":2`) || !strings.Contains(body, `"variable_matched_rows":1`) || !strings.Contains(body, `"limit_parse_failed"`) {
+		t.Fatalf("unexpected plan import body=%s", body)
+	}
+	var draft reports.PlanImportDraft
+	if err := json.Unmarshal(rec.Body.Bytes(), &draft); err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Rows) == 0 {
+		t.Fatal("expected parsed rows")
+	}
+	confirmBody, err := json.Marshal(reports.PlanImportConfirmInput{
+		Rows:              []reports.PlanImportRow{draft.Rows[0]},
+		SourceArtifactKey: draft.Artifact.Key,
+		EdgeInstanceID:    "edge-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirm := httptest.NewRecorder()
+	router.ServeHTTP(confirm, authedRequest(http.MethodPost, "/api/v1/main-server/report-plan-imports/confirm", token, strings.NewReader(string(confirmBody))))
+	if confirm.Code != http.StatusOK || !strings.Contains(confirm.Body.String(), `"created_standards":1`) || !strings.Contains(confirm.Body.String(), `"created_plans":1`) || !strings.Contains(confirm.Body.String(), `"plan_creation_status":"created"`) {
+		t.Fatalf("confirm status=%d body=%s", confirm.Code, confirm.Body.String())
+	}
+	var standardCount int64
+	if err := db.Model(&query.DetectionStandard{}).Where("project_id = ?", project.ID).Count(&standardCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if standardCount != 1 {
+		t.Fatalf("expected one imported detection standard, got %d", standardCount)
+	}
+	var planCount int64
+	if err := db.Model(&query.DetectionPlan{}).Where("standard_code <> ''").Count(&planCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if planCount != 1 {
+		t.Fatalf("expected one imported detection plan, got %d", planCount)
+	}
+
+	badBody, badContentType := multipartReportTemplateUploadBody(t, nil, []byte("not xlsx"), "bad.xlsx")
+	bad := httptest.NewRecorder()
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/main-server/report-plan-imports/parse", badBody)
+	badReq.Header.Set("Authorization", "Bearer "+token)
+	badReq.Header.Set("Content-Type", badContentType)
+	router.ServeHTTP(bad, badReq)
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), `"code":"invalid_plan_import"`) {
+		t.Fatalf("bad plan import status=%d body=%s", bad.Code, bad.Body.String())
+	}
+}
+
 func TestStorageRoutesReadSyncedTables(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newServerTestDB(t)
@@ -1830,6 +1975,16 @@ func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
 	}
 	cfg := testConfig()
 	cfg.Reports.ArtifactDir = t.TempDir()
+	reportService := reports.NewService(db, query.NewStationViewQuery(db), reports.Options{ArtifactDir: cfg.Reports.ArtifactDir})
+	if err := reportService.EnsureSchema(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&query.ReportTemplate{}).Where("template_code = ?", reports.DefaultTemplateCode).Updates(map[string]any{
+		"template_code": "PERF",
+		"version":       3,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	router := NewRouter(cfg, db)
 	token := loginForTest(t, router, "admin", "Admin@12345")
 
@@ -1848,21 +2003,17 @@ func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
 		t.Fatalf("unexpected enqueue payload: %s", enqueue.Body.String())
 	}
 
-	service := reports.NewService(db, query.NewStationViewQuery(db), reports.Options{ArtifactDir: cfg.Reports.ArtifactDir})
-	processed, err := service.RunDueOnce(context.Background(), 5)
+	processed, err := reportService.RunDueOnce(context.Background(), 5)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(processed) != 1 || processed[0].Status != reports.StatusSuccess || processed[0].ArtifactRef == "" {
 		t.Fatalf("unexpected processed jobs: %+v", processed)
 	}
-	if _, err := os.Stat(processed[0].ArtifactRef); err != nil {
-		t.Fatalf("manifest was not written: %v", err)
-	}
 
 	detail := httptest.NewRecorder()
 	router.ServeHTTP(detail, authedRequest(http.MethodGet, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(processed[0].ID, 10), token, nil))
-	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"status":"success"`) || !strings.Contains(detail.Body.String(), `"artifact_name"`) {
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"status":"succeeded"`) || !strings.Contains(detail.Body.String(), `"artifact_name"`) {
 		t.Fatalf("detail status=%d body=%s", detail.Code, detail.Body.String())
 	}
 	download := httptest.NewRecorder()
@@ -1874,6 +2025,63 @@ func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
 	router.ServeHTTP(events, authedRequest(http.MethodGet, "/api/v1/main-server/report-jobs/"+strconv.FormatUint(processed[0].ID, 10)+"/events?limit=20", token, nil))
 	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"event_type":"succeeded"`) || !strings.Contains(events.Body.String(), `"artifact_name"`) || !strings.Contains(events.Body.String(), `"manifest_ref"`) {
 		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
+	}
+	downloadPackage := httptest.NewRecorder()
+	packageBody := fmt.Sprintf(`{"task_id":%d,"keys":["data-raw","data-chart","config-standard","config-limits","config-reports","config-routes","alarms-events","report-job-%d"]}`, task.ID, processed[0].ID)
+	router.ServeHTTP(downloadPackage, authedRequest(http.MethodPost, "/api/v1/main-server/download-packages", token, strings.NewReader(packageBody)))
+	if downloadPackage.Code != http.StatusOK || downloadPackage.Header().Get("Content-Type") != "application/zip" {
+		t.Fatalf("download package status=%d headers=%v body=%s", downloadPackage.Code, downloadPackage.Header(), downloadPackage.Body.String())
+	}
+	zipReader, err := zip.NewReader(bytes.NewReader(downloadPackage.Body.Bytes()), int64(downloadPackage.Body.Len()))
+	if err != nil {
+		t.Fatalf("download package is not a zip: %v", err)
+	}
+	zipFiles := map[string]string{}
+	for _, file := range zipReader.File {
+		zipFiles[file.Name] = file.Name
+	}
+	for _, expected := range []string{
+		"download-manifest.json",
+		"snapshots/task.json",
+		"snapshots/standard-items.json",
+		"snapshots/limit-snapshot.json",
+		"snapshots/report-requests.json",
+		"snapshots/storage-routes.json",
+		"events/task-events.json",
+		"data/history-raw.csv",
+		"reports/" + processed[0].ArtifactName,
+		fmt.Sprintf("reports/report-job-%d-events.json", processed[0].ID),
+	} {
+		if _, ok := zipFiles[expected]; !ok {
+			t.Fatalf("download package missing %s; files=%v", expected, zipFiles)
+		}
+	}
+	manifestFile, err := zipReader.Open("download-manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestRaw, err := io.ReadAll(manifestFile)
+	_ = manifestFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packageManifest struct {
+		Skipped []struct {
+			Key    string `json:"key"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if err := json.Unmarshal(manifestRaw, &packageManifest); err != nil {
+		t.Fatal(err)
+	}
+	foundChartSkip := false
+	for _, skipped := range packageManifest.Skipped {
+		if skipped.Key == "data-chart" && strings.Contains(skipped.Reason, "standalone chart png") {
+			foundChartSkip = true
+		}
+	}
+	if !foundChartSkip {
+		t.Fatalf("download manifest should record standalone chart skip, got %s", string(manifestRaw))
 	}
 	notificationCount := httptest.NewRecorder()
 	router.ServeHTTP(notificationCount, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications/unread-count", token, nil))
@@ -2386,6 +2594,22 @@ func TestDetectionRunUserRoutesForwardThroughEdgeControlEnvelope(t *testing.T) {
 		t.Fatalf("unexpected start payload: %+v", seen[0].Body["payload"])
 	}
 
+	planStart := httptest.NewRecorder()
+	planStartReq := authedRequest(http.MethodPost, "/api/v1/detection-plans/77/start", token, strings.NewReader(`{"project_id":1,"operator_note":"from plan"}`))
+	planStartReq.Header.Set("Content-Type", "application/json")
+	planStartReq.Header.Set("X-Command-ID", "user-plan-start-1")
+	router.ServeHTTP(planStart, planStartReq)
+	if planStart.Code != http.StatusOK {
+		t.Fatalf("plan start status=%d body=%s", planStart.Code, planStart.Body.String())
+	}
+	if len(seen) != 2 || seen[1].Path != "/api/v1/edge-control/detection-plans/77/start" || seen[1].CommandID != "user-plan-start-1" {
+		t.Fatalf("unexpected plan start forward: %+v", seen)
+	}
+	planPayload, ok := seen[1].Body["payload"].(map[string]any)
+	if !ok || planPayload["operator_note"] != "from plan" || planPayload["project_id"].(float64) != 1 {
+		t.Fatalf("unexpected plan start payload: %+v", seen[1].Body["payload"])
+	}
+
 	stop := httptest.NewRecorder()
 	stopReq := authedRequest(http.MethodPost, "/api/v1/detection-runs/123/stop", token, strings.NewReader(`{"reason":"done"}`))
 	stopReq.Header.Set("Content-Type", "application/json")
@@ -2393,12 +2617,12 @@ func TestDetectionRunUserRoutesForwardThroughEdgeControlEnvelope(t *testing.T) {
 	if stop.Code != http.StatusOK {
 		t.Fatalf("stop status=%d body=%s", stop.Code, stop.Body.String())
 	}
-	if len(seen) != 2 || seen[1].Path != "/api/v1/edge-control/detection/stop" || seen[1].CommandID == "" {
+	if len(seen) != 3 || seen[2].Path != "/api/v1/edge-control/detection/stop" || seen[2].CommandID == "" {
 		t.Fatalf("unexpected stop forward: %+v", seen)
 	}
-	stopPayload, ok := seen[1].Body["payload"].(map[string]any)
+	stopPayload, ok := seen[2].Body["payload"].(map[string]any)
 	if !ok || stopPayload["reason"] != "done" || stopPayload["task_id"].(float64) != 123 {
-		t.Fatalf("unexpected stop payload: %+v", seen[1].Body["payload"])
+		t.Fatalf("unexpected stop payload: %+v", seen[2].Body["payload"])
 	}
 
 	abnormal := httptest.NewRecorder()
@@ -2408,7 +2632,7 @@ func TestDetectionRunUserRoutesForwardThroughEdgeControlEnvelope(t *testing.T) {
 	if abnormal.Code != http.StatusOK {
 		t.Fatalf("abnormal stop status=%d body=%s", abnormal.Code, abnormal.Body.String())
 	}
-	if len(seen) != 3 || seen[2].Path != "/api/v1/edge-control/detection/abnormal-stop" {
+	if len(seen) != 4 || seen[3].Path != "/api/v1/edge-control/detection/abnormal-stop" {
 		t.Fatalf("unexpected abnormal stop forward: %+v", seen)
 	}
 
@@ -2419,12 +2643,12 @@ func TestDetectionRunUserRoutesForwardThroughEdgeControlEnvelope(t *testing.T) {
 	if pause.Code != http.StatusOK {
 		t.Fatalf("pause status=%d body=%s", pause.Code, pause.Body.String())
 	}
-	if len(seen) != 4 || seen[3].Path != "/api/v1/edge-control/detection/pause" {
+	if len(seen) != 5 || seen[4].Path != "/api/v1/edge-control/detection/pause" {
 		t.Fatalf("unexpected pause forward: %+v", seen)
 	}
-	pausePayload, ok := seen[3].Body["payload"].(map[string]any)
+	pausePayload, ok := seen[4].Body["payload"].(map[string]any)
 	if !ok || pausePayload["reason"] != "operator pause" || pausePayload["task_id"].(float64) != 123 {
-		t.Fatalf("unexpected pause payload: %+v", seen[3].Body["payload"])
+		t.Fatalf("unexpected pause payload: %+v", seen[4].Body["payload"])
 	}
 
 	resume := httptest.NewRecorder()
@@ -2434,12 +2658,12 @@ func TestDetectionRunUserRoutesForwardThroughEdgeControlEnvelope(t *testing.T) {
 	if resume.Code != http.StatusOK {
 		t.Fatalf("resume status=%d body=%s", resume.Code, resume.Body.String())
 	}
-	if len(seen) != 5 || seen[4].Path != "/api/v1/edge-control/detection/resume" {
+	if len(seen) != 6 || seen[5].Path != "/api/v1/edge-control/detection/resume" {
 		t.Fatalf("unexpected resume forward: %+v", seen)
 	}
-	resumePayload, ok := seen[4].Body["payload"].(map[string]any)
+	resumePayload, ok := seen[5].Body["payload"].(map[string]any)
 	if !ok || resumePayload["task_id"].(float64) != 123 {
-		t.Fatalf("unexpected resume payload: %+v", seen[4].Body["payload"])
+		t.Fatalf("unexpected resume payload: %+v", seen[5].Body["payload"])
 	}
 
 	note := httptest.NewRecorder()
@@ -2449,8 +2673,129 @@ func TestDetectionRunUserRoutesForwardThroughEdgeControlEnvelope(t *testing.T) {
 	if note.Code != http.StatusNotImplemented || !strings.Contains(note.Body.String(), `"code":"main_server_detection_note_write_unsupported"`) {
 		t.Fatalf("note write status=%d body=%s", note.Code, note.Body.String())
 	}
-	if len(seen) != 5 {
+	if len(seen) != 6 {
 		t.Fatalf("note writes should not call edge control directly, seen=%+v", seen)
+	}
+}
+
+func TestDetectionPlansRoutesReadSyncedPlans(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+	if err := db.Create(&[]query.DetectionPlan{
+		{
+			PlanNo:         "PLAN-1",
+			SourceSystem:   "mes",
+			ExternalPlanID: "MES-1",
+			FactoryNo:      "FAC-PLAN",
+			DeviceModel:    "MODEL-A",
+			TestItemCode:   "cooling",
+			TestItemName:   "Cooling test",
+			TestSequence:   1,
+			Mode:           "standard",
+			StandardCode:   "STD-A",
+			Status:         "pending",
+		},
+		{
+			PlanNo:         "PLAN-2",
+			SourceSystem:   "mes",
+			ExternalPlanID: "MES-2",
+			FactoryNo:      "FAC-PLAN",
+			DeviceModel:    "MODEL-A",
+			TestItemCode:   "heating",
+			TestItemName:   "Heating test",
+			TestSequence:   2,
+			Mode:           "standard",
+			StandardCode:   "STD-B",
+			Status:         "started",
+		},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(testConfig(), db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+
+	list := httptest.NewRecorder()
+	listReq := authedRequest(http.MethodGet, "/api/v1/detection-plans?factory_no=FAC-PLAN&limit=10", token, nil)
+	router.ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listPayload struct {
+		Items []query.DetectionPlan `json:"items"`
+		Total int64                 `json:"total"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listPayload); err != nil {
+		t.Fatal(err)
+	}
+	if listPayload.Total != 2 || len(listPayload.Items) != 2 || listPayload.Items[0].PlanNo != "PLAN-1" || listPayload.Items[1].PlanNo != "PLAN-2" {
+		t.Fatalf("unexpected plan list: %+v", listPayload)
+	}
+
+	pending := httptest.NewRecorder()
+	pendingReq := authedRequest(http.MethodGet, "/api/v1/detection-plans?status=pending&keyword=PLAN-1", token, nil)
+	router.ServeHTTP(pending, pendingReq)
+	if pending.Code != http.StatusOK {
+		t.Fatalf("pending status=%d body=%s", pending.Code, pending.Body.String())
+	}
+	var pendingPayload struct {
+		Items []query.DetectionPlan `json:"items"`
+		Total int64                 `json:"total"`
+	}
+	if err := json.Unmarshal(pending.Body.Bytes(), &pendingPayload); err != nil {
+		t.Fatal(err)
+	}
+	if pendingPayload.Total != 1 || len(pendingPayload.Items) != 1 || pendingPayload.Items[0].StandardCode != "STD-A" {
+		t.Fatalf("unexpected pending plans: %+v", pendingPayload)
+	}
+
+	detail := httptest.NewRecorder()
+	detailReq := authedRequest(http.MethodGet, "/api/v1/detection-plans/1", token, nil)
+	router.ServeHTTP(detail, detailReq)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"plan_no":"PLAN-1"`) {
+		t.Fatalf("detail status=%d body=%s", detail.Code, detail.Body.String())
+	}
+
+	update := httptest.NewRecorder()
+	updateReq := authedRequest(http.MethodPatch, "/api/v1/detection-plans/1", token, strings.NewReader(`{
+		"plan_no":"PLAN-1-EDIT",
+		"source_system":"mes",
+		"external_plan_id":"MES-1-EDIT",
+		"external_order_no":"ORDER-EDIT",
+		"factory_no":"FAC-PLAN-EDIT",
+		"customer_name":"Customer",
+		"device_model":"MODEL-B",
+		"test_item_code":"cooling-edit",
+		"test_item_name":"Cooling edit",
+		"test_sequence":3,
+		"mode":"standard",
+		"standard_code":"STD-C"
+	}`))
+	updateReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(update, updateReq)
+	if update.Code != http.StatusOK || !strings.Contains(update.Body.String(), `"plan_no":"PLAN-1-EDIT"`) || !strings.Contains(update.Body.String(), `"updated_by_node":"main-server"`) {
+		t.Fatalf("update pending status=%d body=%s", update.Code, update.Body.String())
+	}
+	var updated query.DetectionPlan
+	if err := db.First(&updated, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.PlanNo != "PLAN-1-EDIT" || updated.FactoryNo != "FAC-PLAN-EDIT" || updated.StandardCode != "STD-C" || updated.UpdatedByUser != "admin" {
+		t.Fatalf("pending plan was not updated: %+v", updated)
+	}
+
+	updateStarted := httptest.NewRecorder()
+	updateStartedReq := authedRequest(http.MethodPatch, "/api/v1/detection-plans/2", token, strings.NewReader(`{
+		"plan_no":"PLAN-2-EDIT",
+		"source_system":"mes",
+		"external_plan_id":"MES-2-EDIT",
+		"factory_no":"FAC-PLAN",
+		"standard_code":"STD-X"
+	}`))
+	updateStartedReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(updateStarted, updateStartedReq)
+	if updateStarted.Code != http.StatusConflict || !strings.Contains(updateStarted.Body.String(), `"code":"detection_plan_not_editable"`) {
+		t.Fatalf("update started status=%d body=%s", updateStarted.Code, updateStarted.Body.String())
 	}
 }
 
@@ -3355,6 +3700,75 @@ func authedRequest(method string, target string, token string, body io.Reader) *
 	return req
 }
 
+func multipartReportTemplateUploadBody(t *testing.T, fields map[string]string, fileBytes []byte, fileName string) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(fileBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body, writer.FormDataContentType()
+}
+
+func buildRouterReportTemplateWorkbook(t *testing.T) []byte {
+	t.Helper()
+	workbook := excelize.NewFile()
+	defer func() { _ = workbook.Close() }()
+	if err := workbook.SetSheetName("Sheet1", "Template"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workbook.SetCellValue("Template", "A1", "Route Upload Template"); err != nil {
+		t.Fatal(err)
+	}
+	buffer, err := workbook.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+func buildRouterPlanImportWorkbook(t *testing.T) []byte {
+	t.Helper()
+	workbook := excelize.NewFile()
+	defer func() { _ = workbook.Close() }()
+	if err := workbook.SetSheetName("Sheet1", "Plan"); err != nil {
+		t.Fatal(err)
+	}
+	rows := [][]any{
+		{"项目编码", "检测编号", "变量编码", "变量", "上下限", "单位", "模板编码"},
+		{"AC-PLAN-ROUTE", "PLAN-ROUTE-001", "8001", "temp", "10~20", "C", "PLAN-ROUTE-TPL"},
+		{"AC-PLAN-ROUTE", "PLAN-ROUTE-002", "", "missing", "bad", "C", "MISSING"},
+	}
+	for rowIndex, row := range rows {
+		for colIndex, value := range row {
+			cell, err := excelize.CoordinatesToCellName(colIndex+1, rowIndex+1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := workbook.SetCellValue("Plan", cell, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	buffer, err := workbook.WriteToBuffer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
 func newServerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -3371,6 +3785,7 @@ func newServerTestDB(t *testing.T) *gorm.DB {
 		&query.StationViewItem{},
 		&query.StationViewAssignment{},
 		&query.DetectionTask{},
+		&query.DetectionPlan{},
 		&query.DetectionStandard{},
 		&query.DetectionStandardItem{},
 		&query.DetectionStandardFavorite{},

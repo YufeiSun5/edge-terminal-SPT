@@ -415,10 +415,32 @@ func freezeDetectionRunStorageRoutes(tx *gorm.DB, task *models.DetectionTask, ru
 	if err != nil {
 		return nil, err
 	}
+	itemByVarID := make(map[int64]models.DetectionRunStandardItem, len(runItems))
+	for _, item := range runItems {
+		if item.StoreEnabled {
+			itemByVarID[item.VarID] = item
+		}
+	}
 	runRoutes := make([]models.DetectionRunStorageRoute, 0, len(tags))
 	for _, tag := range tags {
-		if _, err := ensureDefaultStorageRouteForTag(tx, tag); err != nil {
+		defaultRoute, err := ensureDefaultStorageRouteForTag(tx, tag)
+		if err != nil {
 			return nil, err
+		}
+		if item, ok := itemByVarID[tag.VarID]; ok && defaultRoute != nil && !defaultRoute.Enabled {
+			cycleMS := item.CheckCycleMS
+			if cycleMS <= 0 {
+				cycleMS = 10000
+			}
+			if err := tx.Model(&models.StorageRoute{}).Where("id = ?", defaultRoute.ID).Updates(map[string]interface{}{
+				"enabled":        true,
+				"trigger_mode":   models.StoreTriggerOnCycle,
+				"cycle_ms":       cycleMS,
+				"store_on_start": true,
+				"updated_at":     now,
+			}).Error; err != nil {
+				return nil, err
+			}
 		}
 		routes, err := loadEnabledStorageRoutesForTag(tx, task.ProjectID, tag.VarID)
 		if err != nil {

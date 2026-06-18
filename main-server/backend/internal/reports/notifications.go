@@ -200,7 +200,7 @@ func (s *Service) recordNotificationForEvent(event MainReportJobEvent) error {
 	if !ok {
 		return nil
 	}
-	payload, err := notificationPayload(event)
+	payload, err := s.notificationPayload(event)
 	if err != nil {
 		return err
 	}
@@ -268,13 +268,22 @@ func notificationSpecForEvent(event MainReportJobEvent) (reportNotificationSpec,
 	}
 }
 
-func notificationPayload(event MainReportJobEvent) (string, error) {
+func (s *Service) notificationPayload(event MainReportJobEvent) (string, error) {
 	eventPayload := json.RawMessage(`{}`)
 	if strings.TrimSpace(event.Payload) != "" && json.Valid([]byte(event.Payload)) {
 		eventPayload = json.RawMessage(event.Payload)
 	}
+	var job MainReportJob
+	_ = s.db.First(&job, "id = ?", event.JobID).Error
 	raw, err := json.Marshal(map[string]any{
 		"job_id":        event.JobID,
+		"task_id":       job.TaskID,
+		"request_id":    job.RequestID,
+		"test_no":       job.TestNo,
+		"project_id":    job.ProjectID,
+		"project_code":  job.ProjectCode,
+		"report_name":   job.ReportName,
+		"template_code": job.TemplateCode,
 		"event_id":      event.ID,
 		"event_type":    event.EventType,
 		"event_level":   event.Level,

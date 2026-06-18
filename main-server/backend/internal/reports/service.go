@@ -1,11 +1,17 @@
 package reports
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,11 +25,25 @@ import (
 )
 
 const (
-	StatusPending = "pending"
-	StatusWaiting = "waiting"
-	StatusRunning = "running"
-	StatusSuccess = "success"
-	StatusFailed  = "failed"
+	reportXLSXContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+	StatusPending        = "pending"
+	StatusWaitingForSync = "waiting_for_sync"
+	StatusGenerating     = "generating"
+	StatusSucceeded      = "succeeded"
+	StatusFailed         = "failed"
+
+	// Legacy status aliases are accepted on read/query boundaries while old rows exist.
+	StatusWaitingLegacy = "waiting"
+	StatusRunningLegacy = "running"
+	StatusSuccessLegacy = "success"
+
+	// Deprecated: use StatusWaitingForSync.
+	StatusWaiting = StatusWaitingForSync
+	// Deprecated: use StatusGenerating.
+	StatusRunning = StatusGenerating
+	// Deprecated: use StatusSucceeded.
+	StatusSuccess = StatusSucceeded
 
 	DefaultTemplateCode    = "SPINDLE_DEFAULT_REPORT"
 	DefaultTemplateName    = "Spindle Default Report"
@@ -48,6 +68,8 @@ var (
 type MainReportJob struct {
 	ID              uint64     `gorm:"column:id;primaryKey" json:"id"`
 	JobKey          string     `gorm:"column:job_key;size:191;uniqueIndex" json:"job_key"`
+	ParentJobID     *uint64    `gorm:"column:parent_job_id;index" json:"parent_job_id,omitempty"`
+	GenerationType  string     `gorm:"column:generation_type;size:64" json:"generation_type,omitempty"`
 	EdgeInstanceID  string     `gorm:"column:edge_instance_id;size:64;index" json:"edge_instance_id"`
 	TaskID          uint       `gorm:"column:task_id;index" json:"task_id"`
 	RequestID       uint64     `gorm:"column:request_id;index" json:"request_id"`
@@ -69,6 +91,7 @@ type MainReportJob struct {
 	LastCheckedAt   *time.Time `gorm:"column:last_checked_at" json:"last_checked_at,omitempty"`
 	ArtifactRef     string     `gorm:"column:artifact_ref;size:512" json:"artifact_ref"`
 	ArtifactName    string     `gorm:"column:artifact_name;size:255" json:"artifact_name"`
+	ParamsOverride  string     `gorm:"column:params_override_json;type:text" json:"params_override_json,omitempty"`
 	ErrorMessage    string     `gorm:"column:error_message;type:text" json:"error_message"`
 	CreatedAt       time.Time  `gorm:"column:created_at" json:"created_at"`
 	UpdatedAt       time.Time  `gorm:"column:updated_at" json:"updated_at"`
@@ -119,12 +142,18 @@ type Service struct {
 	db      *gorm.DB
 	query   *query.StationViewQuery
 	options Options
+	store   ArtifactStore
 }
 
 type EnqueueResult struct {
 	Jobs      []MainReportJob                `json:"jobs"`
 	Readiness query.ReportReadiness          `json:"readiness"`
 	Requests  []query.ReportRequestReadiness `json:"requests"`
+}
+
+type AutoEnqueueResult struct {
+	Tasks int `json:"tasks"`
+	Jobs  int `json:"jobs"`
 }
 
 type JobFilter struct {
@@ -137,7 +166,7 @@ type JobFilter struct {
 
 func NewService(db *gorm.DB, stationQuery *query.StationViewQuery, options Options) *Service {
 	if options.ArtifactDir == "" {
-		options.ArtifactDir = filepath.Join("data", "reports")
+		options.ArtifactDir = filepath.Join("data", "report-assets")
 	}
 	if options.DefaultTemplateCode == "" {
 		options.DefaultTemplateCode = DefaultTemplateCode
@@ -161,7 +190,7 @@ func NewService(db *gorm.DB, stationQuery *query.StationViewQuery, options Optio
 	if options.WorkerBatchSize <= 0 {
 		options.WorkerBatchSize = 5
 	}
-	return &Service{db: db, query: stationQuery, options: options}
+	return &Service{db: db, query: stationQuery, options: options, store: NewLocalArtifactStore(options.ArtifactDir)}
 }
 
 func (s *Service) EnsureSchema() error {
@@ -196,11 +225,48 @@ func (s *Service) EnqueueTask(taskID uint, edgeInstanceID string, force bool) (E
 	return EnqueueResult{Jobs: jobs, Readiness: readiness, Requests: readiness.Requests}, nil
 }
 
+func (s *Service) AutoEnqueueDueTasks(ctx context.Context, limit int) (AutoEnqueueResult, error) {
+	if limit <= 0 {
+		limit = s.options.WorkerBatchSize
+	}
+	type candidate struct {
+		TaskID         uint
+		EdgeInstanceID string
+	}
+	var candidates []candidate
+	if err := s.db.Raw(`
+SELECT t.id AS task_id, COALESCE(p.edge_instance_id, '') AS edge_instance_id
+FROM sys_detection_tasks t
+JOIN detection_run_report_requests rr ON rr.task_id = t.id
+LEFT JOIN sys_projects p ON p.id = t.project_id
+WHERE t.status = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM main_report_jobs j WHERE j.request_id = rr.id
+  )
+GROUP BY t.id, p.edge_instance_id
+ORDER BY MIN(rr.updated_at) ASC, t.id ASC
+LIMIT ?`, query.DetectionStatusStopped, limit).Scan(&candidates).Error; err != nil {
+		return AutoEnqueueResult{}, err
+	}
+	result := AutoEnqueueResult{Tasks: len(candidates)}
+	for _, item := range candidates {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		enqueued, err := s.EnqueueTask(item.TaskID, item.EdgeInstanceID, false)
+		if err != nil {
+			return result, err
+		}
+		result.Jobs += len(enqueued.Jobs)
+	}
+	return result, nil
+}
+
 func (s *Service) enqueueRequest(readiness query.ReportReadiness, request query.DetectionRunReportRequest, requestReadiness query.ReportRequestReadiness, edgeInstanceID string, force bool, now time.Time) (MainReportJob, error) {
 	key := jobKey(edgeInstanceID, request.TaskID, request.ID)
 	var existing MainReportJob
 	if err := s.db.First(&existing, "job_key = ?", key).Error; err == nil {
-		if force && existing.Status != StatusRunning {
+		if force && !isReportJobRunning(existing.Status) {
 			updates := map[string]any{
 				"status":           initialStatus(requestReadiness.Ready, readiness.OverallStatus),
 				"readiness_status": readiness.OverallStatus,
@@ -263,7 +329,15 @@ func initialStatus(requestReady bool, overallStatus string) string {
 	if overallStatus == query.ReportReadinessReady && requestReady {
 		return StatusPending
 	}
-	return StatusWaiting
+	return StatusWaitingForSync
+}
+
+func isReportJobRunning(status string) bool {
+	return status == StatusGenerating || status == StatusRunningLegacy
+}
+
+func isReportJobSucceeded(status string) bool {
+	return status == StatusSucceeded || status == StatusSuccessLegacy
 }
 
 func (s *Service) GetJob(id uint64) (MainReportJob, error) {
@@ -329,7 +403,7 @@ func (s *Service) RetryJob(id uint64) (MainReportJob, error) {
 	if err != nil {
 		return job, err
 	}
-	if job.Status == StatusRunning || job.Status == StatusSuccess {
+	if isReportJobRunning(job.Status) || isReportJobSucceeded(job.Status) {
 		return job, ErrJobNotRetryable
 	}
 	now := time.Now()
@@ -353,45 +427,130 @@ func (s *Service) RetryJob(id uint64) (MainReportJob, error) {
 	return updated, nil
 }
 
+type RegenerateReportInput struct {
+	ParamsJSON string
+	Reason     string
+	Operator   string
+}
+
+func (s *Service) RegenerateJobWithParams(id uint64, input RegenerateReportInput) (MainReportJob, error) {
+	parent, err := s.GetJob(id)
+	if err != nil {
+		return parent, err
+	}
+	if isReportJobRunning(parent.Status) {
+		return parent, ErrJobNotRetryable
+	}
+	paramsJSON := strings.TrimSpace(input.ParamsJSON)
+	if paramsJSON == "" {
+		paramsJSON = "{}"
+	}
+	if _, err := parseReportParams(paramsJSON); err != nil {
+		return MainReportJob{}, err
+	}
+	readiness, err := s.query.ReportReadiness(parent.TaskID, parent.EdgeInstanceID)
+	if err != nil {
+		return MainReportJob{}, err
+	}
+	requestReadiness, request, found := findRequest(readiness, parent.RequestID)
+	if !found {
+		return MainReportJob{}, fmt.Errorf("report request is no longer synchronized")
+	}
+	now := time.Now()
+	parentID := parent.ID
+	job := MainReportJob{
+		JobKey:          regenerationJobKey(parent.EdgeInstanceID, parent.TaskID, parent.RequestID, now),
+		ParentJobID:     &parentID,
+		GenerationType:  "params_override",
+		EdgeInstanceID:  parent.EdgeInstanceID,
+		TaskID:          parent.TaskID,
+		RequestID:       parent.RequestID,
+		TestNo:          request.TestNo,
+		ProjectID:       request.ProjectID,
+		ProjectCode:     request.ProjectCode,
+		TemplateID:      request.TemplateID,
+		TemplateCode:    request.TemplateCode,
+		TemplateVersion: request.TemplateVersion,
+		ReportName:      firstNonEmpty(request.ReportName, parent.ReportName),
+		Status:          initialStatus(requestReadiness.Ready, readiness.OverallStatus),
+		ReadinessStatus: readiness.OverallStatus,
+		MaxAttempts:     s.options.MaxAttempts,
+		NextRunAt:       &now,
+		ParamsOverride:  paramsJSON,
+	}
+	if err := s.db.Create(&job).Error; err != nil {
+		return MainReportJob{}, err
+	}
+	s.recordEvent(job.ID, EventEnqueued, "info", "report regeneration was enqueued with parameter override", map[string]any{
+		"status":           job.Status,
+		"readiness_status": job.ReadinessStatus,
+		"task_id":          job.TaskID,
+		"request_id":       job.RequestID,
+		"parent_job_id":    parent.ID,
+		"generation_type":  job.GenerationType,
+		"reason":           strings.TrimSpace(input.Reason),
+		"operator":         strings.TrimSpace(input.Operator),
+		"params_override":  json.RawMessage(paramsJSON),
+	})
+	return job, nil
+}
+
 func (s *Service) Artifact(id uint64) (string, string, string, error) {
 	job, err := s.GetJob(id)
 	if err != nil {
 		return "", "", "", err
 	}
-	if job.Status != StatusSuccess || strings.TrimSpace(job.ArtifactRef) == "" {
+	if !isReportJobSucceeded(job.Status) || strings.TrimSpace(job.ArtifactRef) == "" {
 		return "", "", "", ErrArtifactNotReady
 	}
-	baseDir, err := filepath.Abs(s.options.ArtifactDir)
-	if err != nil {
-		return "", "", "", err
-	}
-	artifactPath, err := filepath.Abs(job.ArtifactRef)
-	if err != nil {
-		return "", "", "", err
-	}
-	if artifactPath != baseDir && !strings.HasPrefix(artifactPath, baseDir+string(os.PathSeparator)) {
-		return "", "", "", ErrArtifactUnavailable
-	}
-	info, err := os.Stat(artifactPath)
-	if err != nil || info.IsDir() {
-		return "", "", "", ErrArtifactUnavailable
+	artifactRef := strings.TrimSpace(job.ArtifactRef)
+	artifactPath, err := s.store.Path(artifactRef)
+	if err != nil || !s.store.Exists(context.Background(), artifactRef) {
+		// Transitional compatibility for pre-artifact-key rows.
+		legacyPath, legacyErr := s.legacyArtifactPath(artifactRef)
+		if legacyErr != nil {
+			return "", "", "", ErrArtifactUnavailable
+		}
+		artifactPath = legacyPath
 	}
 	name := strings.TrimSpace(job.ArtifactName)
 	if name == "" {
-		name = filepath.Base(artifactPath)
+		name = filepath.Base(artifactRef)
 	}
 	return artifactPath, name, artifactContentType(name), nil
+}
+
+func (s *Service) legacyArtifactPath(ref string) (string, error) {
+	baseDir, err := filepath.Abs(s.options.ArtifactDir)
+	if err != nil {
+		return "", err
+	}
+	artifactPath, err := filepath.Abs(ref)
+	if err != nil {
+		return "", err
+	}
+	if artifactPath != baseDir && !strings.HasPrefix(artifactPath, baseDir+string(os.PathSeparator)) {
+		return "", ErrArtifactUnavailable
+	}
+	info, err := os.Stat(artifactPath)
+	if err != nil || info.IsDir() {
+		return "", ErrArtifactUnavailable
+	}
+	return artifactPath, nil
 }
 
 func (s *Service) RunDueOnce(ctx context.Context, limit int) ([]MainReportJob, error) {
 	if limit <= 0 {
 		limit = s.options.WorkerBatchSize
 	}
+	if _, err := s.AutoEnqueueDueTasks(ctx, limit); err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	var jobs []MainReportJob
 	if err := s.db.
-		Where("status IN ? AND (next_run_at IS NULL OR next_run_at <= ?)", []string{StatusPending, StatusWaiting, StatusFailed}, now).
-		Where("attempts < max_attempts OR status = ?", StatusWaiting).
+		Where("status IN ? AND (next_run_at IS NULL OR next_run_at <= ?)", []string{StatusPending, StatusWaitingForSync, StatusWaitingLegacy, StatusFailed}, now).
+		Where("attempts < max_attempts OR status IN ?", []string{StatusWaitingForSync, StatusWaitingLegacy}).
 		Order("next_run_at asc, id asc").
 		Limit(limit).
 		Find(&jobs).Error; err != nil {
@@ -417,12 +576,12 @@ func (s *Service) ProcessJob(id uint64) (MainReportJob, error) {
 	if err != nil {
 		return job, err
 	}
-	if job.Status == StatusRunning || job.Status == StatusSuccess {
+	if isReportJobRunning(job.Status) || isReportJobSucceeded(job.Status) {
 		return job, nil
 	}
 	now := time.Now()
 	if err := s.db.Model(&MainReportJob{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     StatusRunning,
+		"status":     StatusGenerating,
 		"locked_at":  &now,
 		"started_at": &now,
 	}).Error; err != nil {
@@ -447,7 +606,7 @@ func (s *Service) ProcessJob(id uint64) (MainReportJob, error) {
 			message = "report request is no longer requested"
 		}
 		if err := s.db.Model(&MainReportJob{}).Where("id = ?", job.ID).Updates(map[string]any{
-			"status":           StatusWaiting,
+			"status":           StatusWaitingForSync,
 			"readiness_status": readiness.OverallStatus,
 			"last_checked_at":  &checkedAt,
 			"next_run_at":      &next,
@@ -463,13 +622,14 @@ func (s *Service) ProcessJob(id uint64) (MainReportJob, error) {
 		})
 		return s.GetJob(job.ID)
 	}
+	request = requestWithParamsOverride(request, job.ParamsOverride)
 	artifacts, err := s.writeArtifacts(job, readiness, request, requestReadiness)
 	if err != nil {
 		return s.markFailed(job, "write report artifact failed: "+err.Error())
 	}
 	finished := time.Now()
 	if err := s.db.Model(&MainReportJob{}).Where("id = ?", job.ID).Updates(map[string]any{
-		"status":           StatusSuccess,
+		"status":           StatusSucceeded,
 		"readiness_status": readiness.OverallStatus,
 		"last_checked_at":  &checkedAt,
 		"finished_at":      &finished,
@@ -576,6 +736,14 @@ func (s *Service) writeArtifacts(job MainReportJob, readiness query.ReportReadin
 	if err != nil {
 		return artifactSet{}, err
 	}
+	template, ok := s.findReportTemplate(request)
+	if !ok {
+		return artifactSet{}, fmt.Errorf("report template not found: code=%s version=%d request_id=%d", request.TemplateCode, request.TemplateVersion, request.ID)
+	}
+	reportPackage, err = reportPackageWithTemplateMapping(reportPackage, template.ParamsSchemaJSON)
+	if err != nil {
+		return artifactSet{}, err
+	}
 	manifestRef, manifestName, err := s.writeManifest(job, readiness, request, requestReadiness, reportPackage)
 	if err != nil {
 		return artifactSet{}, err
@@ -629,11 +797,8 @@ func (s *Service) qualifiedTwoHourMetrics(job MainReportJob, readiness query.Rep
 }
 
 func (s *Service) writeManifest(job MainReportJob, readiness query.ReportReadiness, request query.DetectionRunReportRequest, requestReadiness query.ReportRequestReadiness, reportPackage ReportPackage) (string, string, error) {
-	if err := os.MkdirAll(s.options.ArtifactDir, 0o755); err != nil {
-		return "", "", err
-	}
 	name := fmt.Sprintf("task-%d-request-%d-manifest.json", job.TaskID, job.RequestID)
-	path := filepath.Join(s.options.ArtifactDir, name)
+	key := reportArtifactKey(job, name)
 	payload := map[string]any{
 		"kind":              "main_server_report_manifest",
 		"generated_at":      time.Now().Format(time.RFC3339Nano),
@@ -652,17 +817,17 @@ func (s *Service) writeManifest(job MainReportJob, readiness query.ReportReadine
 	if err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	if _, err := s.store.Put(context.Background(), key, raw, "application/json"); err != nil {
 		return "", "", err
 	}
-	return path, name, nil
+	return key, name, nil
 }
 
 func (s *Service) writeExcel(job MainReportJob, readiness query.ReportReadiness, request query.DetectionRunReportRequest, requestReadiness query.ReportRequestReadiness, reportPackage ReportPackage, manifestRef string) (string, string, error) {
-	if err := os.MkdirAll(s.options.ArtifactDir, 0o755); err != nil {
+	file, template, templateSource, err := s.openTemplateWorkbook(request)
+	if err != nil {
 		return "", "", err
 	}
-	file, templateSource := s.openTemplateWorkbook(request)
 	defer func() { _ = file.Close() }()
 
 	if err := writeRunSheet(file, job, readiness, request, templateSource, manifestRef); err != nil {
@@ -677,48 +842,63 @@ func (s *Service) writeExcel(job MainReportJob, readiness query.ReportReadiness,
 	if err := writeFeaturesSheet(file, readiness.Features); err != nil {
 		return "", "", err
 	}
-	if err := writeManifestSheet(file, manifestRef); err != nil {
+	if err := s.writeManifestSheet(file, manifestRef); err != nil {
 		return "", "", err
 	}
-	if err := writeReportPackageSheet(file, reportPackage); err != nil {
+	mappedPackage, err := reportPackageWithTemplateMapping(reportPackage, template.ParamsSchemaJSON)
+	if err != nil {
 		return "", "", err
 	}
-	if err := applyCellMapping(file, reportPackage); err != nil {
+	if err := writeReportPackageSheet(file, mappedPackage); err != nil {
+		return "", "", err
+	}
+	if err := hideReportInternalSheets(file); err != nil {
+		return "", "", err
+	}
+	if err := applyCellMapping(file, mappedPackage); err != nil {
+		return "", "", err
+	}
+	if err := s.writeReportChartImages(file, mappedPackage); err != nil {
 		return "", "", err
 	}
 
 	name := fmt.Sprintf("task-%d-request-%d-%s.xlsx", job.TaskID, job.RequestID, safeArtifactName(firstNonEmpty(job.ReportName, request.ReportName, request.TemplateCode, "report")))
-	path := filepath.Join(s.options.ArtifactDir, name)
-	if err := file.SaveAs(path); err != nil {
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
 		return "", "", err
 	}
-	return path, name, nil
+	key := reportArtifactKey(job, name)
+	if _, err := s.store.Put(context.Background(), key, buffer.Bytes(), reportXLSXContentType); err != nil {
+		return "", "", err
+	}
+	return key, name, nil
 }
 
-func (s *Service) openTemplateWorkbook(request query.DetectionRunReportRequest) (*excelize.File, string) {
+func hideReportInternalSheets(file *excelize.File) error {
+	for _, sheet := range []string{"Report_Run", "Report_Request", "Readiness_Checks", "Features", "Manifest_JSON", "Report_Package"} {
+		if index, err := file.GetSheetIndex(sheet); err == nil && index >= 0 {
+			if err := file.SetSheetVisible(sheet, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) openTemplateWorkbook(request query.DetectionRunReportRequest) (*excelize.File, query.ReportTemplate, string, error) {
 	template, ok := s.findReportTemplate(request)
 	if !ok {
-		defaultTemplate, source, err := s.ensureDefaultReportTemplate()
-		if err == nil {
-			template = defaultTemplate
-			ok = true
-			if strings.TrimSpace(source) != "" {
-				log.Printf("[report-worker] report template missing code=%s request_id=%d using default template source=%s", request.TemplateCode, request.ID, source)
-			}
-		} else {
-			log.Printf("[report-worker] ensure default report template failed request_id=%d err=%v", request.ID, err)
-		}
+		return nil, query.ReportTemplate{}, "", fmt.Errorf("report template not found: code=%s version=%d request_id=%d", request.TemplateCode, request.TemplateVersion, request.ID)
 	}
-	if ok {
-		if path, ok := s.resolveTemplatePath(template.FileRef); ok {
-			file, err := excelize.OpenFile(path)
-			if err == nil {
-				return file, path
-			}
-			log.Printf("[report-worker] open report template failed file_ref=%s path=%s err=%v", template.FileRef, path, err)
-		}
+	raw, source, ok := s.resolveTemplateBytes(template.FileRef)
+	if !ok {
+		return nil, query.ReportTemplate{}, "", fmt.Errorf("report template file not available: file_ref=%s code=%s request_id=%d", template.FileRef, request.TemplateCode, request.ID)
 	}
-	return excelize.NewFile(), "generated_default_missing_template"
+	file, err := excelize.OpenReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, query.ReportTemplate{}, "", fmt.Errorf("open report template file_ref=%s source=%s: %w", template.FileRef, source, err)
+	}
+	return file, template, source, nil
 }
 
 func (s *Service) ensureDefaultReportTemplate() (query.ReportTemplate, string, error) {
@@ -726,14 +906,18 @@ func (s *Service) ensureDefaultReportTemplate() (query.ReportTemplate, string, e
 	if fileRef == "" {
 		fileRef = DefaultTemplateFileRef
 	}
-	if _, ok := s.resolveTemplatePath(fileRef); !ok {
-		path := filepath.Join(s.options.ArtifactDir, fileRef)
-		if filepath.IsAbs(fileRef) {
-			path = fileRef
-		}
-		if err := writeDefaultReportTemplateWorkbook(path); err != nil {
+	var meta ArtifactMeta
+	if !s.store.Exists(context.Background(), fileRef) {
+		raw, err := buildDefaultReportTemplateWorkbook()
+		if err != nil {
 			return query.ReportTemplate{}, "", err
 		}
+		meta, err = s.store.Put(context.Background(), fileRef, raw, reportXLSXContentType)
+		if err != nil {
+			return query.ReportTemplate{}, "", err
+		}
+	} else if _, existingMeta, err := s.store.Get(context.Background(), fileRef); err == nil {
+		meta = existingMeta
 	}
 	code := strings.TrimSpace(s.options.DefaultTemplateCode)
 	if code == "" {
@@ -748,6 +932,8 @@ func (s *Service) ensureDefaultReportTemplate() (query.ReportTemplate, string, e
 		updates := map[string]any{
 			"file_ref":           fileRef,
 			"file_kind":          "xlsx",
+			"file_sha256":        meta.SHA256,
+			"file_size":          meta.Size,
 			"version":            version,
 			"enabled":            true,
 			"params_schema_json": defaultTemplateParamsSchema(),
@@ -777,6 +963,8 @@ func (s *Service) ensureDefaultReportTemplate() (query.ReportTemplate, string, e
 		DisplayName:      "默认检测报表模板",
 		FileRef:          fileRef,
 		FileKind:         "xlsx",
+		FileSHA256:       meta.SHA256,
+		FileSize:         meta.Size,
 		Version:          version,
 		ParamsSchemaJSON: defaultTemplateParamsSchema(),
 		Enabled:          true,
@@ -790,15 +978,12 @@ func (s *Service) ensureDefaultReportTemplate() (query.ReportTemplate, string, e
 	return template, "created", nil
 }
 
-func writeDefaultReportTemplateWorkbook(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
+func buildDefaultReportTemplateWorkbook() ([]byte, error) {
 	file := excelize.NewFile()
 	defer func() { _ = file.Close() }()
 	sheet := "Default_Report"
 	if err := ensureSheet(file, sheet); err != nil {
-		return err
+		return nil, err
 	}
 	rows := [][]any{
 		{"Spindle Default Report Template"},
@@ -817,34 +1002,42 @@ func writeDefaultReportTemplateWorkbook(path string) error {
 		{"operator_note", ""},
 	}
 	if err := writeRows(file, sheet, rows); err != nil {
-		return err
+		return nil, err
 	}
-	return file.SaveAs(path)
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
 func defaultTemplateParamsSchema() string {
 	return `{"cell_mapping":{"version":1,"sheet":"Default_Report","items":[{"cell":"B3","source":"task.test_no"},{"cell":"B4","source":"task.project_code"},{"cell":"B5","source":"task.edge_instance_id"},{"cell":"B6","source":"task.started_at"},{"cell":"B7","source":"task.ended_at"},{"cell":"B8","source":"metric.avg"},{"cell":"B9","source":"metric.qualified_two_hours.avg_value"},{"cell":"B10","source":"metric.qualified_two_hours.status"},{"cell":"B11","source":"limit.limit_l"},{"cell":"B12","source":"limit.limit_h"},{"cell":"B13","source":"variable.unit"},{"cell":"B14","source":"param.operator_note"}]}}`
 }
 
-func (s *Service) resolveTemplatePath(fileRef string) (string, bool) {
+func (s *Service) resolveTemplateBytes(fileRef string) ([]byte, string, bool) {
 	fileRef = strings.TrimSpace(fileRef)
 	if fileRef == "" {
-		return "", false
+		return nil, "", false
 	}
+	if raw, _, err := s.store.Get(context.Background(), fileRef); err == nil {
+		return raw, fileRef, true
+	}
+	// Transitional compatibility for existing absolute-path templates in tests/deployments.
 	candidates := []string{fileRef}
 	if !filepath.IsAbs(fileRef) {
-		candidates = append(candidates,
-			filepath.Join(s.options.ArtifactDir, fileRef),
-			filepath.Join(filepath.Dir(s.options.ArtifactDir), fileRef),
-		)
+		candidates = append(candidates, filepath.Join(s.options.ArtifactDir, fileRef), filepath.Join(filepath.Dir(s.options.ArtifactDir), fileRef))
 	}
 	for _, candidate := range candidates {
 		cleaned := filepath.Clean(candidate)
 		if info, err := os.Stat(cleaned); err == nil && !info.IsDir() {
-			return cleaned, true
+			raw, err := os.ReadFile(cleaned)
+			if err == nil {
+				return raw, cleaned, true
+			}
 		}
 	}
-	return "", false
+	return nil, "", false
 }
 
 func (s *Service) findReportTemplate(request query.DetectionRunReportRequest) (query.ReportTemplate, bool) {
@@ -964,12 +1157,12 @@ func writeFeaturesSheet(file *excelize.File, features []query.DetectionRunFeatur
 	return writeRows(file, sheet, rows)
 }
 
-func writeManifestSheet(file *excelize.File, manifestRef string) error {
+func (s *Service) writeManifestSheet(file *excelize.File, manifestRef string) error {
 	sheet := "Manifest_JSON"
 	if err := ensureSheet(file, sheet); err != nil {
 		return err
 	}
-	raw, err := os.ReadFile(manifestRef)
+	raw, _, err := s.store.Get(context.Background(), manifestRef)
 	if err != nil {
 		return err
 	}
@@ -1004,6 +1197,233 @@ func writeReportPackageSheet(file *excelize.File, reportPackage ReportPackage) e
 		}
 	}
 	return writeRows(file, sheet, rows)
+}
+
+func (s *Service) writeReportChartImages(file *excelize.File, reportPackage ReportPackage) error {
+	if len(reportPackage.Reports) == 0 || len(reportPackage.Reports[0].Variables) == 0 {
+		return nil
+	}
+	placement, err := chartPlacementFromPackage(reportPackage)
+	if err != nil {
+		return err
+	}
+	if err := ensureSheet(file, placement.Sheet); err != nil {
+		return err
+	}
+	for index, variable := range reportPackage.Reports[0].Variables {
+		chartCell, titleCell, err := chartCellsForVariable(placement.Cell, index)
+		if err != nil {
+			return err
+		}
+		_ = file.SetCellValue(placement.Sheet, titleCell, firstNonEmpty(variable.DisplayName, variable.VarName, variable.VarIDText)+" 曲线")
+		rows, err := s.historyRowsForChart(reportPackage.Task.TaskID, variable.VarID)
+		if err != nil {
+			return err
+		}
+		imageBytes, err := renderReportCurvePNG(rows, variable)
+		if err != nil {
+			return err
+		}
+		if err := file.AddPictureFromBytes(placement.Sheet, chartCell, &excelize.Picture{
+			Extension: ".png",
+			File:      imageBytes,
+			Format:    &excelize.GraphicOptions{AltText: "report curve " + variable.VarIDText},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type reportChartPlacement struct {
+	Sheet string
+	Cell  string
+}
+
+func chartPlacementFromPackage(reportPackage ReportPackage) (reportChartPlacement, error) {
+	placement := reportChartPlacement{Sheet: "Sheet1", Cell: "D2"}
+	if len(reportPackage.Reports) == 0 {
+		return placement, nil
+	}
+	spec, ok, err := parseCellMapping(reportPackage.Reports[0].Params)
+	if err != nil {
+		return placement, err
+	}
+	if ok {
+		if strings.TrimSpace(spec.Sheet) != "" {
+			placement.Sheet = strings.TrimSpace(spec.Sheet)
+		}
+		if strings.TrimSpace(spec.ChartSheet) != "" {
+			placement.Sheet = strings.TrimSpace(spec.ChartSheet)
+		}
+		if strings.TrimSpace(spec.ChartCell) != "" {
+			placement.Cell = strings.TrimSpace(spec.ChartCell)
+		}
+	}
+	if _, _, err := excelize.CellNameToCoordinates(placement.Cell); err != nil {
+		return placement, fmt.Errorf("invalid chart cell %q: %w", placement.Cell, err)
+	}
+	return placement, nil
+}
+
+func chartCellsForVariable(anchor string, index int) (string, string, error) {
+	col, row, err := excelize.CellNameToCoordinates(anchor)
+	if err != nil {
+		return "", "", err
+	}
+	chartRow := row + index*12
+	titleRow := chartRow - 1
+	if titleRow < 1 {
+		titleRow = chartRow
+		chartRow++
+	}
+	chartCell, err := excelize.CoordinatesToCellName(col, chartRow)
+	if err != nil {
+		return "", "", err
+	}
+	titleCell, err := excelize.CoordinatesToCellName(col, titleRow)
+	if err != nil {
+		return "", "", err
+	}
+	return chartCell, titleCell, nil
+}
+
+func (s *Service) historyRowsForChart(taskID uint, varID int64) ([]query.HistoryData, error) {
+	var rows []query.HistoryData
+	err := s.db.
+		Where("task_id = ? AND var_id = ? AND value IS NOT NULL", taskID, varID).
+		Order("source_time asc").
+		Limit(500).
+		Find(&rows).Error
+	return rows, err
+}
+
+func renderReportCurvePNG(rows []query.HistoryData, variable ReportVariable) ([]byte, error) {
+	const width = 760
+	const height = 240
+	const left = 38
+	const right = 18
+	const top = 18
+	const bottom = 30
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{255, 255, 255, 255}}, image.Point{}, draw.Src)
+	grid := color.RGBA{225, 231, 235, 255}
+	axis := color.RGBA{75, 85, 99, 255}
+	lineColor := color.RGBA{37, 99, 235, 255}
+	limitColor := color.RGBA{220, 38, 38, 255}
+	plotW := width - left - right
+	plotH := height - top - bottom
+	drawReportLine(img, left, top, left, top+plotH, axis)
+	drawReportLine(img, left, top+plotH, left+plotW, top+plotH, axis)
+	values := make([]float64, 0, len(rows))
+	for _, row := range rows {
+		if row.Value != nil {
+			values = append(values, *row.Value)
+		}
+	}
+	if len(values) == 0 {
+		if variable.Metrics.FullDetection.AvgValue != nil {
+			values = append(values, *variable.Metrics.FullDetection.AvgValue)
+		} else {
+			values = append(values, 0)
+		}
+	}
+	minValue, maxValue := values[0], values[0]
+	for _, value := range values {
+		minValue = math.Min(minValue, value)
+		maxValue = math.Max(maxValue, value)
+	}
+	if variable.Limits.LimitL != nil {
+		minValue = math.Min(minValue, *variable.Limits.LimitL)
+		maxValue = math.Max(maxValue, *variable.Limits.LimitL)
+	}
+	if variable.Limits.LimitH != nil {
+		minValue = math.Min(minValue, *variable.Limits.LimitH)
+		maxValue = math.Max(maxValue, *variable.Limits.LimitH)
+	}
+	if maxValue == minValue {
+		maxValue += 1
+		minValue -= 1
+	}
+	padding := (maxValue - minValue) * 0.08
+	minValue -= padding
+	maxValue += padding
+	y := func(value float64) int {
+		ratio := (value - minValue) / (maxValue - minValue)
+		return top + plotH - int(math.Round(ratio*float64(plotH)))
+	}
+	for i := 1; i <= 4; i++ {
+		gy := top + plotH*i/5
+		drawReportLine(img, left, gy, left+plotW, gy, grid)
+	}
+	if variable.Limits.LimitL != nil {
+		ly := y(*variable.Limits.LimitL)
+		drawDashedLine(img, left, ly, left+plotW, ly, limitColor)
+	}
+	if variable.Limits.LimitH != nil {
+		hy := y(*variable.Limits.LimitH)
+		drawDashedLine(img, left, hy, left+plotW, hy, limitColor)
+	}
+	if len(values) == 1 {
+		x := left + plotW/2
+		drawFilledRect(img, x-3, y(values[0])-3, x+3, y(values[0])+3, lineColor)
+	} else {
+		for i := 1; i < len(values); i++ {
+			x1 := left + (i-1)*plotW/(len(values)-1)
+			x2 := left + i*plotW/(len(values)-1)
+			drawReportLine(img, x1, y(values[i-1]), x2, y(values[i]), lineColor)
+		}
+	}
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, img); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func drawFilledRect(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA) {
+	draw.Draw(img, image.Rect(x1, y1, x2, y2), &image.Uniform{C: c}, image.Point{}, draw.Src)
+}
+
+func drawDashedLine(img *image.RGBA, x1, y1, x2, y2 int, c color.RGBA) {
+	for x := x1; x < x2; x += 12 {
+		end := x + 7
+		if end > x2 {
+			end = x2
+		}
+		drawReportLine(img, x, y1, end, y2, c)
+	}
+}
+
+func drawReportLine(img *image.RGBA, x0, y0, x1, y1 int, c color.RGBA) {
+	dx := int(math.Abs(float64(x1 - x0)))
+	dy := -int(math.Abs(float64(y1 - y0)))
+	sx := -1
+	if x0 < x1 {
+		sx = 1
+	}
+	sy := -1
+	if y0 < y1 {
+		sy = 1
+	}
+	err := dx + dy
+	for {
+		if image.Pt(x0, y0).In(img.Bounds()) {
+			img.SetRGBA(x0, y0, c)
+		}
+		if x0 == x1 && y0 == y1 {
+			return
+		}
+		e2 := 2 * err
+		if e2 >= dy {
+			err += dy
+			x0 += sx
+		}
+		if e2 <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
 }
 
 func scanQualifiedTwoHourWindow(rows []query.HistoryData, standard query.DetectionRunStandardItem) ReportMetricWindow {
@@ -1217,6 +1637,23 @@ func safeArtifactName(value string) string {
 	return safe
 }
 
+func reportArtifactKey(job MainReportJob, name string) string {
+	edge := safeArtifactName(firstNonEmpty(job.EdgeInstanceID, "edge"))
+	project := safeArtifactName(firstNonEmpty(job.ProjectCode, fmt.Sprintf("project_%d", job.ProjectID)))
+	testNo := safeArtifactName(firstNonEmpty(job.TestNo, fmt.Sprintf("task_%d", job.TaskID)))
+	return filepath.ToSlash(filepath.Join(
+		"reports",
+		edge,
+		project,
+		fmt.Sprintf("task-%d_%s", job.TaskID, testNo),
+		"requests",
+		fmt.Sprintf("%d", job.RequestID),
+		"generations",
+		fmt.Sprintf("job-%d", job.ID),
+		name,
+	))
+}
+
 func strconvFormatInt(value int64) string {
 	return fmt.Sprintf("%d", value)
 }
@@ -1245,6 +1682,19 @@ func artifactContentType(name string) string {
 
 func jobKey(edgeInstanceID string, taskID uint, requestID uint64) string {
 	return fmt.Sprintf("%s:%d:%d", strings.TrimSpace(edgeInstanceID), taskID, requestID)
+}
+
+func regenerationJobKey(edgeInstanceID string, taskID uint, requestID uint64, at time.Time) string {
+	return fmt.Sprintf("%s:%d:%d:regen:%d", strings.TrimSpace(edgeInstanceID), taskID, requestID, at.UnixNano())
+}
+
+func requestWithParamsOverride(request query.DetectionRunReportRequest, paramsOverride string) query.DetectionRunReportRequest {
+	if strings.TrimSpace(paramsOverride) == "" {
+		return request
+	}
+	next := request
+	next.ParamsJSON = paramsOverride
+	return next
 }
 
 func StartWorker(ctx context.Context, service *Service, interval time.Duration) {
