@@ -285,7 +285,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			return
 		}
 		edgeInstanceID := firstNonEmpty(c.PostForm("edge_instance_id"), edgeContext(c, cfg))
-		draft, err := reportService.ParsePlanImport(c.Request.Context(), raw, file.Filename, edgeInstanceID)
+		draft, err := reportService.ParsePlanImportWithMapping(c.Request.Context(), raw, file.Filename, edgeInstanceID, c.PostForm("mapping_json"))
 		if err != nil {
 			writePlanImportError(c, err)
 			return

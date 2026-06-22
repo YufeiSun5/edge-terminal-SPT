@@ -826,7 +826,7 @@ func TestDetectionPlansServiceStartsRunAndMarksPlan(t *testing.T) {
 		DeviceModel:       "MODEL-A",
 		Mode:              "standard",
 		StandardCode:      standard.StandardCode,
-		ReportRequestJSON: `{"enabled":true,"reports":[{"template_code":"PLAN-SVC-TPL","report_name":"计划报表","variables":[{"var_id":"1001"}],"params":{"operator":"tester","end_policy":"qualified_hold","qualified_hold_minutes":"10"}}]}`,
+		ReportRequestJSON: `{"enabled":true,"reports":[{"template_code":"PLAN-SVC-TPL","report_name":"计划报表","variables":[{"var_name":"supply_air"}],"params":{"operator":"tester","end_policy":"qualified_hold","qualified_hold_minutes":"10"}}]}`,
 		Status:            models.DetectionPlanStatusPending,
 	}
 	if err := db.Create(plan).Error; err != nil {

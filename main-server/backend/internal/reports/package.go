@@ -108,14 +108,12 @@ type CellMappingSpec struct {
 }
 
 type CellMappingItem struct {
-	Sheet     string `json:"sheet"`
-	Cell      string `json:"cell"`
-	Source    string `json:"source"`
-	VarID     int64  `json:"var_id"`
-	VarIDText string `json:"var_id_text"`
-	VarName   string `json:"var_name"`
-	ParamKey  string `json:"param_key"`
-	Required  bool   `json:"required"`
+	Sheet    string `json:"sheet"`
+	Cell     string `json:"cell"`
+	Source   string `json:"source"`
+	VarName  string `json:"var_name"`
+	ParamKey string `json:"param_key"`
+	Required bool   `json:"required"`
 }
 
 func buildReportPackage(job MainReportJob, readiness query.ReportReadiness, request query.DetectionRunReportRequest, requestReadiness query.ReportRequestReadiness, qualifiedMetrics map[int64]ReportMetricWindow) (ReportPackage, error) {
@@ -485,19 +483,14 @@ func formatReportTime(value *time.Time) string {
 }
 
 func findReportVariable(variables []ReportVariable, item CellMappingItem) (ReportVariable, bool) {
-	if item.VarID <= 0 && item.VarIDText != "" {
-		item.VarID, _ = strconv.ParseInt(strings.TrimSpace(item.VarIDText), 10, 64)
+	name := strings.TrimSpace(item.VarName)
+	if name == "" {
+		return ReportVariable{}, false
 	}
 	for _, variable := range variables {
-		if item.VarID > 0 && variable.VarID == item.VarID {
+		if variable.VarName == name {
 			return variable, true
 		}
-		if item.VarName != "" && variable.VarName == item.VarName {
-			return variable, true
-		}
-	}
-	if len(variables) == 1 {
-		return variables[0], true
 	}
 	return ReportVariable{}, false
 }

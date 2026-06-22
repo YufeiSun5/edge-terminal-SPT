@@ -909,6 +909,7 @@ export type DetectionRun = {
   end_type: string
   stop_reason: string
   operator_note: string
+  custom_config_json?: string
   template_ref: string
   report_template_id?: number
   report_template_code: string
@@ -1609,6 +1610,9 @@ export type PlanImportRow = {
   limit_raw?: string
   limit: PlanImportLimit
   setting_raw?: string
+  check_enabled_raw?: string
+  check_enabled: boolean
+  formula_json?: string
   unit?: string
   template_code?: string
   template_match?: {
@@ -1647,6 +1651,19 @@ export type PlanImportDraft = {
   }
   issues?: PlanImportIssue[]
   parsed_at: string
+}
+
+export type PlanImportCellMappingRow = {
+  row_number?: number
+  fields?: Record<string, string>
+  values?: Record<string, string>
+  params?: Record<string, string>
+}
+
+export type PlanImportCellMapping = {
+  sheet?: string
+  common?: Record<string, string>
+  rows?: PlanImportCellMappingRow[]
 }
 
 export type PlanImportConfirmPayload = {

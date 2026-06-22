@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowLeft } from 'lucide-react'
 import { getDetectionRun, getDetectionRuns } from '@/features/edge-status/api'
 import { DetailedDataTab } from './components/DetailedDataTab'
+import { DetectionSnapshotTab } from './components/DetectionSnapshotTab'
 import { ExcelReportsTab } from './components/ExcelReportsTab'
 import { AlarmsEventsTab } from './components/AlarmsEventsTab'
 import { DataDownloadTab } from './components/DataDownloadTab'
@@ -207,6 +208,11 @@ export function TaskDetailPage() {
                   key: 'data',
                   label: t('history.detail.tabs.data'),
                   children: <DetailedDataTab taskId={taskId} />
+                },
+                {
+                  key: 'snapshot',
+                  label: t('history.detail.tabs.snapshot'),
+                  children: <DetectionSnapshotTab taskId={taskId} />
                 },
                 {
                   key: 'reports',

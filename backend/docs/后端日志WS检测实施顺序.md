@@ -142,7 +142,7 @@ P0 日志/审计地基
 - `quality_policy`: Bad quality 时忽略、记录无效或判异常。
 - `target_value`: BOOL/STRING 后续判断目标。
 - `violation_hold_ms`/`recover_hold_ms`: 超限进入和恢复保持时间。
-- `check_cycle_ms`: 检测业务判断周期；为 0 时检测启动快照继承变量 `store_cycle_sec`。
+- `check_cycle_ms`: 检测业务判断周期；不参与历史入库周期计算，也不能作为存储 route 的兜底。历史入库周期只读取 `sys_storage_routes.cycle_ms`。
 - `check_on_start`: 检测启动时是否立刻对当前值做一次判断，和变量属性里的首帧存储分开。
 - 运行快照额外冻结变量默认检测属性和存储映射：`variable_default_*`、`storage_*`、`form_field_key`、`query_alias`。
 

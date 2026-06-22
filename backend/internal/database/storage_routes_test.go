@@ -247,7 +247,7 @@ func TestDefaultStorageRouteAndProjectWideTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if route == nil || route.StorageTarget != models.StorageTargetWideTable || route.StorageTable != ProjectWideTableName(Project.ID) || route.ColumnName != "temp_in" || route.CycleMS != 0 || route.StoreOnStart || route.Enabled {
+	if route == nil || route.StorageTarget != models.StorageTargetWideTable || route.StorageTable != ProjectWideTableName(Project.ID) || route.ColumnName != "temp_in" || route.CycleMS != defaultStorageCycleMS || route.StoreOnStart || route.Enabled {
 		t.Fatalf("unexpected default route: %+v", route)
 	}
 	route.Enabled = true
@@ -279,6 +279,74 @@ func TestDefaultStorageRouteAndProjectWideTableSchema(t *testing.T) {
 	}
 	if err := repo.EnsureProjectWideTable(Project.ID, []models.DetectionRunStorageRoute{runRoute}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFreezeDetectionRunStorageRoutesDoesNotUseCheckCycleAsStorageCycle(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	project := &models.Project{ProjectCode: "D-FREEZE", Name: "Freeze Project", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	tag := models.TagConfig{
+		VarID:       910,
+		GatewayID:   1,
+		SourcePath:  "temp.freeze",
+		RawName:     "Temp Freeze",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		VarName:     "Temp Freeze",
+		JSONPath:    "temp.freeze",
+		DataType:    "FLOAT",
+		ScaleFactor: 1,
+		Enabled:     true,
+	}
+	if err := repo.CreateTag(&tag); err != nil {
+		t.Fatal(err)
+	}
+	defaultRoute, err := repo.EnsureDefaultStorageRouteForTag(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultRoute == nil || defaultRoute.Enabled || defaultRoute.CycleMS != defaultStorageCycleMS {
+		t.Fatalf("expected disabled default route with storage-owned cycle, got %+v", defaultRoute)
+	}
+	task := &models.DetectionTask{
+		TestNo:      "T-FREEZE-STORAGE-CYCLE",
+		FactoryNo:   "F-FREEZE-STORAGE-CYCLE",
+		ProjectID:   project.ID,
+		ProjectCode: project.ProjectCode,
+		Mode:        "standard",
+		Status:      models.DetectionStatusRunning,
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+	runRoutes, err := freezeDetectionRunStorageRoutes(db, task, []models.DetectionRunStandardItem{{
+		TaskID:       task.ID,
+		TestNo:       task.TestNo,
+		VarID:        tag.VarID,
+		VarName:      tag.VarName,
+		CheckEnabled: true,
+		StoreEnabled: true,
+		CheckCycleMS: 3000,
+	}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runRoutes) != 1 {
+		t.Fatalf("expected one frozen storage route, got %+v", runRoutes)
+	}
+	if runRoutes[0].CycleMS != defaultStorageCycleMS {
+		t.Fatalf("storage cycle must come from storage route/default, not check_cycle_ms; got %d", runRoutes[0].CycleMS)
+	}
+	var storedRoute models.StorageRoute
+	if err := db.First(&storedRoute, "id = ?", defaultRoute.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !storedRoute.Enabled || storedRoute.CycleMS != defaultStorageCycleMS || !storedRoute.StoreOnStart {
+		t.Fatalf("expected default route enabled with storage-owned 20s cycle, got %+v", storedRoute)
 	}
 }
 

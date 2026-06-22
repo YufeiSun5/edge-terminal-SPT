@@ -1012,7 +1012,7 @@ func buildDefaultReportTemplateWorkbook() ([]byte, error) {
 }
 
 func defaultTemplateParamsSchema() string {
-	return `{"cell_mapping":{"version":1,"sheet":"Default_Report","items":[{"cell":"B3","source":"task.test_no"},{"cell":"B4","source":"task.project_code"},{"cell":"B5","source":"task.edge_instance_id"},{"cell":"B6","source":"task.started_at"},{"cell":"B7","source":"task.ended_at"},{"cell":"B8","source":"metric.avg"},{"cell":"B9","source":"metric.qualified_two_hours.avg_value"},{"cell":"B10","source":"metric.qualified_two_hours.status"},{"cell":"B11","source":"limit.limit_l"},{"cell":"B12","source":"limit.limit_h"},{"cell":"B13","source":"variable.unit"},{"cell":"B14","source":"param.operator_note"}]}}`
+	return `{"cell_mapping":{"version":1,"sheet":"Default_Report","items":[{"cell":"B3","source":"task.test_no"},{"cell":"B4","source":"task.project_code"},{"cell":"B5","source":"task.edge_instance_id"},{"cell":"B6","source":"task.started_at"},{"cell":"B7","source":"task.ended_at"},{"cell":"B14","source":"param.operator_note"}]}}`
 }
 
 func (s *Service) resolveTemplateBytes(fileRef string) ([]byte, string, bool) {
@@ -1224,15 +1224,61 @@ func (s *Service) writeReportChartImages(file *excelize.File, reportPackage Repo
 		if err != nil {
 			return err
 		}
+		graphicOptions := &excelize.GraphicOptions{AltText: "report curve " + variable.VarIDText}
+		if cellInMergeRange(file, placement.Sheet, chartCell) {
+			graphicOptions.AutoFit = true
+			graphicOptions.LockAspectRatio = true
+		}
 		if err := file.AddPictureFromBytes(placement.Sheet, chartCell, &excelize.Picture{
 			Extension: ".png",
 			File:      imageBytes,
-			Format:    &excelize.GraphicOptions{AltText: "report curve " + variable.VarIDText},
+			Format:    graphicOptions,
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func cellInMergeRange(file *excelize.File, sheet string, cell string) bool {
+	mergeCells, err := file.GetMergeCells(sheet)
+	if err != nil {
+		return false
+	}
+	for _, mergeCell := range mergeCells {
+		start := mergeCell.GetStartAxis()
+		end := mergeCell.GetEndAxis()
+		if start == "" || end == "" {
+			continue
+		}
+		inRange, err := cellInRange(cell, start, end)
+		if err == nil && inRange {
+			return true
+		}
+	}
+	return false
+}
+
+func cellInRange(cell, start, end string) (bool, error) {
+	cellCol, cellRow, err := excelize.CellNameToCoordinates(cell)
+	if err != nil {
+		return false, err
+	}
+	startCol, startRow, err := excelize.CellNameToCoordinates(start)
+	if err != nil {
+		return false, err
+	}
+	endCol, endRow, err := excelize.CellNameToCoordinates(end)
+	if err != nil {
+		return false, err
+	}
+	if startCol > endCol {
+		startCol, endCol = endCol, startCol
+	}
+	if startRow > endRow {
+		startRow, endRow = endRow, startRow
+	}
+	return cellCol >= startCol && cellCol <= endCol && cellRow >= startRow && cellRow <= endRow, nil
 }
 
 type reportChartPlacement struct {

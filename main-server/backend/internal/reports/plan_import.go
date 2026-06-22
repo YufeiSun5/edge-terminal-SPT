@@ -27,6 +27,19 @@ type PlanImportDraft struct {
 	ParsedAt       time.Time         `json:"parsed_at"`
 }
 
+type PlanImportCellMappingSpec struct {
+	Sheet  string                     `json:"sheet,omitempty"`
+	Common map[string]string          `json:"common,omitempty"`
+	Rows   []PlanImportCellMappingRow `json:"rows,omitempty"`
+}
+
+type PlanImportCellMappingRow struct {
+	RowNumber int               `json:"row_number,omitempty"`
+	Fields    map[string]string `json:"fields,omitempty"`
+	Values    map[string]string `json:"values,omitempty"`
+	Params    map[string]string `json:"params,omitempty"`
+}
+
 type PlanImportSummary struct {
 	TotalRows           int `json:"total_rows"`
 	ReadyRows           int `json:"ready_rows"`
@@ -54,6 +67,9 @@ type PlanImportRow struct {
 	LimitRaw        string             `json:"limit_raw,omitempty"`
 	Limit           PlanLimitParse     `json:"limit"`
 	SettingRaw      string             `json:"setting_raw,omitempty"`
+	CheckEnabledRaw string             `json:"check_enabled_raw,omitempty"`
+	CheckEnabled    bool               `json:"check_enabled"`
+	FormulaJSON     string             `json:"formula_json,omitempty"`
 	Unit            string             `json:"unit,omitempty"`
 	TemplateCode    string             `json:"template_code,omitempty"`
 	TemplateMatch   *PlanTemplateMatch `json:"template_match,omitempty"`
@@ -129,6 +145,10 @@ type PlanImportConfirmResult struct {
 }
 
 func (s *Service) ParsePlanImport(ctx context.Context, raw []byte, originalName string, edgeInstanceID string) (PlanImportDraft, error) {
+	return s.ParsePlanImportWithMapping(ctx, raw, originalName, edgeInstanceID, "")
+}
+
+func (s *Service) ParsePlanImportWithMapping(_ context.Context, raw []byte, originalName string, edgeInstanceID string, mappingJSON string) (PlanImportDraft, error) {
 	if len(raw) == 0 {
 		return PlanImportDraft{}, fmt.Errorf("%w: file is required", ErrInvalidReportTemplate)
 	}
@@ -142,37 +162,196 @@ func (s *Service) ParsePlanImport(ctx context.Context, raw []byte, originalName 
 		return PlanImportDraft{}, fmt.Errorf("%w: workbook has no sheets", ErrInvalidReportTemplate)
 	}
 	sheet := sheets[0]
+	mapping, hasMapping, err := parsePlanImportCellMapping(mappingJSON)
+	if err != nil {
+		return PlanImportDraft{}, err
+	}
+	if hasMapping && strings.TrimSpace(mapping.Sheet) != "" {
+		sheet = strings.TrimSpace(mapping.Sheet)
+	}
 	rows, err := workbook.GetRows(sheet)
 	if err != nil {
 		return PlanImportDraft{}, err
 	}
-	if len(rows) < 2 {
+	if !hasMapping && len(rows) < 2 {
 		return PlanImportDraft{}, fmt.Errorf("%w: plan import requires a header row and at least one data row", ErrInvalidReportTemplate)
 	}
 	sha := sha256Hex(raw)
-	key := fmt.Sprintf("plan-imports/%s/%s/%s", time.Now().Format("2006"), sha, firstNonEmpty(safeArtifactName(originalName), "source.xlsx"))
-	meta, err := s.store.Put(ctx, key, raw, reportXLSXContentType)
-	if err != nil {
-		return PlanImportDraft{}, err
+	meta := ArtifactMeta{
+		Key:         "",
+		ContentType: reportXLSXContentType,
+		Size:        int64(len(raw)),
+		SHA256:      sha,
 	}
-	header := planHeaderIndex(rows[0])
+	rowCapacity := len(rows) - 1
+	if rowCapacity < 0 {
+		rowCapacity = len(mapping.Rows)
+	}
 	draft := PlanImportDraft{
 		Artifact:       meta,
 		SourceFileName: originalName,
 		SheetName:      sheet,
-		Rows:           make([]PlanImportRow, 0, len(rows)-1),
+		Rows:           make([]PlanImportRow, 0, rowCapacity),
 		ParsedAt:       time.Now(),
 	}
-	for index, rawRow := range rows[1:] {
-		if planRowBlank(rawRow) {
-			continue
+	if hasMapping {
+		mappedRows, err := s.parsePlanImportMappedRows(workbook, mapping, sheet, edgeInstanceID)
+		if err != nil {
+			return PlanImportDraft{}, err
 		}
-		row := s.parsePlanImportRow(rawRow, header, index+2, edgeInstanceID)
-		draft.Rows = append(draft.Rows, row)
-		draft.Issues = append(draft.Issues, row.Issues...)
+		for _, row := range mappedRows {
+			draft.Rows = append(draft.Rows, row)
+			draft.Issues = append(draft.Issues, row.Issues...)
+		}
+	} else {
+		header := planHeaderIndex(rows[0])
+		for index, rawRow := range rows[1:] {
+			if planRowBlank(rawRow) {
+				continue
+			}
+			row := s.parsePlanImportRow(rawRow, header, index+2, edgeInstanceID)
+			draft.Rows = append(draft.Rows, row)
+			draft.Issues = append(draft.Issues, row.Issues...)
+		}
 	}
 	draft.Summary = summarizePlanImportRows(draft.Rows)
 	return draft, nil
+}
+
+func parsePlanImportCellMapping(raw string) (PlanImportCellMappingSpec, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return PlanImportCellMappingSpec{}, false, nil
+	}
+	var mapping PlanImportCellMappingSpec
+	if err := json.Unmarshal([]byte(raw), &mapping); err != nil {
+		return PlanImportCellMappingSpec{}, false, fmt.Errorf("%w: mapping_json is invalid", ErrInvalidReportTemplate)
+	}
+	if len(mapping.Rows) == 0 {
+		return PlanImportCellMappingSpec{}, false, fmt.Errorf("%w: mapping rows are required", ErrInvalidReportTemplate)
+	}
+	return mapping, true, nil
+}
+
+func (s *Service) parsePlanImportMappedRows(workbook *excelize.File, mapping PlanImportCellMappingSpec, fallbackSheet string, edgeInstanceID string) ([]PlanImportRow, error) {
+	sheet := firstNonEmpty(mapping.Sheet, fallbackSheet)
+	common := map[string]string{}
+	for key, cell := range mapping.Common {
+		value, err := mappedCellValue(workbook, sheet, cell)
+		if err != nil {
+			return nil, err
+		}
+		common[normalizePlanImportMappingKey(key)] = value
+	}
+	header := planHeaderIndex([]string{
+		"project_code", "project_name", "project_group", "test_no", "factory_no", "customer_name", "device_model",
+		"variable", "var_name", "display_name", "limit", "limit_l", "limit_h", "check_enabled", "formula_json", "params_json", "setting", "unit", "template_code", "report_name",
+	})
+	out := make([]PlanImportRow, 0, len(mapping.Rows))
+	for index, mapped := range mapping.Rows {
+		values := make(map[string]string, len(common)+len(mapped.Values)+len(mapped.Fields)+len(mapped.Params))
+		for key, value := range common {
+			values[key] = value
+		}
+		for key, value := range mapped.Values {
+			values[normalizePlanImportMappingKey(key)] = strings.TrimSpace(value)
+		}
+		for key, cell := range mapped.Fields {
+			value, err := mappedCellValue(workbook, sheet, cell)
+			if err != nil {
+				return nil, err
+			}
+			values[normalizePlanImportMappingKey(key)] = value
+		}
+		for key, cell := range mapped.Params {
+			value, err := mappedCellValue(workbook, sheet, cell)
+			if err != nil {
+				return nil, err
+			}
+			paramKey := strings.TrimSpace(key)
+			if paramKey != "" {
+				values["param."+strings.TrimPrefix(paramKey, "param.")] = value
+			}
+		}
+		rawRow := make([]string, len(header))
+		for key, value := range values {
+			column, ok := header[key]
+			if !ok {
+				header[key] = len(rawRow)
+				rawRow = append(rawRow, "")
+				column = len(rawRow) - 1
+			}
+			rawRow[column] = value
+		}
+		if planRowBlank(rawRow) {
+			continue
+		}
+		rowNumber := mapped.RowNumber
+		if rowNumber <= 0 {
+			rowNumber = index + 1
+		}
+		row := s.parsePlanImportRow(rawRow, header, rowNumber, edgeInstanceID)
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func mappedCellValue(workbook *excelize.File, sheet string, cell string) (string, error) {
+	cell = strings.TrimSpace(cell)
+	if cell == "" {
+		return "", nil
+	}
+	value, err := workbook.GetCellValue(sheet, cell)
+	if err != nil {
+		return "", fmt.Errorf("%w: cannot read cell %s!%s", ErrInvalidReportTemplate, sheet, cell)
+	}
+	return strings.TrimSpace(value), nil
+}
+
+func normalizePlanImportMappingKey(key string) string {
+	key = strings.TrimSpace(strings.ToLower(key))
+	key = strings.ReplaceAll(key, "-", "_")
+	key = strings.ReplaceAll(key, " ", "_")
+	switch key {
+	case "project", "project_code", "项目", "项目编码":
+		return "project_code"
+	case "project_name", "项目名称":
+		return "project_name"
+	case "project_group", "项目组":
+		return "project_group"
+	case "test_no", "plan_no", "检测编号", "计划编号":
+		return "test_no"
+	case "factory_no", "serial_no", "出厂编号":
+		return "factory_no"
+	case "customer", "customer_name", "客户":
+		return "customer_name"
+	case "device_model", "model", "机型":
+		return "device_model"
+	case "variable", "var_name", "display_name", "变量", "变量名称":
+		return "variable"
+	case "limit", "上下限", "规格":
+		return "limit"
+	case "limit_l", "lower_limit", "下限", "下限值":
+		return "limit_l"
+	case "limit_h", "upper_limit", "上限", "上限值":
+		return "limit_h"
+	case "check_enabled", "check", "enabled", "检测", "是否检测", "参与检测", "判定":
+		return "check_enabled"
+	case "formula_json", "formula", "公式", "公式json", "公式_json", "计算公式":
+		return "formula_json"
+	case "params_json", "params", "parameters", "参数json", "参数_json", "任务参数", "项目参数":
+		return "params_json"
+	case "setting", "setpoint", "设定", "设定值":
+		return "setting"
+	case "unit", "单位":
+		return "unit"
+	case "template_code", "模板编码":
+		return "template_code"
+	case "report_name", "报告名称", "报表名称":
+		return "report_name"
+	default:
+		return key
+	}
 }
 
 func (s *Service) ConfirmPlanImport(_ context.Context, input PlanImportConfirmInput, meta query.SyncWriteMeta) (PlanImportConfirmResult, error) {
@@ -249,22 +428,25 @@ func (s *Service) parsePlanImportRow(rawRow []string, header map[string]int, row
 		return strings.TrimSpace(rawRow[index])
 	}
 	row := PlanImportRow{
-		RowNumber:    rowNumber,
-		ProjectCode:  value("project_code"),
-		ProjectName:  value("project_name"),
-		ProjectGroup: value("project_group"),
-		TestNo:       value("test_no"),
-		FactoryNo:    value("factory_no"),
-		CustomerName: value("customer_name"),
-		DeviceModel:  value("device_model"),
-		VariableRaw:  firstNonEmpty(value("variable"), value("var_name"), value("display_name")),
-		VarIDText:    value("var_id"),
-		LimitRaw:     firstNonEmpty(value("limit"), limitRangeText(value("limit_l"), value("limit_h"))),
-		SettingRaw:   value("setting"),
-		Unit:         value("unit"),
-		TemplateCode: value("template_code"),
-		ReportName:   value("report_name"),
-		Params:       map[string]string{},
+		RowNumber:       rowNumber,
+		ProjectCode:     value("project_code"),
+		ProjectName:     value("project_name"),
+		ProjectGroup:    value("project_group"),
+		TestNo:          value("test_no"),
+		FactoryNo:       value("factory_no"),
+		CustomerName:    value("customer_name"),
+		DeviceModel:     value("device_model"),
+		VariableRaw:     firstNonEmpty(value("variable"), value("var_name"), value("display_name")),
+		VarIDText:       value("var_id"),
+		LimitRaw:        firstNonEmpty(value("limit"), limitRangeText(value("limit_l"), value("limit_h"))),
+		SettingRaw:      value("setting"),
+		CheckEnabledRaw: value("check_enabled"),
+		CheckEnabled:    parsePlanImportBoolDefault(value("check_enabled"), true),
+		FormulaJSON:     value("formula_json"),
+		Unit:            value("unit"),
+		TemplateCode:    value("template_code"),
+		ReportName:      value("report_name"),
+		Params:          map[string]string{},
 		NormalizedInput: map[string]string{
 			"project_code":  value("project_code"),
 			"project_name":  value("project_name"),
@@ -284,6 +466,22 @@ func (s *Service) parsePlanImportRow(rawRow []string, header map[string]int, row
 	}
 	if len(row.Params) == 0 {
 		row.Params = nil
+	}
+	if paramsJSON := strings.TrimSpace(value("params_json")); paramsJSON != "" {
+		parsedParams, err := parsePlanImportParamsJSON(paramsJSON)
+		if err != nil {
+			row.Issues = append(row.Issues, PlanImportIssue{RowNumber: rowNumber, Field: "params_json", Code: "invalid_json", Message: err.Error()})
+		} else {
+			if row.Params == nil {
+				row.Params = map[string]string{}
+			}
+			for key, value := range parsedParams {
+				row.Params[key] = value
+			}
+		}
+	}
+	if formulaJSON := strings.TrimSpace(row.FormulaJSON); formulaJSON != "" && !json.Valid([]byte(formulaJSON)) {
+		row.Issues = append(row.Issues, PlanImportIssue{RowNumber: rowNumber, Field: "formula_json", Code: "invalid_json", Message: "formula_json must be valid JSON"})
 	}
 	row.ProjectMatch = s.matchPlanProject(row.ProjectCode, row.ProjectName, edgeInstanceID)
 	if row.ProjectMatch == nil {
@@ -485,7 +683,7 @@ func buildImportedDetectionStandard(rows []PlanImportRow, sourceArtifactKey stri
 			VarID:           varID,
 			VarName:         row.VariableMatch.VarName,
 			DisplayName:     row.VariableMatch.DisplayName,
-			CheckEnabled:    true,
+			CheckEnabled:    row.CheckEnabled,
 			AlarmEnabled:    true,
 			StoreEnabled:    true,
 			CheckCycleMS:    3000,
@@ -538,7 +736,6 @@ func buildImportedDetectionPlan(rows []PlanImportRow, standard query.DetectionSt
 
 func importedReportRequestJSON(rows []PlanImportRow, sourceArtifactKey string) (string, error) {
 	type reportVariable struct {
-		VarID       string `json:"var_id"`
 		VarName     string `json:"var_name,omitempty"`
 		DisplayName string `json:"display_name,omitempty"`
 	}
@@ -579,7 +776,6 @@ func importedReportRequestJSON(rows []PlanImportRow, sourceArtifactKey string) (
 			keys = append(keys, key)
 		}
 		report.Variables = append(report.Variables, reportVariable{
-			VarID:       row.VariableMatch.VarIDText,
 			VarName:     row.VariableMatch.VarName,
 			DisplayName: row.VariableMatch.DisplayName,
 		})
@@ -589,7 +785,10 @@ func importedReportRequestJSON(rows []PlanImportRow, sourceArtifactKey string) (
 			}
 		}
 		if strings.TrimSpace(row.SettingRaw) != "" {
-			report.Params["setting_"+row.VariableMatch.VarIDText] = strings.TrimSpace(row.SettingRaw)
+			report.Params["setting_"+row.VariableMatch.VarName] = strings.TrimSpace(row.SettingRaw)
+		}
+		if strings.TrimSpace(row.FormulaJSON) != "" {
+			report.Params["formula_"+row.VariableMatch.VarName] = strings.TrimSpace(row.FormulaJSON)
 		}
 	}
 	sort.Strings(keys)
@@ -708,6 +907,9 @@ func normalizePlanHeader(value string) string {
 		"limit": "limit", "上下限": "limit", "范围": "limit", "判定范围": "limit",
 		"limit_l": "limit_l", "下限": "limit_l",
 		"limit_h": "limit_h", "上限": "limit_h",
+		"check_enabled": "check_enabled", "是否检测": "check_enabled", "参与检测": "check_enabled", "检测": "check_enabled",
+		"formula_json": "formula_json", "公式": "formula_json", "公式json": "formula_json", "计算公式": "formula_json",
+		"params_json": "params_json", "参数json": "params_json", "任务参数": "params_json", "项目参数": "params_json",
 		"unit": "unit", "单位": "unit",
 		"setting": "setting", "设定值": "setting",
 		"template_code": "template_code", "模板": "template_code", "模板编码": "template_code",
@@ -720,6 +922,48 @@ func normalizePlanHeader(value string) string {
 		return mapped
 	}
 	return value
+}
+
+func parsePlanImportBoolDefault(raw string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return fallback
+	}
+	switch value {
+	case "1", "true", "yes", "y", "on", "enable", "enabled", "是", "检测", "参与", "参与检测", "启用", "开启":
+		return true
+	case "0", "false", "no", "n", "off", "disable", "disabled", "否", "不", "不检测", "不参与", "停用", "关闭":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func parsePlanImportParamsJSON(raw string) (map[string]string, error) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
+		return nil, fmt.Errorf("params_json must be a valid JSON object: %w", err)
+	}
+	out := make(map[string]string, len(payload))
+	for key, value := range payload {
+		key = strings.TrimSpace(key)
+		if key == "" || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			out[key] = strings.TrimSpace(typed)
+		case float64, bool:
+			out[key] = fmt.Sprint(typed)
+		default:
+			rawValue, err := json.Marshal(typed)
+			if err != nil {
+				return nil, fmt.Errorf("params_json value %q is invalid: %w", key, err)
+			}
+			out[key] = string(rawValue)
+		}
+	}
+	return out, nil
 }
 
 func planRowBlank(row []string) bool {

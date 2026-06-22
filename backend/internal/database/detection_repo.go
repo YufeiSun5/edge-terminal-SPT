@@ -1553,7 +1553,14 @@ func remapDetectionStandardItemsToProject(db *gorm.DB, items []models.DetectionS
 		}
 		for _, tag := range projectTags {
 			applyTagPersistenceDefaults(&tag)
-			tagsByName[strings.TrimSpace(tag.VarName)] = tag
+			name := strings.TrimSpace(tag.VarName)
+			if name == "" {
+				continue
+			}
+			if existing, ok := tagsByName[name]; ok && existing.VarID != tag.VarID {
+				return nil, nil, fmt.Errorf("project_id %d has ambiguous enabled variable var_name %q", projectID, name)
+			}
+			tagsByName[name] = tag
 		}
 	}
 	remapped := make([]models.DetectionStandardItem, 0, len(items))
@@ -1763,8 +1770,12 @@ func buildDetectionRunReportRequests(db *gorm.DB, task *models.DetectionTask, ra
 	byName := make(map[string]models.DetectionRunStandardItem, len(snapshotItems))
 	for _, item := range snapshotItems {
 		byID[item.VarID] = item
-		if strings.TrimSpace(item.VarName) != "" {
-			byName[item.VarName] = item
+		name := strings.TrimSpace(item.VarName)
+		if name != "" {
+			if existing, ok := byName[name]; ok && existing.VarID != item.VarID {
+				return nil, fmt.Errorf("detection standard item var_name %q is ambiguous in project_id %d", name, task.ProjectID)
+			}
+			byName[name] = item
 		}
 	}
 	allVariables := make([]reportRequestVariableSpec, 0)
@@ -1882,6 +1893,9 @@ func parseReportRequestSpec(raw any) (reportRequestSpec, error) {
 	spec.Ext1 = reportString(firstMapValue(decoded, "ext_1", "ext1"))
 	spec.Ext2 = reportString(firstMapValue(decoded, "ext_2", "ext2"))
 	spec.Ext3 = reportString(firstMapValue(decoded, "ext_3", "ext3"))
+	if decoded["var_id"] != nil || decoded["var_id_text"] != nil || decoded["var_ids"] != nil {
+		return spec, fmt.Errorf("report_request variables bind by var_name; var_id is not a valid report variable binding")
+	}
 	reports, err := reportRequestsFromAny(firstMapValue(decoded, "reports", "report_requests"), spec)
 	if err != nil {
 		return spec, err
@@ -1889,10 +1903,13 @@ func parseReportRequestSpec(raw any) (reportRequestSpec, error) {
 	spec.Reports = append(spec.Reports, reports...)
 	if len(spec.Reports) == 0 {
 		variables := make([]reportRequestVariableSpec, 0)
-		variables = append(variables, reportVariablesFromAny(decoded["variables"])...)
-		variables = append(variables, reportVariablesFromIDs(decoded["var_ids"])...)
+		parsedVariables, err := reportVariablesFromAny(decoded["variables"])
+		if err != nil {
+			return spec, err
+		}
+		variables = append(variables, parsedVariables...)
 		variables = append(variables, reportVariablesFromNames(decoded["variable_names"])...)
-		if len(variables) == 0 && (decoded["var_id"] != nil || decoded["var_name"] != nil) {
+		if len(variables) == 0 && decoded["var_name"] != nil {
 			variables = append(variables, reportVariableFromMap(decoded))
 		}
 		for _, variable := range variables {
@@ -1928,11 +1945,17 @@ func reportRequestsFromAny(raw any, parent reportRequestSpec) ([]reportRequestRe
 		if err != nil {
 			return nil, err
 		}
+		if value["var_id"] != nil || value["var_id_text"] != nil || value["var_ids"] != nil {
+			return nil, fmt.Errorf("report_request variables bind by var_name; var_id is not a valid report variable binding")
+		}
 		variables := make([]reportRequestVariableSpec, 0)
-		variables = append(variables, reportVariablesFromAny(value["variables"])...)
-		variables = append(variables, reportVariablesFromIDs(value["var_ids"])...)
+		parsedVariables, err := reportVariablesFromAny(value["variables"])
+		if err != nil {
+			return nil, err
+		}
+		variables = append(variables, parsedVariables...)
 		variables = append(variables, reportVariablesFromNames(value["variable_names"])...)
-		if len(variables) == 0 && (value["var_id"] != nil || value["var_name"] != nil) {
+		if len(variables) == 0 && value["var_name"] != nil {
 			variables = append(variables, reportVariableFromMap(value))
 		}
 		out = append(out, reportRequestReportSpec{
@@ -1951,15 +1974,22 @@ func reportRequestsFromAny(raw any, parent reportRequestSpec) ([]reportRequestRe
 	return out, nil
 }
 
-func reportVariablesFromAny(raw any) []reportRequestVariableSpec {
+func reportVariablesFromAny(raw any) ([]reportRequestVariableSpec, error) {
 	items, ok := raw.([]any)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	out := make([]reportRequestVariableSpec, 0, len(items))
 	for _, item := range items {
 		if value, ok := item.(map[string]any); ok {
-			out = append(out, reportVariableFromMap(value))
+			if value["var_id"] != nil || value["var_id_text"] != nil {
+				return nil, fmt.Errorf("report_request variables bind by var_name; var_id is not a valid report variable binding")
+			}
+			variable := reportVariableFromMap(value)
+			if strings.TrimSpace(variable.VarName) == "" {
+				return nil, fmt.Errorf("report_request variables bind by var_name; var_id is not a valid report variable binding")
+			}
+			out = append(out, variable)
 		} else {
 			text := reportString(item)
 			if text != "" {
@@ -1967,21 +1997,7 @@ func reportVariablesFromAny(raw any) []reportRequestVariableSpec {
 			}
 		}
 	}
-	return out
-}
-
-func reportVariablesFromIDs(raw any) []reportRequestVariableSpec {
-	items, ok := raw.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]reportRequestVariableSpec, 0, len(items))
-	for _, item := range items {
-		if id := reportInt64(item); id != 0 {
-			out = append(out, reportRequestVariableSpec{VarID: id})
-		}
-	}
-	return out
+	return out, nil
 }
 
 func reportVariablesFromNames(raw any) []reportRequestVariableSpec {
@@ -2000,7 +2016,6 @@ func reportVariablesFromNames(raw any) []reportRequestVariableSpec {
 
 func reportVariableFromMap(value map[string]any) reportRequestVariableSpec {
 	return reportRequestVariableSpec{
-		VarID:         reportInt64(firstMapValue(value, "var_id", "var_id_text")),
 		VarName:       reportString(value["var_name"]),
 		DisplayName:   reportString(value["display_name"]),
 		DisplayNameEN: reportString(value["display_name_en"]),
@@ -2014,15 +2029,17 @@ func reportVariableFromMap(value map[string]any) reportRequestVariableSpec {
 }
 
 func resolveReportRequestVariable(variable reportRequestVariableSpec, byID map[int64]models.DetectionRunStandardItem, byName map[string]models.DetectionRunStandardItem, tagByID map[int64]models.TagConfig, tagByName map[string]models.TagConfig) (reportRequestVariableSpec, error) {
-	if variable.VarID == 0 && strings.TrimSpace(variable.VarName) == "" {
-		return variable, fmt.Errorf("report_request variables require var_id or var_name")
+	variable.VarName = strings.TrimSpace(variable.VarName)
+	if variable.VarName == "" {
+		return variable, fmt.Errorf("report_request variables require var_name")
+	}
+	if item, ok := byName[variable.VarName]; ok {
+		variable.VarID = item.VarID
+	} else if tag, ok := tagByName[variable.VarName]; ok {
+		variable.VarID = tag.VarID
 	}
 	if variable.VarID == 0 {
-		if item, ok := byName[variable.VarName]; ok {
-			variable.VarID = item.VarID
-		} else if tag, ok := tagByName[variable.VarName]; ok {
-			variable.VarID = tag.VarID
-		}
+		return variable, fmt.Errorf("report_request variable %q cannot be mapped to project variable", variable.VarName)
 	}
 	if item, ok := byID[variable.VarID]; ok {
 		fillReportRequestVariableFromRunItem(&variable, item)
@@ -2031,10 +2048,6 @@ func resolveReportRequestVariable(variable reportRequestVariableSpec, byID map[i
 		fillReportRequestVariableFromTag(&variable, tag)
 	} else if tag, ok := tagByName[variable.VarName]; ok {
 		fillReportRequestVariableFromTag(&variable, tag)
-	}
-	variable.VarName = strings.TrimSpace(variable.VarName)
-	if variable.VarName == "" {
-		return variable, fmt.Errorf("report_request variable name is required for var_id %d", variable.VarID)
 	}
 	return variable, nil
 }
@@ -2084,17 +2097,9 @@ func reportVariablesJSON(variables []reportRequestVariableSpec) (string, error) 
 }
 
 func loadReportRequestTags(db *gorm.DB, projectID uint, variables []reportRequestVariableSpec) (map[int64]models.TagConfig, map[string]models.TagConfig, error) {
-	ids := make([]int64, 0, len(variables))
 	names := make([]string, 0, len(variables))
-	seenIDs := map[int64]struct{}{}
 	seenNames := map[string]struct{}{}
 	for _, variable := range variables {
-		if variable.VarID != 0 {
-			if _, ok := seenIDs[variable.VarID]; !ok {
-				seenIDs[variable.VarID] = struct{}{}
-				ids = append(ids, variable.VarID)
-			}
-		}
 		name := strings.TrimSpace(variable.VarName)
 		if name != "" {
 			if _, ok := seenNames[name]; !ok {
@@ -2103,18 +2108,10 @@ func loadReportRequestTags(db *gorm.DB, projectID uint, variables []reportReques
 			}
 		}
 	}
-	if len(ids) == 0 && len(names) == 0 {
+	if len(names) == 0 {
 		return map[int64]models.TagConfig{}, map[string]models.TagConfig{}, nil
 	}
-	query := db.Model(&models.TagConfig{})
-	switch {
-	case len(ids) > 0 && len(names) > 0:
-		query = query.Where("var_id IN ? OR (project_id = ? AND var_name IN ?)", ids, projectID, names)
-	case len(ids) > 0:
-		query = query.Where("var_id IN ?", ids)
-	default:
-		query = query.Where("project_id = ? AND var_name IN ?", projectID, names)
-	}
+	query := db.Model(&models.TagConfig{}).Where("project_id = ? AND enabled = ? AND var_name IN ?", projectID, true, names)
 	var tags []models.TagConfig
 	if err := query.Find(&tags).Error; err != nil {
 		return nil, nil, err
@@ -2123,8 +2120,12 @@ func loadReportRequestTags(db *gorm.DB, projectID uint, variables []reportReques
 	byName := make(map[string]models.TagConfig, len(tags))
 	for _, tag := range tags {
 		byID[tag.VarID] = tag
-		if strings.TrimSpace(tag.VarName) != "" {
-			byName[tag.VarName] = tag
+		name := strings.TrimSpace(tag.VarName)
+		if name != "" {
+			if existing, ok := byName[name]; ok && existing.VarID != tag.VarID {
+				return nil, nil, fmt.Errorf("project_id %d has ambiguous enabled variable var_name %q", projectID, name)
+			}
+			byName[name] = tag
 		}
 	}
 	return byID, byName, nil

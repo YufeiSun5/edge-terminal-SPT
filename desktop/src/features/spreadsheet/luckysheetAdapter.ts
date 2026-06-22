@@ -6,6 +6,7 @@ export type SpreadsheetMountOptions = {
   readonly?: boolean
   toolbar?: boolean
   sheetbar?: boolean
+  deferCreate?: boolean
 }
 
 export type SpreadsheetAdapter = {
@@ -87,21 +88,114 @@ function cellDisplayValue(value: ExcelJS.CellValue) {
   if (value instanceof Date) return value.toISOString()
   if (typeof value !== 'object') return value
   if ('formula' in value) return (value.result ?? `=${value.formula}`) as string | number | boolean
-  if ('richText' in value) return value.richText.map((part) => part.text).join('')
+  if ('richText' in value) return value.richText.map((part) => (typeof part?.text === 'string' ? part.text : '')).join('')
   if ('text' in value) return value.text
   if ('hyperlink' in value) return value.hyperlink
   return String(value)
 }
 
+function excelColorToCss(color: Partial<ExcelJS.Color> | undefined, fallback?: string) {
+  const argb = color?.argb
+  if (argb) return `#${argb.slice(-6)}`
+  return fallback
+}
+
 function excelFillToColor(fill: ExcelJS.Fill | undefined) {
   if (!fill || fill.type !== 'pattern') return undefined
-  const argb = fill.fgColor?.argb
-  return argb ? `#${argb.slice(-6)}` : undefined
+  return excelColorToCss(fill.fgColor, excelColorToCss(fill.bgColor))
 }
 
 function excelFontColor(font: Partial<ExcelJS.Font> | undefined) {
-  const argb = font?.color?.argb
-  return argb ? `#${argb.slice(-6)}` : undefined
+  return excelColorToCss(font?.color)
+}
+
+const borderStyleMap: Record<ExcelJS.BorderStyle, number> = {
+  thin: 1,
+  hair: 2,
+  dotted: 3,
+  dashed: 4,
+  dashDot: 5,
+  dashDotDot: 6,
+  double: 7,
+  medium: 8,
+  mediumDashed: 9,
+  mediumDashDot: 10,
+  mediumDashDotDot: 11,
+  slantDashDot: 12,
+  thick: 13,
+}
+
+function excelBorderSideToLuckysheet(side: Partial<ExcelJS.Border> | undefined) {
+  if (!side?.style) return undefined
+  return {
+    style: borderStyleMap[side.style] ?? 1,
+    color: excelColorToCss(side.color, '#000000'),
+  }
+}
+
+function cellBorderInfo(cell: ExcelJS.Cell, rowIndex: number, columnIndex: number) {
+  const border = cell.border
+  if (!border) return undefined
+  const value: Record<string, unknown> = {
+    row_index: rowIndex,
+    col_index: columnIndex,
+  }
+  const left = excelBorderSideToLuckysheet(border.left)
+  const right = excelBorderSideToLuckysheet(border.right)
+  const top = excelBorderSideToLuckysheet(border.top)
+  const bottom = excelBorderSideToLuckysheet(border.bottom)
+  if (left) value.l = left
+  if (right) value.r = right
+  if (top) value.t = top
+  if (bottom) value.b = bottom
+  if (!left && !right && !top && !bottom) return undefined
+  return {
+    rangeType: 'cell',
+    value,
+  }
+}
+
+function excelHorizontalToLuckysheet(horizontal: ExcelJS.Alignment['horizontal'] | undefined) {
+  switch (horizontal) {
+    case 'center':
+    case 'centerContinuous':
+    case 'distributed':
+    case 'justify':
+      return 0
+    case 'right':
+      return 2
+    case 'left':
+    case 'fill':
+      return 1
+    default:
+      return undefined
+  }
+}
+
+function excelVerticalToLuckysheet(vertical: ExcelJS.Alignment['vertical'] | undefined) {
+  switch (vertical) {
+    case 'middle':
+    case 'distributed':
+    case 'justify':
+      return 0
+    case 'top':
+      return 1
+    case 'bottom':
+      return 2
+    default:
+      return undefined
+  }
+}
+
+function excelTextRotationToLuckysheet(textRotation: ExcelJS.Alignment['textRotation'] | undefined) {
+  if (textRotation === 'vertical') return 3
+  if (typeof textRotation !== 'number') return undefined
+  if (textRotation === 0) return 0
+  if (textRotation === 45) return 1
+  if (textRotation === -45) return 2
+  if (textRotation === 90) return 4
+  if (textRotation === -90) return 5
+  return undefined
 }
 
 function bufferToBase64(buffer: ExcelJS.Image['buffer']) {
@@ -259,6 +353,7 @@ async function xlsxFileToLuckysheetData(file: File) {
 
   const sheets = sourceSheets.map((sheet, sheetIndex) => {
     const celldata: Array<{ r: number; c: number; v: Record<string, unknown> }> = []
+    const borderInfo: Array<Record<string, unknown>> = []
     const columnlen: Record<number, number> = {}
     const rowlen: Record<number, number> = {}
     const { merge, mergedCells, masterCells } = sheetMergeConfig(sheet)
@@ -271,24 +366,33 @@ async function xlsxFileToLuckysheetData(file: File) {
       if (row.height) rowlen[rowNumber - 1] = excelRowHeightToPixels(row.height)
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
         const cellKey = `${rowNumber - 1}_${colNumber - 1}`
+        const border = cellBorderInfo(cell, rowNumber - 1, colNumber - 1)
+        if (border) borderInfo.push(border)
         if (mergedCells.has(cellKey)) return
         const value = cellDisplayValue(cell.value)
         const style: Record<string, unknown> = {
           v: value,
           m: value === undefined || value === null ? '' : String(value),
-          ct: { fa: 'General', t: typeof value === 'number' ? 'n' : 'g' },
+          ct: { fa: cell.numFmt || 'General', t: typeof value === 'number' ? 'n' : 'g' },
         }
         const font = cell.font
         if (font?.bold) style.bl = 1
         if (font?.italic) style.it = 1
         if (font?.underline) style.un = 1
+        if (font?.strike) style.cl = 1
         if (font?.size) style.fs = font.size
+        if (font?.name) style.ff = font.name
         const fontColor = excelFontColor(font)
         if (fontColor) style.fc = fontColor
         const background = excelFillToColor(cell.fill)
         if (background) style.bg = background
-        if (cell.alignment?.horizontal) style.ht = cell.alignment.horizontal
-        if (cell.alignment?.vertical) style.vt = cell.alignment.vertical
+        const horizontal = excelHorizontalToLuckysheet(cell.alignment?.horizontal)
+        const vertical = excelVerticalToLuckysheet(cell.alignment?.vertical)
+        const textRotation = excelTextRotationToLuckysheet(cell.alignment?.textRotation)
+        if (horizontal !== undefined) style.ht = horizontal
+        if (vertical !== undefined) style.vt = vertical
+        if (cell.alignment?.wrapText) style.tb = 2
+        if (textRotation !== undefined) style.tr = textRotation
         const mergeInfo = masterCells.get(cellKey)
         if (mergeInfo) style.mc = mergeInfo
         celldata.push({ r: rowNumber - 1, c: colNumber - 1, v: style })
@@ -306,6 +410,7 @@ async function xlsxFileToLuckysheetData(file: File) {
         columnlen,
         rowlen,
         merge,
+        borderInfo,
       },
     }
   })
@@ -373,21 +478,23 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
         throw new Error('Luckysheet vendor assets are not ready.')
       }
 
-      const workbook = normalizeWorkbook(options.data)
+      if (!options.deferCreate) {
+        const workbook = normalizeWorkbook(options.data)
 
-      luckysheet.destroy?.()
-      luckysheet.create({
-        container: 'luckysheet-root',
-        lang: 'zh',
-        data: workbook.sheets,
-        images: workbook.images,
-        showinfobar: false,
-        showtoolbar: options.toolbar ?? !options.readonly,
-        showsheetbar: options.sheetbar ?? true,
-        allowEdit: !options.readonly,
-        enableAddRow: !options.readonly,
-        enableAddBackTop: false,
-      })
+        luckysheet.destroy?.()
+        luckysheet.create({
+          container: 'luckysheet-root',
+          lang: 'zh',
+          data: workbook.sheets,
+          images: workbook.images,
+          showinfobar: false,
+          showtoolbar: options.toolbar ?? !options.readonly,
+          showsheetbar: options.sheetbar ?? true,
+          allowEdit: !options.readonly,
+          enableAddRow: !options.readonly,
+          enableAddBackTop: false,
+        })
+      }
     },
     unmount() {
       try {

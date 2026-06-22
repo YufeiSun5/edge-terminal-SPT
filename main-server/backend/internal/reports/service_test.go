@@ -41,11 +41,11 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 			"items": [
 				{"cell":"B2","source":"task.test_no","required":true},
 				{"cell":"B3","source":"param.inlet_area_m2","required":true},
-				{"cell":"B4","source":"metric.avg","var_id":8101,"required":true},
-				{"cell":"B5","source":"limit.limit_h","var_id":8101,"required":true},
-				{"cell":"B6","source":"metric.avg","var_id":8102,"required":true},
-				{"cell":"B7","source":"metric.qualified_two_hours.avg_value","var_id":8102,"required":true},
-				{"cell":"B8","source":"metric.qualified_two_hours.status","var_id":8102,"required":true}
+				{"cell":"B4","source":"metric.avg","var_name":"temp","required":true},
+				{"cell":"B5","source":"limit.limit_h","var_name":"temp","required":true},
+				{"cell":"B6","source":"metric.avg","var_name":"pressure","required":true},
+				{"cell":"B7","source":"metric.qualified_two_hours.avg_value","var_name":"pressure","required":true},
+				{"cell":"B8","source":"metric.qualified_two_hours.status","var_name":"pressure","required":true}
 			]
 		}
 	}`
@@ -229,7 +229,7 @@ func TestServiceRunDueOnceAutoEnqueuesStoppedReportTasks(t *testing.T) {
 		VarName:         "auto_temp",
 		ReportName:      "自动入队报表",
 		VariablesJSON:   `[{"var_id":"8701"}]`,
-		ParamsJSON:      `{"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B4","source":"metric.avg","var_id":8701,"required":true}]}}`,
+		ParamsJSON:      `{"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B4","source":"metric.avg","var_name":"auto_temp","required":true}]}}`,
 		Status:          "pending",
 	}
 	if err := db.Create(&request).Error; err != nil {
@@ -291,7 +291,7 @@ func TestServiceRegeneratesReportWithParamsOverrideWithoutOverwritingOriginal(t 
 		VarName:         "regen_temp",
 		ReportName:      "参数重生成报表",
 		VariablesJSON:   `[{"var_id":"8801"}]`,
-		ParamsJSON:      `{"coefficient":1.25,"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B3","source":"param.coefficient","required":true},{"cell":"B4","source":"metric.avg","var_id":8801,"required":true}]}}`,
+		ParamsJSON:      `{"coefficient":1.25,"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B3","source":"param.coefficient","required":true},{"cell":"B4","source":"metric.avg","var_name":"regen_temp","required":true}]}}`,
 		Status:          "pending",
 	}
 	if err := db.Create(&request).Error; err != nil {
@@ -318,7 +318,7 @@ func TestServiceRegeneratesReportWithParamsOverrideWithoutOverwritingOriginal(t 
 	_ = originalWorkbook.Close()
 
 	regenerated, err := service.RegenerateJobWithParams(original.ID, RegenerateReportInput{
-		ParamsJSON: `{"coefficient":2.5,"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B3","source":"param.coefficient","required":true},{"cell":"B4","source":"metric.avg","var_id":8801,"required":true}]}}`,
+		ParamsJSON: `{"coefficient":2.5,"cell_mapping":{"sheet":"Customer","items":[{"cell":"B2","source":"task.test_no","required":true},{"cell":"B3","source":"param.coefficient","required":true},{"cell":"B4","source":"metric.avg","var_name":"regen_temp","required":true}]}}`,
 		Reason:     "adjust coefficient",
 		Operator:   "tester",
 	})
@@ -382,12 +382,12 @@ func TestServiceProcessesSameTaskMultiReportRequestsIndependently(t *testing.T) 
 			"items": [
 				{"cell":"B2","source":"task.test_no","required":true},
 				{"cell":"B3","source":"request.report_name","required":true},
-				{"cell":"B4","source":"metric.avg","var_id":9101,"required":true},
-				{"cell":"B5","source":"limit.limit_h","var_id":9101,"required":true},
-				{"cell":"B6","source":"metric.qualified_two_hours.avg_value","var_id":9102,"required":true},
-				{"cell":"B7","source":"variable.unit","var_id":9102,"required":true},
+				{"cell":"B4","source":"metric.avg","var_name":"temp","required":true},
+				{"cell":"B5","source":"limit.limit_h","var_name":"temp","required":true},
+				{"cell":"B6","source":"metric.qualified_two_hours.avg_value","var_name":"pressure","required":true},
+				{"cell":"B7","source":"variable.unit","var_name":"pressure","required":true},
 				{"cell":"B8","source":"param.customer.area","required":true},
-				{"cell":"B9","source":"limit.limit_l","var_id":9102,"required":true}
+				{"cell":"B9","source":"limit.limit_l","var_name":"pressure","required":true}
 			]
 		}
 	}`
@@ -399,11 +399,11 @@ func TestServiceProcessesSameTaskMultiReportRequestsIndependently(t *testing.T) 
 			"items": [
 				{"cell":"C2","source":"task.test_no","required":true},
 				{"cell":"C3","source":"request.report_name","required":true},
-				{"cell":"C4","source":"metric.avg","var_id":9103,"required":true},
-				{"cell":"C5","source":"metric.qualified_two_hours.status","var_id":9103,"required":true},
-				{"cell":"C6","source":"limit.limit_l","var_id":9103,"required":true},
+				{"cell":"C4","source":"metric.avg","var_name":"humidity","required":true},
+				{"cell":"C5","source":"metric.qualified_two_hours.status","var_name":"humidity","required":true},
+				{"cell":"C6","source":"limit.limit_l","var_name":"humidity","required":true},
 				{"cell":"C7","source":"param.customer.area","required":true},
-				{"cell":"C8","source":"variable.var_name","var_id":9103,"required":true}
+				{"cell":"C8","source":"variable.var_name","var_name":"humidity","required":true}
 			]
 		}
 	}`
@@ -497,13 +497,13 @@ func TestServiceFillsCustomerWorkbookCellsAndTracePackage(t *testing.T) {
 				{"cell":"B4","source":"task.edge_instance_id","required":true},
 				{"cell":"B5","source":"task.started_at","required":true},
 				{"cell":"B6","source":"task.ended_at","required":true},
-				{"cell":"B7","source":"metric.avg","var_id":9401,"required":true},
-				{"cell":"B8","source":"metric.qualified_two_hours.avg_value","var_id":9401,"required":true},
-				{"cell":"B9","source":"limit.limit_l","var_id":9401,"required":true},
-				{"cell":"B10","source":"limit.limit_h","var_id":9401,"required":true},
-				{"cell":"B11","source":"metric.qualified_two_hours.status","var_id":9401,"required":true},
+				{"cell":"B7","source":"metric.avg","var_name":"supply_air_temp","required":true},
+				{"cell":"B8","source":"metric.qualified_two_hours.avg_value","var_name":"supply_air_temp","required":true},
+				{"cell":"B9","source":"limit.limit_l","var_name":"supply_air_temp","required":true},
+				{"cell":"B10","source":"limit.limit_h","var_name":"supply_air_temp","required":true},
+				{"cell":"B11","source":"metric.qualified_two_hours.status","var_name":"supply_air_temp","required":true},
 				{"cell":"B12","source":"param.judgement","required":true},
-				{"cell":"B13","source":"variable.unit","var_id":9401,"required":true}
+				{"cell":"B13","source":"variable.unit","var_name":"supply_air_temp","required":true}
 			]
 		}
 	}`
@@ -689,7 +689,7 @@ func TestServiceEB069NegativeBoundaries(t *testing.T) {
 		artifactDir := t.TempDir()
 		seedBasicReportTemplate(t, db, artifactDir, "BAD-MAPPING")
 		project, task := seedReportTaskWithRequests(t, db, "AC-RPT-ONE-FAILS", "edge-a", []query.DetectionRunReportRequest{
-			{TemplateCode: "MISSING-TEMPLATE", VarID: 9331, VarName: "temp", ReportName: "missing template", VariablesJSON: `[{"var_id":"9331"}]`, ParamsJSON: `{"cell_mapping":{"sheet":"OK","items":[{"cell":"A1","source":"metric.avg","var_id":9331,"required":true}]}}`, Status: "pending"},
+			{TemplateCode: "MISSING-TEMPLATE", VarID: 9331, VarName: "temp", ReportName: "missing template", VariablesJSON: `[{"var_id":"9331"}]`, ParamsJSON: `{"cell_mapping":{"sheet":"OK","items":[{"cell":"A1","source":"metric.avg","var_name":"temp","required":true}]}}`, Status: "pending"},
 			{TemplateCode: "BAD-MAPPING", VarID: 9332, VarName: "pressure", ReportName: "mapping fails", VariablesJSON: `[{"var_id":"9332"}]`, ParamsJSON: `{"cell_mapping":{"sheet":"BAD","items":[{"cell":"A1","source":"param.missing.required","required":true}]}}`, Status: "pending"},
 		})
 		ended := *task.EndedAt
@@ -878,12 +878,6 @@ func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 	assertCellValue(t, workbook, "Default_Report", "B5", "edge-a")
 	assertCellValue(t, workbook, "Default_Report", "B6", started.Format(time.RFC3339Nano))
 	assertCellValue(t, workbook, "Default_Report", "B7", ended.Format(time.RFC3339Nano))
-	assertCellValue(t, workbook, "Default_Report", "B8", "18")
-	assertCellValue(t, workbook, "Default_Report", "B9", "18")
-	assertCellValue(t, workbook, "Default_Report", "B10", "available")
-	assertCellValue(t, workbook, "Default_Report", "B11", "10")
-	assertCellValue(t, workbook, "Default_Report", "B12", "30")
-	assertCellValue(t, workbook, "Default_Report", "B13", "C")
 	assertCellValue(t, workbook, "Default_Report", "B14", "默认模板验收")
 
 	packagePayload := assertReportArtifactPackage(t, service, processed[0], []int64{9501})
@@ -897,13 +891,13 @@ func TestServiceUsesDefaultTemplateWorkbookAndCellMapping(t *testing.T) {
 		t.Fatalf("default template task identity should match visible cells: package=%+v manifest=%+v", packagePayload.Task, manifestPackage.Task)
 	}
 	if packageVar.Metrics.FullDetection.AvgValue == nil || *packageVar.Metrics.FullDetection.AvgValue != 18 {
-		t.Fatalf("package full average should match Default_Report B8: %+v", packageVar.Metrics.FullDetection)
+		t.Fatalf("package full average should be preserved in the report package: %+v", packageVar.Metrics.FullDetection)
 	}
 	if manifestVar.Metrics.QualifiedTwoHours.AvgValue == nil || *manifestVar.Metrics.QualifiedTwoHours.AvgValue != 18 || manifestVar.Metrics.QualifiedTwoHours.Status != "available" {
-		t.Fatalf("manifest qualified metric should match Default_Report B9/B10: %+v", manifestVar.Metrics.QualifiedTwoHours)
+		t.Fatalf("manifest qualified metric should be preserved in the report package: %+v", manifestVar.Metrics.QualifiedTwoHours)
 	}
 	if manifestVar.Limits.LimitL == nil || *manifestVar.Limits.LimitL != 10 || manifestVar.Limits.LimitH == nil || *manifestVar.Limits.LimitH != 30 || manifestVar.Unit != "C" {
-		t.Fatalf("manifest limits/unit should match Default_Report B11/B12/B13: %+v", manifestVar)
+		t.Fatalf("manifest limits/unit should be preserved in the report package: %+v", manifestVar)
 	}
 }
 
@@ -921,12 +915,12 @@ func TestServiceGeneratesOneSheetTempHumidityFormulaReport(t *testing.T) {
 				{"cell":"B3","source":"task.test_no","required":true},
 				{"cell":"B4","source":"task.project_code","required":true},
 				{"cell":"B5","source":"task.factory_no","required":true},
-				{"cell":"B7","source":"metric.avg","var_id":9701,"required":true},
-				{"cell":"C7","source":"metric.avg","var_id":9702,"required":true},
-				{"cell":"B8","source":"limit.limit_l","var_id":9701,"required":true},
-				{"cell":"C8","source":"limit.limit_l","var_id":9702,"required":true},
-				{"cell":"B9","source":"limit.limit_h","var_id":9701,"required":true},
-				{"cell":"C9","source":"limit.limit_h","var_id":9702,"required":true},
+				{"cell":"B7","source":"metric.avg","var_name":"temp","required":true},
+				{"cell":"C7","source":"metric.avg","var_name":"humidity","required":true},
+				{"cell":"B8","source":"limit.limit_l","var_name":"temp","required":true},
+				{"cell":"C8","source":"limit.limit_l","var_name":"humidity","required":true},
+				{"cell":"B9","source":"limit.limit_h","var_name":"temp","required":true},
+				{"cell":"C9","source":"limit.limit_h","var_name":"humidity","required":true},
 				{"cell":"B13","source":"param.temp_coefficient","required":true},
 				{"cell":"C13","source":"param.humidity_coefficient","required":true}
 			]

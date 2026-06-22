@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const defaultStorageCycleMS = 20000
+
 var storageIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func ProjectWideTableName(ProjectID uint) string {
@@ -267,7 +269,7 @@ func makeDefaultStorageRoute(tag models.TagConfig) models.StorageRoute {
 		ColumnName:    columnName,
 		ColumnType:    StorageColumnTypeForDataType(tag.DataType),
 		TriggerMode:   models.StoreTriggerOnCycle,
-		CycleMS:       0,
+		CycleMS:       defaultStorageCycleMS,
 		Deadband:      0,
 		StoreOnStart:  false,
 		Enabled:       false,
@@ -427,10 +429,10 @@ func freezeDetectionRunStorageRoutes(tx *gorm.DB, task *models.DetectionTask, ru
 		if err != nil {
 			return nil, err
 		}
-		if item, ok := itemByVarID[tag.VarID]; ok && defaultRoute != nil && !defaultRoute.Enabled {
-			cycleMS := item.CheckCycleMS
+		if _, ok := itemByVarID[tag.VarID]; ok && defaultRoute != nil && !defaultRoute.Enabled {
+			cycleMS := defaultRoute.CycleMS
 			if cycleMS <= 0 {
-				cycleMS = 10000
+				cycleMS = defaultStorageCycleMS
 			}
 			if err := tx.Model(&models.StorageRoute{}).Where("id = ?", defaultRoute.ID).Updates(map[string]interface{}{
 				"enabled":        true,

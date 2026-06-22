@@ -210,7 +210,7 @@ export function formatHistoryTime(value?: string) {
   if (!value) return '--'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${formatClock(date.getTime())}`
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${formatClock(date.getTime(), true)}`
 }
 
 function metricKeyFor(item: HistoryDataItem) {
@@ -234,7 +234,9 @@ function round(value: number) {
   return Number(value.toFixed(2))
 }
 
-function formatClock(value: number) {
+function formatClock(value: number, withSeconds = false) {
   const date = new Date(value)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  const base = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  if (!withSeconds) return base
+  return `${base}:${String(date.getSeconds()).padStart(2, '0')}`
 }

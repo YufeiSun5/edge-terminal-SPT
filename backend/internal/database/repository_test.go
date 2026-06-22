@@ -755,6 +755,16 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 	if _, err := repo.StopDetectionTask(task2.ID, "done"); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.CreateTag(&models.TagConfig{VarID: 201, GatewayID: 1, SourceTopic: "topic-2", SourcePath: "temp-2-duplicate", RawName: "temp", ProjectID: &project2.ID, ProjectCode: project2.ProjectCode, VarName: "temp", DisplayName: "温度-2-重复", JSONPath: "temp_dup", DataType: "FLOAT", Unit: "C", DecimalPlaces: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.StartDetectionTaskWithOptions(StartDetectionOptions{ProjectID: project2.ID, TestNo: "T-AC02-DUP", FactoryNo: "F-T-AC02-DUP", Mode: "standard", StandardID: &standard.ID, LimitCheckEnabled: &limitCheck})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected duplicate project var_name to reject shared standard remap, got %v", err)
+	}
+	if _, err := repo.UpdateTag(201, map[string]interface{}{"enabled": false}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := repo.StartDetectionTask(Project.ID, "T-2", "standard", nil); err == nil {
 		t.Fatal("expected duplicate running task error")
 	}
@@ -864,7 +874,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 			"report_name": "default variable report",
 			"ext_2":       "global-ext",
 			"variables": []any{map[string]any{
-				"var_id":      "100",
+				"var_name":    "temp",
 				"report_name": "temp report",
 				"ext_1":       "operator-note",
 			}},
@@ -945,7 +955,7 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 			"reports": []any{map[string]any{
 				"template_id":   template.ID,
 				"report_name":   "performance report",
-				"variables":     []any{map[string]any{"var_id": "100"}, map[string]any{"var_name": "humidity"}},
+				"variables":     []any{map[string]any{"var_name": "temp"}, map[string]any{"var_name": "humidity"}},
 				"params":        map[string]any{"inlet_area_m2": 1.25, "remark": "formula input"},
 				"template_code": "ignored-because-id-wins",
 			}},
@@ -961,6 +971,56 @@ func TestRepositoryGatewayTagProjectAndDetectionMethods(t *testing.T) {
 		t.Fatalf("expected long template ref to be frozen without truncation, got %q", reportTask.TemplateRef)
 	}
 	if _, err := repo.StopDetectionTask(reportTask.ID, "report done"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.StartDetectionTaskWithOptions(StartDetectionOptions{
+		ProjectID: Project.ID,
+		TestNo:    "T-REPORT-BAD-VAR-ID",
+		FactoryNo: "F-T-REPORT-BAD-VAR-ID",
+		Mode:      "custom",
+		CustomItems: []models.DetectionStandardItem{
+			{VarID: 100, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
+		},
+		ReportRequest: map[string]any{
+			"variables": []any{map[string]any{"var_id": "100"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "var_name") {
+		t.Fatalf("expected report request var_id input to be rejected, got %v", err)
+	}
+	if err := repo.CreateTag(&models.TagConfig{
+		VarID:       104,
+		GatewayID:   1,
+		SourcePath:  "humidity-duplicate",
+		RawName:     "humidity",
+		VarName:     "humidity",
+		DisplayName: "Humidity Duplicate",
+		JSONPath:    "humidity_dup",
+		DataType:    "FLOAT",
+		ScaleFactor: 1,
+		ProjectID:   &Project.ID,
+		ProjectCode: Project.ProjectCode,
+		Discovered:  true,
+		Enabled:     true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.StartDetectionTaskWithOptions(StartDetectionOptions{
+		ProjectID: Project.ID,
+		TestNo:    "T-REPORT-DUP-VAR-NAME",
+		FactoryNo: "F-T-REPORT-DUP-VAR-NAME",
+		Mode:      "custom",
+		CustomItems: []models.DetectionStandardItem{
+			{VarID: 100, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true},
+		},
+		ReportRequest: map[string]any{
+			"variables": []any{map[string]any{"var_name": "humidity"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected duplicate project var_name to reject report request, got %v", err)
+	}
+	if _, err := repo.UpdateTag(104, map[string]interface{}{"enabled": false}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.CreateDetectionRunReport(&models.DetectionRunReport{TaskID: task.ID, TemplateID: &template.ID, TemplateCode: template.TemplateCode, TemplateVersion: template.Version, FileRef: "reports/out.xlsx", Status: "generated"}); err != nil {

@@ -56,6 +56,7 @@ import type {
   ProjectPayload,
   ProjectMemberUpdate,
   ProjectMembersResponse,
+  PlanImportCellMapping,
   PlanImportConfirmPayload,
   PlanImportConfirmResult,
   PlanImportDraft,
@@ -658,11 +659,12 @@ export async function downloadMainReportTemplateArtifact(templateId: number): Pr
   }
 }
 
-export async function parseMainReportPlanImport(file: File, edgeInstanceId?: string) {
+export async function parseMainReportPlanImport(file: File, edgeInstanceId?: string, mapping?: PlanImportCellMapping) {
   try {
     const body = new FormData();
     body.append("file", file);
     if (edgeInstanceId) body.append("edge_instance_id", edgeInstanceId);
+    if (mapping && mapping.rows?.length) body.append("mapping_json", JSON.stringify(mapping));
     const response = await apiClient.post<PlanImportDraft>("/api/v1/main-server/report-plan-imports/parse", body);
     return response.data;
   } catch (error) {

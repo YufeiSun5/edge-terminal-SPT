@@ -317,6 +317,118 @@
   min-height: 0;
 }
 
+.report-plan-mapping-panel {
+  margin-bottom: 12px;
+}
+
+.report-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.report-panel-heading h4 {
+  margin: 0 0 4px;
+}
+
+.report-plan-mapping-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 500px) minmax(420px, 1fr);
+  gap: 16px;
+}
+
+.report-plan-mapping-form,
+.report-plan-preview {
+  min-width: 0;
+}
+
+.report-plan-luckysheet-preview .report-luckysheet-host {
+  height: 520px;
+  min-height: 520px;
+}
+
+.report-plan-common-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.report-plan-row-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.report-plan-row-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 6px;
+  background: #fcfcfd;
+}
+
+.report-plan-row-wide {
+  grid-column: 1 / -1;
+}
+
+.report-plan-row-config .ant-btn {
+  justify-self: start;
+}
+
+.report-plan-result-panel {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eaecf0;
+}
+
+.report-plan-result-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.report-plan-result-summary .ant-statistic {
+  padding: 8px;
+  border: 1px solid #eaecf0;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.report-plan-result-list {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.report-plan-result-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.report-plan-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.report-plan-result-meta {
+  display: grid;
+  gap: 3px;
+  color: #667085;
+  font-size: 12px;
+}
+
 .report-empty-panel {
   display: grid;
   flex: 1;
@@ -349,6 +461,10 @@
   }
 
   .report-template-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .report-plan-mapping-grid {
     grid-template-columns: 1fr;
   }
 }
