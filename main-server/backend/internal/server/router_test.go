@@ -1794,6 +1794,12 @@ func TestDetectionStandardWriteAcceptsStringVarIDWithoutProject(t *testing.T) {
 	if standard.ProjectID != nil || len(standard.Items) != 1 || standard.Items[0].VarID != varID || !strings.Contains(rec.Body.String(), `"var_id_text":"9007199254740993"`) {
 		t.Fatalf("created standard should be project-free and preserve string var id: %+v body=%s", standard, rec.Body.String())
 	}
+	deleteRec := httptest.NewRecorder()
+	deleteReq := authedRequest(http.MethodDelete, fmt.Sprintf("/api/v1/detection-standards/%d", standard.ID), token, nil)
+	router.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK || strings.Contains(deleteRec.Body.String(), "raw write proxy") {
+		t.Fatalf("delete detection standard status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
 }
 
 func TestMainServerSyncDiagnosticsReportsMissingTables(t *testing.T) {

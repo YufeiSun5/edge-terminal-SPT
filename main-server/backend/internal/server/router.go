@@ -767,6 +767,18 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		}
 		c.JSON(http.StatusOK, standard)
 	})
+	protected.DELETE("/detection-standards/:id", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
+		standardID, err := parseUintParam(c, "id")
+		if err != nil || standardID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid standard id", "code": "invalid_standard_id"})
+			return
+		}
+		if err := stationViewQuery.DeleteDetectionStandard(uint(standardID)); err != nil {
+			writeSyncedReadError(c, err, "detection standard delete failed")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+	})
 	protected.GET("/audit-logs", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		filter, err := parseAuditLogFilter(c)
 		if err != nil {

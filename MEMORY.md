@@ -1,8 +1,10 @@
 # MEMORY
 
-Last updated: 2026-06-23 09:40 Asia/Shanghai
+Last updated: 2026-06-23 10:04 Asia/Shanghai
 
 ## 当前阶段
+
+2026-06-23 10:04 `backend-ai` 修复主服务器模式下删除检测标准报 `main server raw write proxy is disabled` 的问题。根因是主服务器只显式注册了检测标准 GET/POST/PUT，缺少 `DELETE /api/v1/detection-standards/:id`，前端删除请求落入已禁用的 raw write proxy 兜底。已在 `main-server/backend/internal/query/config_writes.go` 新增 `DeleteDetectionStandard`，事务内先确认标准存在，再删除标准项、收藏/最近引用和标准主表；`main-server/backend/internal/server/router.go` 注册正式 DELETE 路由，返回 `{status:"deleted"}`，不恢复 raw proxy。新增底层删除测试和路由删除测试。验证通过：`main-server/backend go test ./internal/query -run TestDeleteDetectionStandardRemovesItems -count=1`、`main-server/backend go test ./internal/server -run TestDetectionStandardWriteAcceptsStringVarIDWithoutProject -count=1`、`main-server/backend go test ./internal/query ./internal/server -count=1`、`main-server/backend go test ./...`、`main-server/backend go build ./cmd/main-server`。已重启本机 main-server，`GET http://127.0.0.1:19080/health` 正常；真实 HTTP smoke 创建临时标准 `9000000000000009 / DELETE-SMOKE-131510` 后 `DELETE /api/v1/detection-standards/9000000000000009` 返回 `{"status":"deleted"}`。
 
 2026-06-23 09:40 `frontend-ai` 按用户质疑“编辑标准按钮有什么意义”继续调整检测配置页。由于日常标准项已在表格中直接编辑，普通模式不再显示“编辑标准”按钮；仅在页面级高级模式开启时显示小号“标准信息”入口，用于修改标准编号、内部名称、适用项目、模板、启用和备注等元信息。验证通过：`desktop npx tsc -b --pretty false`、`desktop npm run lint`（仅既有 `EdgeStatusPage` hooks warning）。
 

@@ -147,13 +147,42 @@ func TestUpdateDetectionStandardHydratesProjectGroupOnProjectChange(t *testing.T
 	}
 }
 
+func TestDeleteDetectionStandardRemovesItems(t *testing.T) {
+	db := newConfigWriteTestDB(t)
+	q := NewStationViewQuery(db)
+	standard := DetectionStandard{StandardCode: "CFG-DELETE", Name: "Delete", Mode: "standard", Version: 1, Enabled: true}
+	if err := db.Create(&standard).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&DetectionStandardItem{StandardID: standard.ID, VarID: 9501, VarName: "temp", CheckEnabled: true, AlarmEnabled: true, StoreEnabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := q.DeleteDetectionStandard(standard.ID); err != nil {
+		t.Fatal(err)
+	}
+	var standardCount int64
+	if err := db.Model(&DetectionStandard{}).Where("id = ?", standard.ID).Count(&standardCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	var itemCount int64
+	if err := db.Model(&DetectionStandardItem{}).Where("standard_id = ?", standard.ID).Count(&itemCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if standardCount != 0 || itemCount != 0 {
+		t.Fatalf("standard and items should be deleted, standards=%d items=%d", standardCount, itemCount)
+	}
+	if err := q.DeleteDetectionStandard(standard.ID); err == nil {
+		t.Fatal("expected deleting a missing standard to fail")
+	}
+}
+
 func newConfigWriteTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&Project{}, &TagConfig{}, &DetectionStandard{}, &DetectionStandardItem{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &TagConfig{}, &DetectionStandard{}, &DetectionStandardItem{}, &DetectionStandardFavorite{}, &DetectionStandardRecent{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

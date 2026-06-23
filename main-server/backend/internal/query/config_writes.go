@@ -246,6 +246,25 @@ func (q *StationViewQuery) UpdateDetectionStandard(id uint, updates map[string]a
 	return returned, err
 }
 
+func (q *StationViewQuery) DeleteDetectionStandard(id uint) error {
+	return q.db.Transaction(func(tx *gorm.DB) error {
+		var current DetectionStandard
+		if err := tx.First(&current, "id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&DetectionStandardItem{}, "standard_id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&DetectionStandardFavorite{}, "standard_id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&DetectionStandardRecent{}, "standard_id = ?", id).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&DetectionStandard{}, "id = ?", id).Error
+	})
+}
+
 func (q *StationViewQuery) CreateTaskFlow(flow *TaskFlow, meta SyncWriteMeta) (TaskFlow, error) {
 	if flow == nil {
 		return TaskFlow{}, errors.New("task flow is required")
