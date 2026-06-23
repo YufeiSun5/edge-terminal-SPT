@@ -15,6 +15,7 @@ import { DetectionConfigPage } from '@/features/detection-config/DetectionConfig
 import { VariableConfigPage } from '@/features/variable-config/VariableConfigPage'
 import { TaskFlowsPage } from '@/features/task-flows/TaskFlowsPage'
 import { ModelCockpitPage } from '@/features/model-cockpit/ModelCockpitPage'
+import { ModelStageDebugPage } from '@/features/model-cockpit/ModelStageDebugPage'
 import { NotificationCenterPage } from '@/features/notifications/NotificationCenterPage'
 import { AlarmCenterPage } from '@/features/alarms/AlarmCenterPage'
 
@@ -129,6 +130,10 @@ export const router = createHashRouter([
               {
                 index: true,
                 element: <ModelCockpitPage />,
+              },
+              {
+                path: 'debug',
+                element: <ModelStageDebugPage />,
               },
             ],
           },

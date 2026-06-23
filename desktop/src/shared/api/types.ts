@@ -1027,6 +1027,9 @@ export type DetectionRunStartPayload = {
   operator_note?: string
   report_template_id?: number
   report_request?: DetectionRunReportRequestPayload
+  custom_items?: DetectionStandardItemPayload[]
+  process_params?: Record<string, unknown>
+  plc_writes?: Array<Record<string, unknown>>
 }
 
 export type DetectionRunStopPayload = {

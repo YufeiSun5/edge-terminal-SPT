@@ -1732,6 +1732,70 @@ func TestDetectionStandardsReadSyncedTables(t *testing.T) {
 	}
 }
 
+func TestDetectionStandardWriteAcceptsStringVarIDWithoutProject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := newServerTestDB(t)
+	ensureTestAdmin(t, db)
+
+	project := query.Project{ProjectCode: "AC-FREE-STD", Name: "Free Standard Project", EdgeInstanceID: "edge-a", Enabled: true}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	varID := int64(9007199254740993)
+	if err := db.Create(&query.TagConfig{
+		VarID:         varID,
+		GatewayID:     1,
+		ProjectID:     &project.ID,
+		ProjectCode:   project.ProjectCode,
+		VarName:       "inlet_temp",
+		DisplayName:   "吸入口温度",
+		Unit:          "C",
+		DecimalPlaces: 1,
+		Enabled:       true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	router := NewRouter(testConfig(), db)
+	token := loginForTest(t, router, "admin", "Admin@12345")
+	body := `{
+		"standard_code":"STD-FREE-STRING-VAR",
+		"name":"Free string var standard",
+		"display_name":"通用字符串变量标准",
+		"mode":"standard",
+		"version":1,
+		"enabled":true,
+		"items":[{
+			"var_id":"9007199254740993",
+			"var_name":"inlet_temp",
+			"check_enabled":true,
+			"alarm_enabled":true,
+			"store_enabled":true,
+			"check_on_start":true,
+			"check_cycle_ms":3000,
+			"check_method":"numeric_range",
+			"limit_l":0,
+			"limit_h":999,
+			"quality_policy":"ignore_bad",
+			"sort_order":1
+		}]
+	}`
+	rec := httptest.NewRecorder()
+	req := authedRequest(http.MethodPost, "/api/v1/detection-standards", token, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create detection standard status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var standard query.DetectionStandard
+	if err := json.Unmarshal(rec.Body.Bytes(), &standard); err != nil {
+		t.Fatal(err)
+	}
+	if standard.ProjectID != nil || len(standard.Items) != 1 || standard.Items[0].VarID != varID || !strings.Contains(rec.Body.String(), `"var_id_text":"9007199254740993"`) {
+		t.Fatalf("created standard should be project-free and preserve string var id: %+v body=%s", standard, rec.Body.String())
+	}
+}
+
 func TestMainServerSyncDiagnosticsReportsMissingTables(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newServerTestDB(t)

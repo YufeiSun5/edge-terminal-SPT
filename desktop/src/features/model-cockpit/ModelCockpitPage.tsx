@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Empty } from 'antd'
 import { useTranslation } from 'react-i18next'
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { useLocation } from 'react-router'
+import { Area, AreaChart, CartesianGrid, ReferenceLine, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   SealCheck as BadgeCheck,
   Barcode,
@@ -17,15 +19,15 @@ import {
   Timer,
   SpeakerHigh as Volume2,
   Wind,
-  Lightning as Zap,
 } from '@phosphor-icons/react'
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
-import * as THREE from 'three'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { getActiveDetectionRuns, getCurrentDetectionRun, getRealtimeVariables } from '@/features/edge-status/api'
-import type { DetectionRunStandardItem, TagSnapshot } from '@/shared/api/types'
+import { getCurrentDetectionRun, getLimitAlarms, getRealtimeVariables, getStationViewEffective } from '@/features/edge-status/api'
+import { getHistoryData } from '@/features/history-query/api'
+import { ApiError } from '@/shared/api/http'
+import type { DetectionRun, DetectionRunStandardItem, HistoryDataItem, StationViewResolvedBinding, TagSnapshot, VarIdentifier } from '@/shared/api/types'
+import { CockpitModelStage } from '@/features/model-cockpit/components/CockpitModelStage'
 import { StationLightBackground } from '@/features/station-operation/components/StationLightBackground'
+import { languageCode } from '@/shared/i18n/language'
 import './model-cockpit.css'
 
 type TopCardConfig = {
@@ -35,144 +37,17 @@ type TopCardConfig = {
   icon: PhosphorIcon
 }
 
-type MetricCardConfig = {
-  labelKey: string
-  matchNames: string[]
-  value: string
-  unit: string
-  limitMin: number
-  limitMax: number
-  optimization: number
-  icon: PhosphorIcon
-  points: number[]
-}
-
-const TOP_CARDS: TopCardConfig[] = [
-  { labelKey: 'modelCockpit.cards.model', hintKey: 'modelCockpit.cards.modelHint', value: 'CRAC-EDGE', icon: Cpu },
-  { labelKey: 'modelCockpit.cards.serial', hintKey: 'modelCockpit.cards.serialHint', value: 'EDGE-3D-01', icon: Barcode },
-  { labelKey: 'modelCockpit.cards.customer', hintKey: 'modelCockpit.cards.customerHint', value: 'Spindle Lab', icon: FlaskConical },
-  { labelKey: 'modelCockpit.cards.duration', hintKey: 'modelCockpit.cards.durationHint', value: '10:13:30', icon: Timer },
-  { labelKey: 'modelCockpit.cards.result', hintKey: 'modelCockpit.cards.resultHint', value: 'OK', icon: BadgeCheck },
-]
-
-const METRIC_CARDS: MetricCardConfig[] = [
-  {
-    labelKey: 'station.metrics.tempOut',
-    matchNames: ['吹出口温度', 'Outlet temperature', 'tempOut', 'out_temp'],
-    value: '31.1',
-    unit: 'degC',
-    limitMin: 20,
-    limitMax: 55,
-    optimization: 91,
-    icon: Thermometer,
-    points: [29, 30, 28, 31, 30, 32, 31, 30, 30, 31],
-  },
-  {
-    labelKey: 'station.metrics.humidIn',
-    matchNames: ['吸入口湿度', 'Inlet humidity', 'humidIn', 'in_humidity'],
-    value: '24.2',
-    unit: '%RH',
-    limitMin: 20,
-    limitMax: 60,
-    optimization: 86,
-    icon: Droplets,
-    points: [22, 25, 21, 24, 26, 23, 23, 25, 22, 26],
-  },
-  {
-    labelKey: 'station.metrics.pressure',
-    matchNames: ['系统压力', 'Pressure', 'pressure'],
-    value: '100',
-    unit: 'kPa',
-    limitMin: 100,
-    limitMax: 150,
-    optimization: 78,
-    icon: Gauge,
-    points: [96, 101, 98, 100, 99, 97, 98, 101, 100, 102],
-  },
-  {
-    labelKey: 'station.metrics.windIn',
-    matchNames: ['吸入风量', 'Inlet airflow', 'windIn', 'airflow'],
-    value: '128',
-    unit: 'm3/h',
-    limitMin: 120,
-    limitMax: 160,
-    optimization: 88,
-    icon: Wind,
-    points: [112, 128, 119, 126, 130, 124, 123, 129, 118, 132],
-  },
-  {
-    labelKey: 'station.metrics.noise',
-    matchNames: ['设备噪音', 'Noise', 'noise'],
-    value: '45.3',
-    unit: 'dB',
-    limitMin: 40,
-    limitMax: 75,
-    optimization: 93,
-    icon: Volume2,
-    points: [42, 46, 43, 45, 44, 47, 43, 42, 44, 46],
-  },
-  {
-    labelKey: 'station.metrics.vibration',
-    matchNames: ['震动位移', 'Vibration', 'vibration'],
-    value: '0.12',
-    unit: 'mm',
-    limitMin: 0.05,
-    limitMax: 2,
-    optimization: 96,
-    icon: Pulse,
-    points: [0.08, 0.12, 0.1, 0.13, 0.09, 0.11, 0.14, 0.1, 0.12, 0.13],
-  },
-  {
-    labelKey: 'station.metrics.power',
-    matchNames: ['设备功率', 'Power', 'power'],
-    value: '2.4',
-    unit: 'kW',
-    limitMin: 2,
-    limitMax: 4.5,
-    optimization: 82,
-    icon: Power,
-    points: [2.1, 2.4, 2.2, 2.3, 2.5, 2.2, 2.2, 2.4, 2.3, 2.5],
-  },
-  {
-    labelKey: 'station.metrics.compressorSuctionTemp',
-    matchNames: ['压缩机吸入管温度', 'Compressor suction', 'suction'],
-    value: '12.6',
-    unit: 'degC',
-    limitMin: 10,
-    limitMax: 15,
-    optimization: 90,
-    icon: Zap,
-    points: [11.8, 12.4, 12.3, 12.8, 12.6, 12.1, 12.2, 12.0, 12.5, 12.7],
-  },
-  {
-    labelKey: 'station.metrics.compressorDischargeTemp',
-    matchNames: ['压缩机吐出口温度', 'Compressor discharge', 'discharge'],
-    value: '85.3',
-    unit: 'degC',
-    limitMin: 70,
-    limitMax: 90,
-    optimization: 84,
-    icon: Pulse,
-    points: [72, 76, 80, 82, 84, 86, 85, 84, 83, 85],
-  },
-  {
-    labelKey: 'station.metrics.condenserOutletTemp',
-    matchNames: ['冷凝器出口温度', 'Condenser outlet', 'condenser'],
-    value: '35.2',
-    unit: 'degC',
-    limitMin: 30,
-    limitMax: 45,
-    optimization: 87,
-    icon: HeartPulse,
-    points: [32, 33, 34, 35, 36, 35, 34, 35, 35, 36],
-  },
-]
-
-const COCKPIT_MODEL_PATH = '/models/cockpit/new-shaded.glb'
+type TrendAxisMode = 'standard' | 'auto'
 
 export function ModelCockpitPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const location = useLocation()
   const lightPos = useCockpitLight()
+  const pageVisible = usePageVisibility()
+  const [trendAxisState, setTrendAxisState] = useState<{ scope: string; modes: Record<string, TrendAxisMode> }>({ scope: '', modes: {} })
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search])
+  const selectedProjectId = parsePositiveInt(searchParams.get('project_id'))
+  const selectedEdgeInstanceId = searchParams.get('edge_instance_id') || undefined
 
   useEffect(() => {
     const resetScroll = () => {
@@ -190,35 +65,75 @@ export function ModelCockpitPage() {
     }
   }, [])
 
-  const activeRunsQuery = useQuery({
-    queryKey: ['model-cockpit', 'active-runs'],
-    queryFn: getActiveDetectionRuns,
-    refetchInterval: 3000,
+  const stationViewQuery = useQuery({
+    queryKey: ['model-cockpit', 'station-view', selectedProjectId, selectedEdgeInstanceId ?? 'local'],
+    queryFn: () => getStationViewEffective(selectedProjectId!, selectedEdgeInstanceId),
+    enabled: selectedProjectId !== undefined,
+    refetchInterval: 10000,
     retry: false,
   })
-  const activeProjectId = activeRunsQuery.data?.[0]?.project_id
+  const bindings = useMemo(() => stationViewBindings(stationViewQuery.data?.items ?? []), [stationViewQuery.data?.items])
+  const cockpitVarIds = useMemo(() => uniqueVarIds(bindings), [bindings])
   const realtimeQuery = useQuery({
-    queryKey: ['model-cockpit', 'realtime', activeProjectId ?? 'all'],
-    queryFn: () => getRealtimeVariables(activeProjectId ? { project_id: activeProjectId } : {}),
+    queryKey: ['model-cockpit', 'realtime', selectedProjectId, selectedEdgeInstanceId ?? 'local', cockpitVarIds.join('|')],
+    queryFn: () => getRealtimeVariables({ project_id: selectedProjectId!, edge_instance_id: selectedEdgeInstanceId, var_id: cockpitVarIds }),
+    enabled: selectedProjectId !== undefined && cockpitVarIds.length > 0,
     refetchInterval: 2000,
     retry: false,
   })
   const currentRunQuery = useQuery({
-    queryKey: ['model-cockpit', 'current-run', activeProjectId],
-    queryFn: () => getCurrentDetectionRun(activeProjectId!),
-    enabled: activeProjectId !== undefined,
+    queryKey: ['model-cockpit', 'current-run', selectedProjectId],
+    queryFn: () => getCurrentRunOrNull(selectedProjectId!),
+    enabled: selectedProjectId !== undefined,
     refetchInterval: 5000,
     retry: false,
   })
+  const currentRunId = currentRunQuery.data?.id
+  const trendAxisScope = `${selectedProjectId ?? 'none'}:${currentRunId ?? 'none'}`
+  const trendAxisModes = trendAxisState.scope === trendAxisScope ? trendAxisState.modes : {}
+  const alarmsQuery = useQuery({
+    queryKey: ['model-cockpit', 'alarms', selectedProjectId, currentRunQuery.data?.id ?? 'none'],
+    queryFn: () =>
+      getLimitAlarms({
+        project_id: selectedProjectId!,
+        task_id: currentRunQuery.data?.id,
+        status: 'active',
+        limit: 50,
+      }),
+    enabled: selectedProjectId !== undefined,
+    refetchInterval: 5000,
+    retry: false,
+  })
+  const historyQuery = useQuery({
+    queryKey: ['model-cockpit', 'history', selectedProjectId, currentRunId ?? 'none', cockpitVarIds.slice(0, 4).join('|')],
+    queryFn: () => getHistoryData({ project_id: selectedProjectId!, task_id: currentRunId!, limit: 300 }),
+    enabled: selectedProjectId !== undefined && currentRunId !== undefined && cockpitVarIds.length > 0,
+    refetchInterval: (query) =>
+      historyRefetchInterval({
+        data: query.state.data,
+        currentRun: currentRunQuery.data,
+        pageVisible,
+      }),
+    retry: false,
+  })
   const metricCards = useMemo(
-    () => resolveMetricCards(METRIC_CARDS, realtimeQuery.data ?? [], currentRunQuery.data?.standard_items ?? []),
-    [currentRunQuery.data?.standard_items, realtimeQuery.data],
+    () =>
+      resolveMetricCards({
+        bindings,
+        snapshots: realtimeQuery.data ?? [],
+        standardItems: currentRunQuery.data?.standard_items ?? [],
+        historyItems: historyQuery.data?.items ?? [],
+        language: languageCode(i18n.resolvedLanguage),
+      }),
+    [bindings, currentRunQuery.data?.standard_items, historyQuery.data?.items, i18n.resolvedLanguage, realtimeQuery.data],
   )
   const monitorMetrics = metricCards.slice(0, 10)
-  const trendCards = [
-    { titleKey: 'modelCockpit.charts.temperature', metric: metricCards[0] },
-    { titleKey: 'modelCockpit.charts.humidity', metric: metricCards[1] },
-  ].filter((item): item is { titleKey: string; metric: ResolvedMetricCard } => Boolean(item.metric))
+  const trendCards = metricCards.filter((metric) => metric.numericValue !== undefined || metric.history.length > 0).slice(0, 2)
+  const topCards = useMemo(
+    () => buildTopCards(stationViewQuery.data, currentRunQuery.data, alarmsQuery.data?.items.length ?? 0, t, i18n.resolvedLanguage),
+    [alarmsQuery.data?.items.length, currentRunQuery.data, i18n.resolvedLanguage, stationViewQuery.data, t],
+  )
+  const lastUpdatedAt = latestSnapshotTime(realtimeQuery.data ?? [])
 
   return (
     <div
@@ -234,7 +149,7 @@ export function ModelCockpitPage() {
       </header>
 
       <section className="cockpit-top-row" aria-label={t('modelCockpit.title')}>
-        {TOP_CARDS.map((card, index) => (
+        {topCards.map((card, index) => (
           <CockpitGlassPanel className={`cockpit-top-card cockpit-card-tone-${index}`} key={card.labelKey} title={t(card.labelKey)}>
             <TopCardContent card={card} />
           </CockpitGlassPanel>
@@ -248,36 +163,50 @@ export function ModelCockpitPage() {
             <strong>{t('modelCockpit.realtime.title')}</strong>
           </div>
           <div className="cockpit-monitor-table table-scroll-container">
-            <table>
-              <tbody>
-                {monitorMetrics.map((metric) => {
-                  const Icon = metric.icon
-                  return (
-                    <tr key={metric.labelKey}>
-                      <td>
-                        <span className="cockpit-monitor-icon">
-                          <Icon aria-hidden="true" weight="regular" />
-                        </span>
-                        {t(metric.labelKey)}
-                      </td>
-                      <td className="mono">
-                        {metric.value} {formatUnit(metric.unit)}
-                      </td>
-                      <td className="cockpit-limit-cell">
-                        {formatLimit(metric.limitMin)}-{formatLimit(metric.limitMax)} {formatUnit(metric.unit)}
-                      </td>
-                      <td>
-                        <span className={metric.status === 'OK' ? 'cockpit-state ok' : 'cockpit-state ng'}>{metric.status}</span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            {selectedProjectId === undefined ? (
+              <CockpitEmpty description={t('modelCockpit.messages.selectProject')} />
+            ) : monitorMetrics.length === 0 ? (
+              <CockpitEmpty description={stationViewQuery.isError ? t('modelCockpit.messages.stationViewUnavailable') : t('modelCockpit.messages.noMetrics')} />
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t('modelCockpit.realtime.item')}</th>
+                    <th>{t('modelCockpit.realtime.value')}</th>
+                    <th>{t('modelCockpit.metric.limit')}</th>
+                    <th>{t('modelCockpit.realtime.factor')}</th>
+                    <th>{t('modelCockpit.realtime.result')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monitorMetrics.map((metric) => {
+                    const Icon = metric.icon
+                    return (
+                      <tr key={metric.id}>
+                        <td>
+                          <span className="cockpit-monitor-icon">
+                            <Icon aria-hidden="true" weight="regular" />
+                          </span>
+                          {metric.label}
+                        </td>
+                        <td className="mono">
+                          {metric.value} {formatUnit(metric.unit)}
+                        </td>
+                        <td className="cockpit-limit-cell">{formatLimitRange(metric)}</td>
+                        <td className="cockpit-factor-cell">{metric.optimizationFactor}</td>
+                        <td>
+                          <span className={`cockpit-state ${statusClassName(metric.status)}`}>{metric.status}</span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
           <div className="cockpit-monitor-footer">
             <span />
-            {t('modelCockpit.realtime.updatedAt', { value: '2026-05-31 08:18:30' })}
+            {t('modelCockpit.realtime.updatedAt', { value: lastUpdatedAt ? formatDateTime(lastUpdatedAt) : '-' })}
           </div>
         </div>
 
@@ -287,70 +216,412 @@ export function ModelCockpitPage() {
       </section>
 
       <aside className="cockpit-right-stack" aria-label={t('modelCockpit.status.telemetry')}>
-        {trendCards.map((item, index) => (
-          <CockpitGlassPanel className={`cockpit-trend-card cockpit-card-tone-${index + 2}`} key={item.titleKey} title={t(item.titleKey)}>
-            <TrendCardContent metric={item.metric} />
-          </CockpitGlassPanel>
-        ))}
+        {trendCards.length === 0 ? (
+          [t('modelCockpit.charts.temperature'), t('modelCockpit.charts.humidity')].map((title, index) => (
+            <CockpitGlassPanel className={`cockpit-trend-card cockpit-card-tone-${index + 2}`} key={title} title={title}>
+              <TrendEmptyState description={trendEmptyDescription(selectedProjectId, currentRunQuery.data, currentRunQuery.isSuccess, t)} />
+            </CockpitGlassPanel>
+          ))
+        ) : (
+          trendCards.map((metric, index) => (
+            <CockpitGlassPanel className={`cockpit-trend-card cockpit-card-tone-${index + 2}`} key={metric.id} title={metric.label}>
+              <TrendCardContent
+                metric={metric}
+                axisMode={trendAxisModes[metric.id] ?? 'standard'}
+                onToggleAxisMode={() =>
+                  setTrendAxisState((current) => {
+                    const modes = current.scope === trendAxisScope ? current.modes : {}
+                    return {
+                      scope: trendAxisScope,
+                      modes: {
+                        ...modes,
+                        [metric.id]: (modes[metric.id] ?? 'standard') === 'standard' ? 'auto' : 'standard',
+                      },
+                    }
+                  })
+                }
+              />
+            </CockpitGlassPanel>
+          ))
+        )}
       </aside>
     </div>
   )
 }
 
-type ResolvedMetricCard = MetricCardConfig & {
-  status: 'OK' | 'NG'
+type ResolvedMetricCard = {
+  id: string
+  label: string
+  value: string
+  numericValue?: number
+  unit: string
+  limitMin?: number | null
+  limitMax?: number | null
+  optimizationFactor: string
+  status: 'OK' | 'NG' | '--'
+  icon: PhosphorIcon
+  decimalPlaces: number
+  history: TrendPoint[]
+  lastUpdate?: string
 }
 
-function normalizeMetricName(value: string) {
-  return value.toLowerCase().replace(/[\s_()（）/%℃°.-]/g, '')
+type TrendPoint = {
+  time: string
+  value: number
+  timestamp?: number
+  realtime?: boolean
 }
 
-function matchesMetricName(metric: MetricCardConfig, names: Array<string | undefined>) {
-  const targets = metric.matchNames.map(normalizeMetricName)
-  return names.some((name) => {
-    if (!name) return false
-    const normalized = normalizeMetricName(name)
-    return targets.some((target) => normalized.includes(target) || target.includes(normalized))
+function historyRefetchInterval({
+  data,
+  currentRun,
+  pageVisible,
+}: {
+  data: unknown
+  currentRun?: DetectionRun | null
+  pageVisible: boolean
+}) {
+  if (!currentRun?.id) return false
+  if (!pageVisible) return 60000
+  if (historyResponseItemCount(data) > 0) return 10000
+  const startedAt = parseTimestamp(currentRun.started_at)
+  if (startedAt !== undefined && Date.now() - startedAt <= 60000) return 3000
+  return 10000
+}
+
+function historyResponseItemCount(data: unknown) {
+  if (!data || typeof data !== 'object') return 0
+  const items = (data as { items?: unknown }).items
+  return Array.isArray(items) ? items.length : 0
+}
+
+function trendEmptyDescription(
+  selectedProjectId: number | undefined,
+  currentRun: DetectionRun | null | undefined,
+  currentRunLoaded: boolean,
+  t: (key: string) => string,
+) {
+  if (selectedProjectId === undefined) return t('modelCockpit.messages.selectProject')
+  if (currentRunLoaded && !currentRun) return t('modelCockpit.messages.noCurrentRun')
+  return t('modelCockpit.messages.noHistory')
+}
+
+function parsePositiveInt(value: string | null) {
+  if (!value) return undefined
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
+async function getCurrentRunOrNull(projectId: number) {
+  try {
+    return await getCurrentDetectionRun(projectId)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
+}
+
+function stationViewBindings(items: Array<{ visible: boolean; sort_order: number; resolved_bindings?: StationViewResolvedBinding[] }>) {
+  const sortedBindings = items
+    .filter((item) => item.visible)
+    .flatMap((item) => (item.resolved_bindings ?? []).map((binding) => ({ ...binding, sort_order: binding.sort_order || item.sort_order })))
+    .filter((binding) => binding.var_id_text || binding.var_id !== undefined || binding.var_name)
+    .sort((left, right) => left.sort_order - right.sort_order)
+
+  return uniqueStationViewBindings(sortedBindings)
+}
+
+function uniqueStationViewBindings(bindings: StationViewResolvedBinding[]) {
+  const seen = new Set<string>()
+  return bindings.filter((binding) => {
+    const key = bindingKey(binding)
+    if (!key) return true
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
   })
 }
 
-function resolveMetricCards(metrics: MetricCardConfig[], snapshots: TagSnapshot[], standardItems: DetectionRunStandardItem[]): ResolvedMetricCard[] {
-  return metrics.map((metric) => {
-    const snapshot = snapshots.find((item) =>
-      matchesMetricName(metric, [item.var_name, item.display_name, item.display_name_en, item.display_name_ja, item.source_path]),
-    )
-    const standardItem = standardItems.find((item) => {
-      if (snapshot && item.var_id === snapshot.var_id) return true
-      return matchesMetricName(metric, [item.var_name, item.display_name, item.display_name_en, item.display_name_ja])
+function uniqueVarIds(bindings: StationViewResolvedBinding[]): VarIdentifier[] {
+  const seen = new Set<string>()
+  const result: VarIdentifier[] = []
+  for (const binding of bindings) {
+    const raw = binding.var_id_text ?? binding.var_id
+    if (raw === undefined || raw === null || raw === '') continue
+    const key = String(raw)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(raw)
+  }
+  return result
+}
+
+function varKey(value?: VarIdentifier | string | null) {
+  if (value === undefined || value === null || value === '') return ''
+  return String(value)
+}
+
+function snapshotKey(snapshot: TagSnapshot) {
+  return varKey(snapshot.var_id_text ?? snapshot.var_id)
+}
+
+function bindingKey(binding: StationViewResolvedBinding) {
+  return varKey(binding.var_id_text ?? binding.var_id ?? binding.var_name)
+}
+
+function itemName(
+  item: Pick<StationViewResolvedBinding, 'display_name' | 'display_name_en' | 'display_name_ja' | 'var_name' | 'var_id_text'>,
+  language: string,
+) {
+  if (language === 'en') return item.display_name_en || item.display_name || item.var_name || item.var_id_text || '-'
+  if (language === 'ja') return item.display_name_ja || item.display_name || item.var_name || item.var_id_text || '-'
+  return item.display_name || item.var_name || item.display_name_en || item.display_name_ja || item.var_id_text || '-'
+}
+
+function resolveMetricCards({
+  bindings,
+  snapshots,
+  standardItems,
+  historyItems,
+  language,
+}: {
+  bindings: StationViewResolvedBinding[]
+  snapshots: TagSnapshot[]
+  standardItems: DetectionRunStandardItem[]
+  historyItems: HistoryDataItem[]
+  language: string
+}): ResolvedMetricCard[] {
+  const snapshotById = new Map(snapshots.map((snapshot) => [snapshotKey(snapshot), snapshot]))
+  const standardById = new Map(standardItems.map((item) => [varKey(item.var_id_text ?? item.var_id), item]))
+  const historyById = groupHistoryByVarId(historyItems)
+
+  return bindings.map((binding, index) => {
+    const key = bindingKey(binding) || `${binding.var_name ?? 'binding'}-${index}`
+    const snapshot = snapshotById.get(key)
+    const standardItem = standardById.get(key)
+    const decimalPlaces = standardItem?.decimal_places ?? binding.decimal_places ?? 2
+    const numericValue = snapshot && !snapshot.is_string && Number.isFinite(snapshot.value) ? snapshot.value : undefined
+    const rawValue = snapshot?.is_string ? snapshot.str_value : numericValue !== undefined ? formatMetricValue(numericValue, decimalPlaces) : '-'
+    const limitMin = pickNumberOrNull(standardItem?.limit_l, binding.limit_l, standardItem?.limit_ll, binding.limit_ll)
+    const limitMax = pickNumberOrNull(standardItem?.limit_h, binding.limit_h, standardItem?.limit_hh, binding.limit_hh)
+    const label = itemName(binding, language)
+    return {
+      id: key,
+      label,
+      value: rawValue || '-',
+      numericValue,
+      unit: standardItem?.unit || binding.unit || '',
+      limitMin,
+      limitMax,
+      optimizationFactor: computeOptimizationFactor({
+        label,
+        varName: binding.var_name,
+        value: numericValue,
+        min: limitMin,
+        max: limitMax,
+      }),
+      status: resolveStatus(numericValue, limitMin, limitMax),
+      icon: iconForMetric(binding),
+      decimalPlaces,
+      history: buildHistoryTrend(historyById.get(key) ?? [], decimalPlaces),
+      lastUpdate: snapshot?.last_update,
+    }
+  })
+}
+
+function groupHistoryByVarId(items: HistoryDataItem[]) {
+  const groups = new Map<string, HistoryDataItem[]>()
+  for (const item of items) {
+    const key = varKey(item.var_id_text ?? item.var_id)
+    if (!key) continue
+    const list = groups.get(key) ?? []
+    list.push(item)
+    groups.set(key, list)
+  }
+  return groups
+}
+
+function buildHistoryTrend(items: HistoryDataItem[], decimalPlaces: number): TrendPoint[] {
+  return items
+    .filter((item) => typeof item.value === 'number' && Number.isFinite(item.value))
+    .sort((left, right) => (parseTimestamp(left.source_time || left.created_at) ?? 0) - (parseTimestamp(right.source_time || right.created_at) ?? 0))
+    .slice(-40)
+    .map((item) => {
+      const sourceTime = item.source_time || item.created_at
+      return {
+        time: formatTimeLabel(sourceTime),
+        value: Number((item.value ?? 0).toFixed(Math.max(0, Math.min(decimalPlaces, 2)))),
+        timestamp: parseTimestamp(sourceTime),
+      }
     })
-    const numericValue = snapshot && !snapshot.is_string ? snapshot.value : Number(metric.value)
-    const limitMin = pickNumber(standardItem?.limit_l, standardItem?.limit_ll, metric.limitMin)
-    const limitMax = pickNumber(standardItem?.limit_h, standardItem?.limit_hh, metric.limitMax)
-    const unit = standardItem?.unit || metric.unit
-    const value = Number.isFinite(numericValue) ? formatMetricValue(numericValue, standardItem?.decimal_places ?? inferDecimals(metric.value)) : metric.value
-    const status = Number.isFinite(numericValue) && numericValue >= limitMin && numericValue <= limitMax ? 'OK' : 'NG'
-    const optimization = Number.isFinite(numericValue) ? getOptimizationRate(numericValue, limitMin, limitMax) : metric.optimization
-    return { ...metric, limitMin, limitMax, optimization, status, unit, value }
-  })
 }
 
-function pickNumber(...values: Array<number | null | undefined>) {
-  return values.find((value): value is number => typeof value === 'number' && Number.isFinite(value)) ?? 0
+function iconForMetric(binding: Pick<StationViewResolvedBinding, 'var_name' | 'display_name' | 'display_name_en' | 'var_group' | 'unit'>): PhosphorIcon {
+  const text = `${binding.var_name ?? ''} ${binding.display_name ?? ''} ${binding.display_name_en ?? ''} ${binding.var_group ?? ''} ${binding.unit ?? ''}`.toLowerCase()
+  if (text.includes('湿') || text.includes('humid') || text.includes('rh')) return Droplets
+  if (text.includes('温') || text.includes('temp') || text.includes('degc') || text.includes('℃')) return Thermometer
+  if (text.includes('压') || text.includes('pressure') || text.includes('kpa')) return Gauge
+  if (text.includes('风') || text.includes('air') || text.includes('flow')) return Wind
+  if (text.includes('噪') || text.includes('noise') || text.includes('db')) return Volume2
+  if (text.includes('震') || text.includes('vibration')) return Pulse
+  if (text.includes('功') || text.includes('power') || text.includes('kw')) return Power
+  return HeartPulse
 }
 
-function inferDecimals(value: string) {
-  return value.includes('.') ? Math.min(value.split('.')[1]?.length ?? 0, 2) : 0
+function buildTopCards(
+  stationView: Awaited<ReturnType<typeof getStationViewEffective>> | undefined,
+  currentRun: DetectionRun | null | undefined,
+  activeAlarmCount: number,
+  t: (key: string, options?: Record<string, unknown>) => string,
+  language?: string,
+): TopCardConfig[] {
+  const project = stationView?.project
+  const lang = languageCode(language)
+  const projectName = project
+    ? lang === 'en'
+      ? project.display_name_en || project.project_code
+      : lang === 'ja'
+        ? project.display_name_ja || project.project_code
+        : project.display_name || project.name || project.project_code
+    : '-'
+  const model = currentRun?.device_model || project?.model_name || '-'
+  const result = currentRun ? (activeAlarmCount > 0 ? 'NG' : formatRunStatus(currentRun.status)) : t('modelCockpit.status.noCurrentRun')
+  return [
+    { labelKey: 'modelCockpit.cards.model', hintKey: 'modelCockpit.cards.modelHint', value: model, icon: Cpu },
+    { labelKey: 'modelCockpit.cards.serial', hintKey: 'modelCockpit.cards.serialHint', value: currentRun?.factory_no || project?.project_code || '-', icon: Barcode },
+    { labelKey: 'modelCockpit.cards.customer', hintKey: 'modelCockpit.cards.customerHint', value: currentRun?.customer_name || projectName, icon: FlaskConical },
+    { labelKey: 'modelCockpit.cards.duration', hintKey: 'modelCockpit.cards.durationHint', value: formatRunDuration(currentRun), icon: Timer },
+    { labelKey: 'modelCockpit.cards.result', hintKey: 'modelCockpit.cards.resultHint', value: result, icon: BadgeCheck },
+  ]
+}
+
+function formatRunStatus(status: string) {
+  if (!status) return '-'
+  if (status === 'running') return 'RUNNING'
+  if (status === 'stopped') return 'OK'
+  return status.toUpperCase()
+}
+
+function formatRunDuration(run?: DetectionRun | null) {
+  if (!run) return '-'
+  const seconds = run.status === 'running' && run.started_at ? Math.max(run.duration_sec, Math.floor((Date.now() - Date.parse(run.started_at)) / 1000)) : run.duration_sec
+  if (!Number.isFinite(seconds) || seconds < 0) return '-'
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = Math.floor(seconds % 60)
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+}
+
+function resolveStatus(value: number | undefined, min?: number | null, max?: number | null): 'OK' | 'NG' | '--' {
+  if (value === undefined) return '--'
+  if (typeof min === 'number' && value < min) return 'NG'
+  if (typeof max === 'number' && value > max) return 'NG'
+  return 'OK'
+}
+
+function statusClassName(status: 'OK' | 'NG' | '--') {
+  if (status === 'OK') return 'ok'
+  if (status === 'NG') return 'ng'
+  return 'neutral'
+}
+
+function pickNumberOrNull(...values: Array<number | null | undefined>) {
+  return values.find((value): value is number => typeof value === 'number' && Number.isFinite(value)) ?? null
+}
+
+function latestSnapshotTime(snapshots: TagSnapshot[]) {
+  let latest = 0
+  let value = ''
+  for (const snapshot of snapshots) {
+    const time = Date.parse(snapshot.last_update)
+    if (!Number.isFinite(time) || time <= 0 || snapshot.last_update.startsWith('0001-')) continue
+    if (time > latest) {
+      latest = time
+      value = snapshot.last_update
+    }
+  }
+  return value
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+function formatTimeLabel(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function parseTimestamp(value?: string) {
+  if (!value || value.startsWith('0001-')) return undefined
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : undefined
+}
+
+function formatLimitRange(metric: ResolvedMetricCard) {
+  if (typeof metric.limitMin !== 'number' && typeof metric.limitMax !== 'number') return '-'
+  const min = typeof metric.limitMin === 'number' ? formatLimit(metric.limitMin) : '-'
+  const max = typeof metric.limitMax === 'number' ? formatLimit(metric.limitMax) : '-'
+  return `${min}-${max} ${formatUnit(metric.unit)}`
+}
+
+function computeOptimizationFactor({
+  label,
+  varName,
+  value,
+  min,
+  max,
+}: {
+  label: string
+  varName?: string | null
+  value?: number
+  min?: number | null
+  max?: number | null
+}) {
+  if (value === undefined || !Number.isFinite(value)) return '-'
+  if (isMaxOnlyOptimizationMetric(label, varName)) {
+    if (typeof max !== 'number' || !Number.isFinite(max) || max === 0) return '-'
+    return `${((1 + (max - value) / max) * 100).toFixed(1)}%`
+  }
+  if (typeof min !== 'number' || typeof max !== 'number' || !Number.isFinite(min) || !Number.isFinite(max) || max - min === 0) return '-'
+  const middle = (max + min) / 2
+  const halfRange = (max - min) / 2
+  return `${((2 - Math.abs(value - middle) / halfRange) * 100).toFixed(1)}%`
+}
+
+function isMaxOnlyOptimizationMetric(label: string, varName?: string | null) {
+  const text = `${label} ${varName ?? ''}`.toLowerCase()
+  return text.includes('震') || text.includes('振') || text.includes('vibration') || text.includes('噪') || text.includes('noise')
+}
+
+function CockpitEmpty({ description }: { description: string }) {
+  return (
+    <div className="cockpit-empty-state">
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={description} />
+    </div>
+  )
+}
+
+function TrendEmptyState({ description }: { description: string }) {
+  const { t } = useTranslation()
+  return (
+    <div className="cockpit-trend-empty">
+      <div className="cockpit-trend-empty-grid" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <strong>{description}</strong>
+      <small>{t('modelCockpit.messages.trendPlaceholder')}</small>
+    </div>
+  )
 }
 
 function formatMetricValue(value: number, decimals: number) {
   return value.toFixed(Math.max(0, Math.min(decimals, 2)))
-}
-
-function getOptimizationRate(value: number, limitMin: number, limitMax: number) {
-  if (limitMax <= limitMin) return 0
-  const center = (limitMin + limitMax) / 2
-  const halfRange = (limitMax - limitMin) / 2
-  return Math.round(Math.max(0, Math.min(100, 100 - (Math.abs(value - center) / halfRange) * 100)))
 }
 
 function CockpitGlassPanel({ children, className, title }: { children?: ReactNode; className?: string; title?: ReactNode }) {
@@ -380,29 +651,44 @@ function TopCardContent({ card }: { card: TopCardConfig }) {
   )
 }
 
-function TrendCardContent({ metric }: { metric: ResolvedMetricCard }) {
+function TrendCardContent({ metric, axisMode, onToggleAxisMode }: { metric: ResolvedMetricCard; axisMode: TrendAxisMode; onToggleAxisMode: () => void }) {
   const { t } = useTranslation()
   const data = useMemo(() => buildTrendData(metric), [metric])
-  const values = data.map((item) => item.value)
-  const min = Math.min(...values, metric.limitMin)
-  const max = Math.max(...values, metric.limitMax)
-  const buffer = Math.max((max - min) * 0.12, Math.abs(max) * 0.02, 1)
-  const domain = [Math.floor((min - buffer) * 10) / 10, Math.ceil((max + buffer) * 10) / 10]
+  const domain = useMemo(() => buildTrendDomain(metric, data, axisMode), [axisMode, data, metric])
+  const modeLabel = t(axisMode === 'standard' ? 'modelCockpit.charts.standardScale' : 'modelCockpit.charts.autoScale')
+  const { ref, size } = useChartContainerSize(132)
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onToggleAxisMode()
+  }
 
   return (
-    <div className="cockpit-trend-content">
+    <div
+      className="cockpit-trend-content"
+      role="button"
+      tabIndex={0}
+      title={t('modelCockpit.charts.toggleScale')}
+      onClick={onToggleAxisMode}
+      onKeyDown={handleKeyDown}
+    >
       <div className="cockpit-trend-summary">
-        <span>{t(metric.labelKey)}</span>
+        <span>{metric.label}</span>
         <strong>
           {metric.value} <small>{formatUnit(metric.unit)}</small>
         </strong>
       </div>
-      <div className="cockpit-trend-chart">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 12, right: 8, left: -24, bottom: 0 }}>
+      <div className="cockpit-trend-mode" aria-label={t('modelCockpit.charts.scaleMode')}>
+        {modeLabel}
+      </div>
+      <div className="cockpit-trend-chart" ref={ref}>
+        {size ? (
+          <AreaChart width={size.width} height={size.height} data={data} margin={{ top: 10, right: 8, left: -24, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 4" vertical={false} stroke="rgba(7, 48, 110, 0.08)" />
             <XAxis dataKey="time" tickLine={false} axisLine={false} dy={6} fontSize={10} stroke="rgba(7, 48, 110, 0.45)" />
             <YAxis tickLine={false} axisLine={false} width={42} fontSize={10} stroke="rgba(7, 48, 110, 0.45)" domain={domain} tickCount={4} />
+            {typeof metric.limitMin === 'number' ? <ReferenceLine y={metric.limitMin} stroke="rgba(22,119,255,0.58)" strokeDasharray="4 4" ifOverflow="discard" /> : null}
+            {typeof metric.limitMax === 'number' ? <ReferenceLine y={metric.limitMax} stroke="rgba(255,77,79,0.58)" strokeDasharray="4 4" ifOverflow="discard" /> : null}
             <Tooltip
               contentStyle={{
                 backgroundColor: 'rgba(255, 255, 255, 0.92)',
@@ -413,7 +699,7 @@ function TrendCardContent({ metric }: { metric: ResolvedMetricCard }) {
               }}
               labelStyle={{ color: 'rgba(7,48,110,0.56)', fontSize: 11 }}
               itemStyle={{ color: '#1677ff', fontWeight: 700 }}
-              formatter={(value) => [`${Number(value).toFixed(inferDecimals(metric.value))} ${formatUnit(metric.unit)}`, t(metric.labelKey)]}
+              formatter={(value) => [`${Number(value).toFixed(Math.max(0, Math.min(metric.decimalPlaces, 2)))} ${formatUnit(metric.unit)}`, metric.label]}
             />
             <Area
               type="monotone"
@@ -425,24 +711,99 @@ function TrendCardContent({ metric }: { metric: ResolvedMetricCard }) {
               activeDot={{ r: 3, strokeWidth: 0, fill: '#1677ff' }}
             />
           </AreaChart>
-        </ResponsiveContainer>
+        ) : null}
       </div>
     </div>
   )
 }
 
-function buildTrendData(metric: ResolvedMetricCard) {
-  const currentValue = Number(metric.value)
-  const points = [...metric.points]
-  if (Number.isFinite(currentValue)) {
-    const fallbackLast = points.at(-1) ?? currentValue
-    const offset = currentValue - fallbackLast
-    points.splice(0, points.length, ...points.map((point) => point + offset))
+function useChartContainerSize(minHeight: number) {
+  const [node, setNode] = useState<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null)
+
+  useEffect(() => {
+    if (!node) return undefined
+    const update = () => {
+      const rect = node.getBoundingClientRect()
+      const width = Math.floor(rect.width)
+      if (width <= 0) return
+      setSize({
+        width,
+        height: Math.max(minHeight, Math.floor(rect.height)),
+      })
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [minHeight, node])
+
+  return { ref: setNode, size }
+}
+
+function buildTrendData(metric: ResolvedMetricCard): TrendPoint[] {
+  const currentPoints = buildCurrentValueTrend(metric)
+  if (metric.history.length === 0) return currentPoints
+  if (currentPoints.length === 0) return metric.history
+  const lastHistoryPoint = metric.history[metric.history.length - 1]
+  const currentPoint = currentPoints[0]
+  if (currentPoint.timestamp !== undefined && lastHistoryPoint.timestamp !== undefined && currentPoint.timestamp <= lastHistoryPoint.timestamp) {
+    return metric.history
   }
-  return points.map((value, index) => ({
-    time: `${String(index + 1).padStart(2, '0')}:00`,
-    value: Number(value.toFixed(2)),
-  }))
+  if (currentPoint.time === lastHistoryPoint.time && currentPoint.value === lastHistoryPoint.value) return metric.history
+  return [...metric.history, currentPoint].slice(-41)
+}
+
+function buildTrendDomain(metric: ResolvedMetricCard, data: TrendPoint[], axisMode: TrendAxisMode): [number, number] {
+  const hasLowerLimit = typeof metric.limitMin === 'number'
+  const hasUpperLimit = typeof metric.limitMax === 'number'
+  const dataValues = data.map((item) => item.value).filter((value) => Number.isFinite(value))
+  const hasStandardRange = hasLowerLimit && hasUpperLimit && metric.limitMin! < metric.limitMax!
+  if (dataValues.length === 0) {
+    if (hasStandardRange) return [metric.limitMin!, metric.limitMax!]
+    return [0, 1]
+  }
+
+  const focusedDomain = expandTrendDomainWithNearbyLimits(
+    paddedTrendDomain(dataValues, axisMode === 'auto' ? 0.18 : 0.12),
+    hasLowerLimit ? metric.limitMin! : undefined,
+    hasUpperLimit ? metric.limitMax! : undefined,
+  )
+  if (axisMode === 'standard' && hasStandardRange) {
+    const standardRange = Math.abs(metric.limitMax! - metric.limitMin!)
+    const focusedRange = Math.max(focusedDomain[1] - focusedDomain[0], 0.1)
+    return standardRange > focusedRange * 6 ? focusedDomain : [metric.limitMin!, metric.limitMax!]
+  }
+  return focusedDomain
+}
+
+function paddedTrendDomain(values: number[], ratio: number): [number, number] {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const valueRange = Math.abs(max - min)
+  const padding = Math.max(valueRange * ratio, Math.abs(max) * 0.02, 1)
+  return [Math.floor((min - padding) * 10) / 10, Math.ceil((max + padding) * 10) / 10]
+}
+
+function expandTrendDomainWithNearbyLimits(domain: [number, number], min?: number, max?: number): [number, number] {
+  let [lower, upper] = domain
+  const range = Math.max(upper - lower, 0.1)
+  if (min !== undefined && min >= lower - range * 0.35 && min <= upper + range * 0.35) {
+    lower = Math.min(lower, min)
+    upper = Math.max(upper, min)
+  }
+  if (max !== undefined && max >= lower - range * 0.35 && max <= upper + range * 0.35) {
+    lower = Math.min(lower, max)
+    upper = Math.max(upper, max)
+  }
+  if (lower === upper) return [lower - 1, upper + 1]
+  return [lower, upper]
+}
+
+function buildCurrentValueTrend(metric: ResolvedMetricCard): TrendPoint[] {
+  if (metric.numericValue === undefined) return []
+  const timestamp = parseTimestamp(metric.lastUpdate) ?? Date.now()
+  return [{ time: formatTimeLabel(new Date(timestamp).toISOString()), value: metric.numericValue, timestamp, realtime: true }]
 }
 
 function formatLimit(value: number) {
@@ -502,178 +863,20 @@ function useCockpitLight() {
   return lightPos
 }
 
-function CockpitModelStage() {
-  const hostRef = useRef<HTMLDivElement | null>(null)
-  const modelRef = useRef<THREE.Group | null>(null)
+function usePageVisibility() {
+  const [pageVisible, setPageVisible] = useState(() => !document.hidden)
 
   useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
-
-    const scene = new THREE.Scene()
-    const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 100)
-    camera.position.set(3.1, -0.32, 6.85)
-    camera.lookAt(0, -2.9, 0)
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    renderer.setClearColor(0x000000, 0)
-    renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.toneMapping = THREE.LinearToneMapping
-    renderer.toneMappingExposure = 1
-    host.appendChild(renderer.domElement)
-
-    const controls = new OrbitControls(camera, renderer.domElement)
-    controls.enableDamping = true
-    controls.enablePan = false
-    controls.enableZoom = false
-    controls.target.set(0, -2.9, 0)
-    controls.autoRotate = true
-    controls.autoRotateSpeed = 0.25
-
-    scene.add(new THREE.AmbientLight(0xffffff, 0.9))
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xb5c8dc, 1.15))
-
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.8)
-    keyLight.position.set(3.6, 5.2, 4.8)
-    scene.add(keyLight)
-
-    const fillLight = new THREE.DirectionalLight(0xeaf4ff, 1.35)
-    fillLight.position.set(-3.2, 2.4, 3.2)
-    scene.add(fillLight)
-
-    const rimLight = new THREE.DirectionalLight(0xddeeff, 1.1)
-    rimLight.position.set(-2.8, 3.2, -4.5)
-    scene.add(rimLight)
-
-    const modelFloorY = -4.35
-
-    const fluidGroup = new THREE.Group()
-    fluidGroup.visible = false
-    scene.add(fluidGroup)
-    const fluidParticles: THREE.Mesh[] = []
-    const fluidCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.9, -0.84, 0.42),
-      new THREE.Vector3(-0.45, -0.35, 0.34),
-      new THREE.Vector3(0.12, -0.12, 0.24),
-      new THREE.Vector3(0.58, 0.22, 0.3),
-      new THREE.Vector3(0.78, 0.64, 0.2),
-    ])
-    const suctionCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.78, 0.38, -0.08),
-      new THREE.Vector3(-0.18, 0.24, 0.08),
-      new THREE.Vector3(0.42, 0.02, 0.16),
-      new THREE.Vector3(0.82, -0.22, 0.28),
-    ])
-    ;[
-      { curve: fluidCurve, color: 0x7ff4ff, opacity: 0.6 },
-      { curve: suctionCurve, color: 0xffd266, opacity: 0.5 },
-    ].forEach(({ curve, color, opacity }) => {
-      const tube = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 96, 0.014, 10, false),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false }),
-      )
-      tube.renderOrder = 3
-      fluidGroup.add(tube)
-    })
-    for (let index = 0; index < 16; index += 1) {
-      const particle = new THREE.Mesh(
-        new THREE.SphereGeometry(index % 2 ? 0.028 : 0.022, 16, 16),
-        new THREE.MeshBasicMaterial({ color: index % 3 ? 0x88f7ff : 0xffd266, transparent: true, opacity: 0.82, depthTest: false }),
-      )
-      particle.renderOrder = 4
-      particle.userData.offset = index / 16
-      particle.userData.curve = index % 3 === 0 ? suctionCurve : fluidCurve
-      fluidParticles.push(particle)
-      fluidGroup.add(particle)
+    const handleVisibilityChange = () => {
+      setPageVisible(!document.hidden)
     }
-
-    let alive = true
-
-    const loader = new GLTFLoader()
-    loader.load(COCKPIT_MODEL_PATH, (gltf) => {
-      if (!alive) return
-      const model = gltf.scene
-      const box = new THREE.Box3().setFromObject(model)
-      const size = box.getSize(new THREE.Vector3())
-      const center = box.getCenter(new THREE.Vector3())
-      const maxAxis = Math.max(size.x, size.y, size.z) || 1
-      model.position.sub(center)
-      model.scale.setScalar(3.18 / maxAxis)
-      model.rotation.y = -0.35
-      const scaledBox = new THREE.Box3().setFromObject(model)
-      model.position.y += modelFloorY - scaledBox.min.y
-      model.traverse((node) => {
-        if (node instanceof THREE.Mesh) {
-          node.castShadow = true
-          node.receiveShadow = true
-          if (node.material instanceof THREE.MeshStandardMaterial) {
-            node.material.envMapIntensity = 0.65
-            node.material.roughness = Math.min(node.material.roughness + 0.18, 0.82)
-            node.material.metalness *= 0.72
-          }
-        }
-      })
-      modelRef.current = model
-      scene.add(model)
-      fluidGroup.visible = false
-      fluidGroup.position.copy(model.position)
-      fluidGroup.rotation.copy(model.rotation)
-      fluidGroup.scale.setScalar(1.18)
-    })
-
-    const resize = () => {
-      const rect = host.getBoundingClientRect()
-      const width = Math.max(1, rect.width)
-      const height = Math.max(1, rect.height)
-      renderer.setSize(width, height, false)
-      camera.aspect = width / height
-      camera.updateProjectionMatrix()
-    }
-
-    const observer = new ResizeObserver(resize)
-    observer.observe(host)
-    resize()
-
-    let frame = 0
-    const animate = () => {
-      const elapsed = performance.now() / 1000
-      controls.update()
-      if (modelRef.current) {
-        fluidGroup.position.copy(modelRef.current.position)
-        fluidGroup.rotation.copy(modelRef.current.rotation)
-        fluidGroup.rotation.y += Math.sin(elapsed * 0.7) * 0.03
-      }
-      fluidParticles.forEach((particle) => {
-        const curve = particle.userData.curve as THREE.CatmullRomCurve3
-        const point = curve.getPoint((particle.userData.offset + elapsed * 0.12) % 1)
-        particle.position.copy(point)
-        particle.scale.setScalar(0.7 + Math.sin(elapsed * 5 + particle.userData.offset * 10) * 0.22)
-      })
-      renderer.render(scene, camera)
-      frame = window.requestAnimationFrame(animate)
-    }
-    frame = window.requestAnimationFrame(animate)
-
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
-      window.cancelAnimationFrame(frame)
-      alive = false
-      observer.disconnect()
-      controls.dispose()
-      modelRef.current = null
-      scene.traverse((node) => {
-        if (node instanceof THREE.Mesh) {
-          node.geometry.dispose()
-          if (Array.isArray(node.material)) node.material.forEach((material) => material.dispose())
-          else node.material.dispose()
-        }
-      })
-      renderer.dispose()
-      host.removeChild(renderer.domElement)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
 
-  return <div ref={hostRef} className="cockpit-model-stage" />
+  return pageVisible
 }
 
 // force reload

@@ -111,6 +111,7 @@ export function ShellLayout() {
   const navigate = useNavigate()
   const [messageApi, contextHolder] = message.useMessage()
   const [stationExpanded, setStationExpanded] = useState(true)
+  const [cockpitExpanded, setCockpitExpanded] = useState(true)
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const [reportSettingsExpanded, setReportSettingsExpanded] = useState(true)
   const [notificationOpen, setNotificationOpen] = useState(false)
@@ -408,6 +409,8 @@ export function ShellLayout() {
           {visibleNavItems.map((item) => {
             const isStationNav = item.key === 'station'
             const stationActive = isStationNav && (location.pathname === '/' || location.pathname === '/station')
+            const isCockpitNav = item.key === 'modelCockpit'
+            const cockpitActive = isCockpitNav && location.pathname.startsWith('/model-cockpit')
             const isHistoryNav = item.key === 'history'
             const historyActive = isHistoryNav && location.pathname.startsWith('/history')
             const isReportSettingsNav = item.key === 'reportSettings'
@@ -429,6 +432,19 @@ export function ShellLayout() {
                         {stationExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </span>
                     ) : null}
+                  </button>
+                ) : isCockpitNav ? (
+                  <button
+                    className="nav-link nav-button"
+                    type="button"
+                    onClick={() => setCockpitExpanded((value) => !value)}
+                    aria-expanded={cockpitExpanded}
+                  >
+                    <item.icon size={18} />
+                    <span>{t(`nav.${item.key}`)}</span>
+                    <span className="nav-expand-icon">
+                      {cockpitExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
                   </button>
                 ) : isHistoryNav ? (
                   <button
@@ -477,6 +493,31 @@ export function ShellLayout() {
                           className={active ? 'nav-sublink active' : 'nav-sublink'}
                           key={project.id}
                           to={{ pathname: '/', search }}
+                          title={projectName}
+                        >
+                          <span>{projectName}</span>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                ) : null}
+                {isCockpitNav && cockpitExpanded ? (
+                  <div className="nav-subtree">
+                    <NavLink
+                      className={({ isActive }) => (isActive ? 'nav-sublink active' : 'nav-sublink')}
+                      to="/model-cockpit/debug"
+                    >
+                      <span>{t('nav.modelCockpitDebug')}</span>
+                    </NavLink>
+                    {stationProjects.map((project) => {
+                      const search = `?project_id=${project.id}`
+                      const active = cockpitActive && activeProjectId === String(project.id)
+                      const projectName = displayProjectName(project)
+                      return (
+                        <Link
+                          className={active ? 'nav-sublink active' : 'nav-sublink'}
+                          key={project.id}
+                          to={{ pathname: '/model-cockpit', search }}
                           title={projectName}
                         >
                           <span>{projectName}</span>

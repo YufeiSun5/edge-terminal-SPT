@@ -7,6 +7,170 @@
   color: #0f172a;
 }
 
+.detection-config-page--station-modal {
+  height: min(72vh, 760px);
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.detection-config-page--station-modal .detection-config-workspace {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.detection-config-page--station-modal .detection-config-hero {
+  padding: 0 0 10px;
+}
+
+.detection-config-page--station-modal .detection-config-grid {
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 14px;
+  padding-top: 10px;
+}
+
+.detection-config-page--station-modal .detection-config-sidebar,
+.detection-config-page--station-modal .detection-config-main {
+  border-color: rgba(37, 99, 235, 0.16);
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.detection-config-page--station-modal .detection-config-sidebar {
+  grid-column: 2;
+  grid-row: 1;
+  overflow: auto;
+}
+
+.detection-config-page--station-modal .detection-config-main {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.detection-config-page--station-modal .detection-standard-toolbar {
+  flex: 1;
+}
+
+.detection-config-page--station-modal .detection-standard-select {
+  width: min(560px, 72vw);
+}
+
+.detection-station-overview {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+}
+
+.detection-station-card {
+  display: grid;
+  gap: 8px;
+  padding: 2px 2px 8px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.detection-station-card h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 17px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.detection-station-card p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.detection-station-tags,
+.detection-inline-meta--station {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detection-station-remark {
+  padding-top: 4px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.detection-station-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.detection-station-actions .ant-btn {
+  width: 100%;
+}
+
+.detection-summary-strip--station {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
+.detection-config-page--station-modal .detection-inline-meta--station {
+  margin-bottom: 0;
+}
+
+.detection-config-page--station-modal .detection-config-main {
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.detection-config-page--station-modal .detection-config-sidebar {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.96), rgba(239, 246, 255, 0.72)),
+    rgba(255, 255, 255, 0.52);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 10px 24px rgba(37, 99, 235, 0.06);
+}
+
+.detection-config-page--station-modal .detection-process-params {
+  display: grid;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 0;
+  padding: 12px;
+  border-color: rgba(37, 99, 235, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(239, 246, 255, 0.72)),
+    rgba(255, 255, 255, 0.7);
+}
+
+.detection-config-page--station-modal .detection-process-params strong,
+.detection-config-page--station-modal .detection-process-params span {
+  display: block;
+}
+
+.detection-config-page--station-modal .detection-process-params strong {
+  font-size: 14px;
+}
+
+.detection-config-page--station-modal .detection-process-params > div > span {
+  margin-top: 3px;
+  line-height: 1.45;
+}
+
+.detection-config-page--station-modal .detection-process-params label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 126px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(37, 99, 235, 0.12);
+}
+
+.detection-config-page--station-modal .detection-process-params .ant-input-number-group-wrapper {
+  width: 126px;
+}
+
 .detection-config-page > *:not(.history-ambient-background) {
   position: relative;
   z-index: 1;
@@ -65,9 +229,32 @@
   width: min(440px, 42vw);
 }
 
+.detection-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: max-content;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1;
+}
+
 .detection-config-actions .ant-btn,
 .detection-config-page .ant-btn {
   border-radius: 999px;
+}
+
+.detection-copy-action {
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+}
+
+.detection-panel-head .ant-btn-text {
+  color: #64748b;
+}
+
+.detection-panel-head .ant-btn-text:hover {
+  color: #1d4ed8;
+  background: rgba(37, 99, 235, 0.08);
 }
 
 .detection-config-grid {
@@ -131,6 +318,12 @@
   font-size: 18px;
   line-height: 22px;
   letter-spacing: 0;
+}
+
+.detection-panel-head p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
 }
 
 .detection-standard-list {
@@ -251,6 +444,46 @@
   color: #0f172a;
   font-size: 18px;
   line-height: 22px;
+}
+
+.detection-process-params {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 10px;
+  background: rgba(239, 246, 255, 0.52);
+}
+
+.detection-process-params > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.detection-process-params strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.detection-process-params span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.detection-process-params label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: max-content;
+  margin: 0;
+}
+
+.detection-process-params .ant-input-number-group-wrapper {
+  width: 180px;
 }
 
 .detection-variable-name,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   DndContext,
@@ -6,11 +6,9 @@ import {
   KeyboardSensor,
   PointerSensor,
   closestCenter,
-  defaultDropAnimationSideEffects,
   useSensor,
   useSensors,
   type DragEndEvent,
-  type DragOverEvent,
   type DragStartEvent,
   type UniqueIdentifier,
 } from '@dnd-kit/core'
@@ -27,7 +25,6 @@ import {
   AreaChart,
   CartesianGrid,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -65,6 +62,7 @@ import {
   Database,
   Minus,
   Plus,
+  SlidersHorizontal,
   Trash2,
 } from 'lucide-react'
 import type {
@@ -75,6 +73,9 @@ import type {
   DetectionRunReportRequestPayload,
   DetectionRunStorageRoute,
   DetectionStandard,
+  DetectionStandardItem,
+  DetectionStandardItemPayload,
+  HistoryDataItem,
   LimitAlarm,
   LimitAlarmScope,
   RealtimeVariablesSnapshotPayload,
@@ -114,14 +115,23 @@ import {
   sendRealtimeWebSocketCommand,
   subscribeRealtimeWebSocket,
 } from '@/features/realtime/realtimeClient'
+import { getHistoryData } from '@/features/history-query/api'
+import {
+  DetectionConfigEditor,
+  type StationDetectionConfigDraft,
+} from '@/features/detection-config/DetectionConfigPage'
 import { detectionStandardScopeLabel } from '@/shared/detection/standardScope'
 import { languageCode } from '@/shared/i18n/language'
 import { StationCardGridStyles } from './components/StationCardGridStyles'
 import { StationLightBackground } from './components/StationLightBackground'
 
+type ChartAxisMode = 'standard' | 'auto'
+
 type TrendPoint = {
   time: string
   value: number
+  timestamp?: number
+  realtime?: boolean
 }
 
 type MetricCard = {
@@ -136,6 +146,7 @@ type MetricCard = {
   value?: number
   precision: number
   trend: TrendPoint[]
+  axisMode: ChartAxisMode
 }
 
 type StationViewBindingWithItem = StationViewResolvedBinding & {
@@ -421,6 +432,12 @@ function numericSnapshotValue(snapshot?: TagSnapshot) {
   return snapshot.value
 }
 
+function standardItemKey(
+  item: Pick<DetectionRunStandardItem | DetectionStandardItem | DetectionStandardItemPayload, 'var_id'> & { var_id_text?: string | number },
+) {
+  return String(item.var_id_text ?? item.var_id)
+}
+
 function formatMetricValue(
   value: number | undefined,
   unit: string | undefined,
@@ -430,9 +447,20 @@ function formatMetricValue(
   return `${value.toFixed(Math.max(0, Math.min(precision, 4)))}${unit ? ` ${unit}` : ''}`
 }
 
-function formatStandardRange(binding: StationViewResolvedBinding) {
-  const limits = bindingLimits(binding)
-  const unit = binding.unit ? ` ${binding.unit}` : ''
+function standardItemLimits(
+  item?: DetectionRunStandardItem | DetectionStandardItem | DetectionStandardItemPayload,
+) {
+  return {
+    min: item?.limit_l ?? item?.limit_ll ?? undefined,
+    max: item?.limit_h ?? item?.limit_hh ?? undefined,
+  }
+}
+
+function formatLimitRange(
+  limits: { min?: number; max?: number },
+  unitValue?: string,
+) {
+  const unit = unitValue ? ` ${unitValue}` : ''
   if (limits.min === undefined && limits.max === undefined) return '--'
   if (limits.min === undefined)
     return `<= ${formatAlarmValue(limits.max)}${unit}`
@@ -441,12 +469,29 @@ function formatStandardRange(binding: StationViewResolvedBinding) {
   return `${formatAlarmValue(limits.min)} - ${formatAlarmValue(limits.max)}${unit}`
 }
 
+function formatStandardRange(
+  binding: StationViewResolvedBinding,
+  standardItem?: DetectionRunStandardItem | DetectionStandardItem | DetectionStandardItemPayload,
+) {
+  const overrideLimits = standardItemLimits(standardItem)
+  const limits =
+    overrideLimits.min !== undefined || overrideLimits.max !== undefined
+      ? overrideLimits
+      : bindingLimits(binding)
+  return formatLimitRange(limits, binding.unit)
+}
+
 function isWithinLimits(
   value: number | undefined,
   binding: StationViewResolvedBinding,
+  standardItem?: DetectionRunStandardItem | DetectionStandardItem | DetectionStandardItemPayload,
 ) {
   if (value === undefined) return true
-  const limits = bindingLimits(binding)
+  const overrideLimits = standardItemLimits(standardItem)
+  const limits =
+    overrideLimits.min !== undefined || overrideLimits.max !== undefined
+      ? overrideLimits
+      : bindingLimits(binding)
   if (limits.min !== undefined && value < limits.min) return false
   if (limits.max !== undefined && value > limits.max) return false
   return true
@@ -456,12 +501,163 @@ function trendFromValue(
   value: number | undefined,
   min?: number,
   max?: number,
+  lastUpdate?: string,
 ): TrendPoint[] {
   const base = value ?? min ?? max ?? 0
+  const timestamp = parseTimestamp(lastUpdate) ?? Date.now()
   return Array.from({ length: 7 }, (_, index) => ({
     time: String(index + 1),
     value: base,
+    timestamp: timestamp + index,
+    realtime: true,
   }))
+}
+
+function historyRefetchInterval({
+  data,
+  activeRun,
+  pageVisible,
+}: {
+  data: unknown
+  activeRun?: DetectionRun | null
+  pageVisible: boolean
+}) {
+  if (!activeRun?.id) return false
+  if (!pageVisible) return 60000
+  if (historyResponseItemCount(data) > 0) return 10000
+  const startedAt = parseTimestamp(activeRun.started_at)
+  if (startedAt !== undefined && Date.now() - startedAt <= 60000) return 3000
+  return 10000
+}
+
+function historyResponseItemCount(data: unknown) {
+  if (!data || typeof data !== 'object') return 0
+  const items = (data as { items?: unknown }).items
+  return Array.isArray(items) ? items.length : 0
+}
+
+function groupHistoryByVarId(items: HistoryDataItem[]) {
+  const groups = new Map<string, HistoryDataItem[]>()
+  for (const item of items) {
+    const key = String(item.var_id_text ?? item.var_id)
+    const group = groups.get(key) ?? []
+    group.push(item)
+    groups.set(key, group)
+  }
+  return groups
+}
+
+function buildHistoryTrend(items: HistoryDataItem[], precision: number): TrendPoint[] {
+  return items
+    .filter((item) => typeof item.value === 'number' && Number.isFinite(item.value))
+    .sort((left, right) => (parseTimestamp(left.source_time || left.created_at) ?? 0) - (parseTimestamp(right.source_time || right.created_at) ?? 0))
+    .slice(-60)
+    .map((item) => {
+      const sourceTime = item.source_time || item.created_at
+      return {
+        time: formatTimeLabel(sourceTime),
+        value: Number((item.value ?? 0).toFixed(Math.max(0, Math.min(precision, 4)))),
+        timestamp: parseTimestamp(sourceTime),
+      }
+    })
+}
+
+function buildCardTrend({
+  history,
+  value,
+  min,
+  max,
+  lastUpdate,
+}: {
+  history: TrendPoint[]
+  value: number | undefined
+  min?: number
+  max?: number
+  lastUpdate?: string
+}) {
+  const realtimeTrend = trendFromValue(value, min, max, lastUpdate)
+  if (history.length === 0) return realtimeTrend
+  if (value === undefined) return history
+  const realtimePoint = realtimeTrend[realtimeTrend.length - 1]
+  const lastHistoryPoint = history[history.length - 1]
+  if (
+    realtimePoint.timestamp !== undefined &&
+    lastHistoryPoint.timestamp !== undefined &&
+    realtimePoint.timestamp <= lastHistoryPoint.timestamp
+  ) {
+    return history
+  }
+  return [...history, realtimePoint].slice(-61)
+}
+
+function buildChartDomain({
+  chartData,
+  min,
+  max,
+  axisMode,
+}: {
+  chartData: TrendPoint[]
+  min?: number
+  max?: number
+  axisMode: ChartAxisMode
+}): [number, number] {
+  const dataValues = chartData.map((item) => item.value).filter((value) => Number.isFinite(value))
+  const hasStandardRange = min !== undefined && max !== undefined && min < max
+  if (dataValues.length === 0) {
+    if (hasStandardRange) return [min, max]
+    return [0, 1]
+  }
+
+  const focusedDomain = expandDomainWithNearbyLimits(
+    paddedDomain(dataValues, axisMode === 'auto' ? 0.18 : 0.12),
+    min,
+    max,
+  )
+  if (hasStandardRange && axisMode === 'standard') {
+    const standardRange = Math.abs(max - min)
+    const focusedRange = Math.max(focusedDomain[1] - focusedDomain[0], 0.1)
+    return standardRange > focusedRange * 6 ? focusedDomain : [min, max]
+  }
+  return focusedDomain
+}
+
+function paddedDomain(values: number[], ratio: number): [number, number] {
+  const yMin = Math.min(...values)
+  const yMax = Math.max(...values)
+  const valueRange = Math.abs(yMax - yMin)
+  const buffer = Math.max(valueRange * ratio, Math.abs(yMax) * 0.02, 1)
+  return [Math.floor((yMin - buffer) * 10) / 10, Math.ceil((yMax + buffer) * 10) / 10]
+}
+
+function expandDomainWithNearbyLimits(
+  domain: [number, number],
+  min?: number,
+  max?: number,
+): [number, number] {
+  let [lower, upper] = domain
+  const range = Math.max(upper - lower, 0.1)
+  if (min !== undefined && min >= lower - range * 0.35 && min <= upper + range * 0.35) {
+    lower = Math.min(lower, min)
+    upper = Math.max(upper, min)
+  }
+  if (max !== undefined && max >= lower - range * 0.35 && max <= upper + range * 0.35) {
+    lower = Math.min(lower, max)
+    upper = Math.max(upper, max)
+  }
+  if (lower === upper) return [lower - 1, upper + 1]
+  return [lower, upper]
+}
+
+function parseTimestamp(value?: string) {
+  if (!value || value.startsWith('0001-')) return undefined
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : undefined
+}
+
+function formatTimeLabel(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function iconForBinding(binding: StationViewResolvedBinding) {
@@ -576,13 +772,13 @@ function variableWireId(
 }
 
 function standardReportVarIds(
-  standard?: DetectionStandard,
+  standard?: Pick<DetectionStandard, 'items'> | { items?: DetectionStandardItemPayload[] },
   projectVariables: Array<Pick<VariableConfig, 'var_id' | 'var_id_text' | 'var_name'>> = [],
 ) {
   const seen = new Set<string>()
   return (standard?.items ?? [])
     .filter((item) => item.store_enabled || item.check_enabled)
-    .sort((a, b) => a.sort_order - b.sort_order)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
     .map((item) => {
       const direct = projectVariables.find(
         (variable) =>
@@ -783,9 +979,17 @@ export function StationOperationPage() {
     [watchedReportRequestRows],
   )
   const [startModalOpen, setStartModalOpen] = useState(false)
+  const [configPreviewOpen, setConfigPreviewOpen] = useState(false)
+  const [previewConfigsByProject, setPreviewConfigsByProject] = useState<
+    Record<number, StationDetectionConfigDraft>
+  >({})
   const [alarmModalOpen, setAlarmModalOpen] = useState(false)
   const [pidModalOpen, setPIDModalOpen] = useState(false)
   const [previewCardOrder, setPreviewCardOrder] = useState<string[]>([])
+  const [cardAxisState, setCardAxisState] = useState<{
+    scope: string
+    modes: Record<string, ChartAxisMode>
+  }>({ scope: '', modes: {} })
   const [previewPinnedRows, setPreviewPinnedRows] = useState<
     Record<string, boolean>
   >({})
@@ -802,6 +1006,7 @@ export function StationOperationPage() {
   const hasPermission = useAuthStore((state) => state.hasPermission)
   const canStartDetection = hasPermission('start_detection')
   const canStopDetection = hasPermission('stop_detection')
+  const pageVisible = usePageVisibility()
   const selectedProjectId = Number(searchParams.get('project_id'))
   const validSelectedProjectId =
     Number.isFinite(selectedProjectId) && selectedProjectId > 0
@@ -892,6 +1097,18 @@ export function StationOperationPage() {
   const standardsQuery = useQuery({
     queryKey: ['station', 'detection-standards'],
     queryFn: () => getDetectionStandards({ enabled: true }),
+    staleTime: 30000,
+    retry: false,
+  })
+  const configVariablesQuery = useQuery({
+    queryKey: ['station', 'config-variables', validSelectedProjectId, selectedEdgeInstanceId],
+    queryFn: () =>
+      getVariables({
+        edge_instance_id: selectedEdgeInstanceId,
+        project_id: validSelectedProjectId,
+        enabled: true,
+      }),
+    enabled: configPreviewOpen && validSelectedProjectId !== undefined,
     staleTime: 30000,
     retry: false,
   })
@@ -1041,6 +1258,35 @@ export function StationOperationPage() {
         (run) => run.project_id === validSelectedProjectId,
       )
     : activeRunsQuery.data?.[0]
+  const currentRunDetailQuery = useQuery({
+    queryKey: ['station', 'current-run-detail', activeRun?.id],
+    queryFn: () => getDetectionRun(activeRun!.id),
+    enabled: activeRun !== undefined,
+    refetchInterval: activeRun !== undefined ? 10000 : false,
+    retry: false,
+  })
+  const stationHistoryQuery = useQuery({
+    queryKey: ['station', 'card-history', validSelectedProjectId, activeRun?.id],
+    queryFn: () =>
+      getHistoryData({
+        project_id: validSelectedProjectId!,
+        task_id: activeRun!.id,
+        limit: 500,
+      }),
+    enabled: validSelectedProjectId !== undefined && activeRun !== undefined,
+    refetchInterval: (query) =>
+      historyRefetchInterval({
+        data: query.state.data,
+        activeRun: currentRunDetailQuery.data,
+        pageVisible,
+      }),
+    retry: false,
+  })
+  const cardAxisScope = `${validSelectedProjectId ?? 'none'}:${activeRun?.id ?? 'none'}`
+  const cardAxisModes = useMemo(
+    () => (cardAxisState.scope === cardAxisScope ? cardAxisState.modes : {}),
+    [cardAxisScope, cardAxisState.modes, cardAxisState.scope],
+  )
   const storageSnapshotQuery = useQuery({
     queryKey: ['station', 'run-storage-routes', activeRun?.id],
     queryFn: () => getDetectionRunStorageRoutes(activeRun!.id),
@@ -1078,13 +1324,32 @@ export function StationOperationPage() {
     () => standards,
     [standards],
   )
+  const previewConfig = validSelectedProjectId
+    ? previewConfigsByProject[validSelectedProjectId]
+    : undefined
+  const previewStandard = useMemo(
+    () =>
+      previewConfig
+        ? availableStandards.find(
+            (standard) => standard.id === previewConfig.standardId,
+          )
+        : undefined,
+    [availableStandards, previewConfig],
+  )
   const selectedStartStandard = useMemo(
     () => availableStandards.find((standard) => standard.id === selectedStandardId),
     [availableStandards, selectedStandardId],
   )
+  const selectedStartStandardForReport = useMemo(
+    () =>
+      selectedStartStandard && previewConfig?.standardId === selectedStartStandard.id
+        ? { ...selectedStartStandard, items: previewConfig.items }
+        : selectedStartStandard,
+    [previewConfig, selectedStartStandard],
+  )
   const selectedStandardReportVarIds = useMemo(
-    () => standardReportVarIds(selectedStartStandard, stationVariables),
-    [selectedStartStandard, stationVariables],
+    () => standardReportVarIds(selectedStartStandardForReport, stationVariables),
+    [selectedStartStandardForReport, stationVariables],
   )
   const hasReportRowsMissingVariables = useMemo(
     () =>
@@ -1181,6 +1446,27 @@ export function StationOperationPage() {
     )
     return result
   }, [metricBindings])
+  const standardItemByVarId = useMemo(() => {
+    const result = new Map<string, DetectionRunStandardItem>()
+    for (const item of currentRunDetailQuery.data?.standard_items ?? []) {
+      result.set(standardItemKey(item), item)
+    }
+    return result
+  }, [currentRunDetailQuery.data?.standard_items])
+  const previewStandardItemByVarId = useMemo(() => {
+    const result = new Map<string, DetectionStandardItem | StationDetectionConfigDraft['items'][number]>()
+    for (const item of previewConfig?.items ?? previewStandard?.items ?? []) {
+      result.set(standardItemKey(item), item)
+    }
+    return result
+  }, [previewConfig?.items, previewStandard?.items])
+  const displayStandardItemByVarId = activeRun
+    ? standardItemByVarId
+    : previewStandardItemByVarId
+  const historyByVarId = useMemo(
+    () => groupHistoryByVarId(stationHistoryQuery.data?.items ?? []),
+    [stationHistoryQuery.data?.items],
+  )
   const cards = useMemo<MetricCard[]>(
     () =>
       cardOrder
@@ -1192,7 +1478,30 @@ export function StationOperationPage() {
               ? snapshotsByVarID.get(String(bindingWireId(binding)))
               : undefined
           const value = numericSnapshotValue(snapshot)
-          const limits = bindingLimits(binding)
+          const standardItem =
+            bindingWireId(binding) !== undefined
+              ? displayStandardItemByVarId.get(String(bindingWireId(binding)))
+              : undefined
+          const bindingLimitValues = bindingLimits(binding)
+          const limits = {
+            min:
+              standardItem?.limit_l ??
+              standardItem?.limit_ll ??
+              bindingLimitValues.min,
+            max:
+              standardItem?.limit_h ??
+              standardItem?.limit_hh ??
+              bindingLimitValues.max,
+          }
+          const precision =
+            standardItem?.decimal_places ?? binding.decimal_places ?? 2
+          const history =
+            bindingWireId(binding) !== undefined
+              ? buildHistoryTrend(
+                  historyByVarId.get(String(bindingWireId(binding))) ?? [],
+                  precision,
+                )
+              : []
           const Icon = iconForBinding(binding)
           return {
             id,
@@ -1202,14 +1511,29 @@ export function StationOperationPage() {
             color: cardColors[index % cardColors.length],
             icon: <Icon size={15} />,
             value,
-            precision: binding.decimal_places ?? 2,
-            trend: trendFromValue(value, limits.min, limits.max),
+            precision,
+            trend: buildCardTrend({
+              history,
+              value,
+              min: limits.min,
+              max: limits.max,
+              lastUpdate: snapshot?.last_update,
+            }),
+            axisMode: cardAxisModes[id] ?? 'standard',
             ...(limits.min !== undefined ? { min: limits.min } : {}),
             ...(limits.max !== undefined ? { max: limits.max } : {}),
           }
         })
         .filter((card) => card !== undefined),
-    [bindingByCardId, cardOrder, i18n.resolvedLanguage, snapshotsByVarID],
+    [
+      bindingByCardId,
+      cardAxisModes,
+      cardOrder,
+      historyByVarId,
+      i18n.resolvedLanguage,
+      snapshotsByVarID,
+      displayStandardItemByVarId,
+    ],
   )
 
   const templateTableBindings = useMemo<StationViewBindingWithItem[]>(
@@ -1243,21 +1567,30 @@ export function StationOperationPage() {
             ? snapshotsByVarID.get(String(bindingWireId(binding)))
             : undefined
         const value = numericSnapshotValue(snapshot)
+        const standardItem =
+          bindingWireId(binding) !== undefined
+            ? displayStandardItemByVarId.get(String(bindingWireId(binding)))
+            : undefined
         return {
           key,
           itemUid: binding.item_uid,
           pinned: binding.pinned === true,
           name: bindingDisplayName(binding, i18n.resolvedLanguage),
-          standard: formatStandardRange(binding),
+          standard: formatStandardRange(binding, standardItem),
           value: formatMetricValue(
             value,
             binding.unit ?? '',
-            binding.decimal_places ?? 2,
+            standardItem?.decimal_places ?? binding.decimal_places ?? 2,
           ),
-          ok: isWithinLimits(value, binding),
+          ok: isWithinLimits(value, binding, standardItem),
         }
       }),
-    [i18n.resolvedLanguage, snapshotsByVarID, tableBindings],
+    [
+      displayStandardItemByVarId,
+      i18n.resolvedLanguage,
+      snapshotsByVarID,
+      tableBindings,
+    ],
   )
   const sortedStationRows = stationRows
   const alarmOn = stationRows.some((row) => !row.ok)
@@ -1334,6 +1667,29 @@ export function StationOperationPage() {
     saveStationViewItems(nextItems)
   }
 
+  function handleCardOrderCommit(ids: string[]) {
+    setPreviewCardOrder(ids)
+    persistCardOrder(ids)
+  }
+
+  const handleToggleCardAxisMode = useCallback(
+    (cardId: string) =>
+      setCardAxisState((current) => {
+        const modes = current.scope === cardAxisScope ? current.modes : {}
+        return {
+          scope: cardAxisScope,
+          modes: {
+            ...modes,
+            [cardId]:
+              (modes[cardId] ?? 'standard') === 'standard'
+                ? 'auto'
+                : 'standard',
+          },
+        }
+      }),
+    [cardAxisScope],
+  )
+
   const startRunMutation = useMutation({
     mutationFn: async (values: StartDetectionFormValues) => {
       const requestVariable = findStartDetectionRequestVar(
@@ -1353,11 +1709,22 @@ export function StationOperationPage() {
       const selectedStandard = availableStandards.find(
         (standard) => standard.id === values.standard_id,
       )
+      const selectedDraft =
+        values.project_id && selectedStandard
+          ? previewConfigsByProject[values.project_id]
+          : undefined
+      const draftMatchesStandard =
+        selectedDraft?.standardId !== undefined &&
+        selectedDraft.standardId === selectedStandard?.id
+      const requestStandardForReport =
+        draftMatchesStandard && selectedStandard
+          ? { ...selectedStandard, items: selectedDraft.items }
+          : selectedStandard
       const requestProjectVariables = variables.filter(
         (variable) => variable.project_id === values.project_id,
       )
       const defaultReportVarIds = standardReportVarIds(
-        selectedStandard,
+        requestStandardForReport,
         requestProjectVariables,
       )
       const configEnabled = values.config_enabled === true
@@ -1369,7 +1736,7 @@ export function StationOperationPage() {
         device_model: values.device_model?.trim() || undefined,
         test_no: values.test_no?.trim() || undefined,
         mode: values.mode,
-        standard_id: configEnabled ? values.standard_id : undefined,
+        standard_id: configEnabled && !draftMatchesStandard ? values.standard_id : undefined,
         config_enabled: configEnabled,
         config_code: configEnabled
           ? selectedStandard?.standard_code
@@ -1378,7 +1745,9 @@ export function StationOperationPage() {
           ? standardDisplayName(selectedStandard, i18n.resolvedLanguage)
           : undefined,
         config_version: configEnabled ? selectedStandard?.version : undefined,
-        config_hash: configEnabled ? selectedStandard?.config_hash : undefined,
+        config_hash: configEnabled && !draftMatchesStandard ? selectedStandard?.config_hash : undefined,
+        custom_items: configEnabled && draftMatchesStandard ? selectedDraft.items : undefined,
+        process_params: draftMatchesStandard ? selectedDraft.processParams : undefined,
         report_request: buildReportRequest(values, defaultReportVarIds),
         duration_sec: values.duration_min
           ? values.duration_min * 60
@@ -1626,6 +1995,36 @@ export function StationOperationPage() {
     saveStationViewItems(nextItems)
   }
 
+  function openConfigPreview() {
+    setConfigPreviewOpen(true)
+  }
+
+  function applyConfigPreview(draft: StationDetectionConfigDraft) {
+    if (!validSelectedProjectId) return
+    setPreviewConfigsByProject((current) => ({
+      ...current,
+      [validSelectedProjectId]: draft,
+    }))
+    const nextStandard = availableStandards.find(
+      (standard) => standard.id === draft.standardId,
+    )
+    const draftStandard = nextStandard
+      ? { ...nextStandard, items: draft.items }
+      : undefined
+    const nextVarIds = standardReportVarIds(draftStandard, stationVariables)
+    if (!activeRun) {
+      startForm.setFieldsValue({
+        project_id: validSelectedProjectId,
+        mode: nextStandard?.mode ?? startForm.getFieldValue('mode'),
+        config_enabled: true,
+        standard_id: nextStandard?.id,
+      })
+      fillEmptyReportVariables(nextVarIds)
+    }
+    messageApi.success(t('station.configPreview.applied'))
+    setConfigPreviewOpen(false)
+  }
+
   function fillEmptyReportVariables(varIds = selectedStandardReportVarIds) {
     if (varIds.length === 0) return
     const currentRows =
@@ -1652,9 +2051,17 @@ export function StationOperationPage() {
 
   function openStartModal() {
     const targetProject = selectedProject ?? projects[0]
-    const defaultStandard = availableStandards[0]
+    const appliedDraft = targetProject?.id
+      ? previewConfigsByProject[targetProject.id]
+      : undefined
+    const defaultStandard =
+      availableStandards.find((standard) => standard.id === appliedDraft?.standardId) ??
+      availableStandards[0]
+    const defaultStandardForReport = appliedDraft && defaultStandard
+      ? { ...defaultStandard, items: appliedDraft.items }
+      : defaultStandard
     const defaultReportVarIds = standardReportVarIds(
-      defaultStandard,
+      defaultStandardForReport,
       stationVariables,
     )
     startForm.setFieldsValue({
@@ -1742,7 +2149,11 @@ export function StationOperationPage() {
   const statusConfig = selectedProject?.model_name || activeRun?.mode || 'A'
   const statusTask = activeRun?.test_no ?? t('station.run.idle')
   const selectedStandardLabel =
-    activeRun?.standard_code || availableStandards[0]?.standard_code || '--'
+    activeRun?.standard_code ||
+    (previewStandard
+      ? standardDisplayName(previewStandard, i18n.resolvedLanguage)
+      : availableStandards[0]?.standard_code) ||
+    '--'
   const effectiveTemplate = stationViewQuery.data?.template
   const visibleTemplates = stationViewTemplatesQuery.data?.items ?? []
   const enabledAssignments = visibleTemplates.reduce(
@@ -2075,8 +2486,8 @@ export function StationOperationPage() {
       <div className="station-grid">
         <SortableMetricGrid
           cards={cards}
-          onOrderPreview={setPreviewCardOrder}
-          onOrderCommit={persistCardOrder}
+          onOrderCommit={handleCardOrderCommit}
+          onToggleAxisMode={handleToggleCardAxisMode}
           t={t}
           warnings={stationViewQuery.data?.warnings ?? []}
         />
@@ -2161,6 +2572,13 @@ export function StationOperationPage() {
           </section>
 
           <div className="station-actions">
+            <Button
+              icon={<SlidersHorizontal size={15} />}
+              disabled={!validSelectedProjectId || availableStandards.length === 0}
+              onClick={openConfigPreview}
+            >
+              {t('station.actions.config')}
+            </Button>
             <Button
               icon={<Gauge size={15} />}
               disabled={!validSelectedProjectId}
@@ -2307,6 +2725,32 @@ export function StationOperationPage() {
           {stationViewTemplatesQuery.isFetching ? '...' : enabledAssignments}
         </span>
       </div>
+      <Modal
+        className="station-config-preview-modal"
+        title={t('station.configPreview.title')}
+        open={configPreviewOpen}
+        width={1120}
+        onCancel={() => setConfigPreviewOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <DetectionConfigEditor
+          variant="station-modal"
+          projectId={validSelectedProjectId}
+          selectedProject={selectedProject}
+          initialStandardId={previewConfig?.standardId ?? availableStandards[0]?.id}
+          initialDraft={validSelectedProjectId ? previewConfigsByProject[validSelectedProjectId] : undefined}
+          running={activeRun !== undefined}
+          standards={availableStandards}
+          projects={projects}
+          variables={configVariablesQuery.data ?? []}
+          reportTemplates={reportTemplates}
+          onApplyDraft={(draft) => {
+            applyConfigPreview(draft)
+            setConfigPreviewOpen(false)
+          }}
+        />
+      </Modal>
       <Modal
         className="station-run-modal"
         title={t('station.run.startTitle')}
@@ -2981,19 +3425,21 @@ export function StationOperationPage() {
 
 function SortableMetricGrid({
   cards,
-  onOrderPreview,
   onOrderCommit,
+  onToggleAxisMode,
   t,
   warnings,
 }: {
   cards: MetricCard[]
-  onOrderPreview: (ids: string[]) => void
   onOrderCommit: (ids: string[]) => void
+  onToggleAxisMode: (id: string) => void
   t: (key: string) => string
   warnings: string[]
 }) {
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null)
-  const [droppingId, setDroppingId] = useState<UniqueIdentifier | null>(null)
+  const [activeCardSize, setActiveCardSize] = useState<
+    { width: number; height: number } | undefined
+  >()
   const [canScrollDown, setCanScrollDown] = useState(false)
   const [canScrollUp, setCanScrollUp] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -3004,6 +3450,10 @@ function SortableMetricGrid({
     }),
   )
   const activeCard = cards.find((card) => card.id === activeId)
+
+  function cardNodeSelector(id: UniqueIdentifier) {
+    return `[data-metric-card-id="${String(id).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`
+  }
 
   useEffect(() => {
     const scrollElement = scrollRef.current
@@ -3030,39 +3480,38 @@ function SortableMetricGrid({
     }
   }, [cards.length])
 
-  function reorderCards(active: UniqueIdentifier, over: UniqueIdentifier) {
-    if (active === over) return
+  function reorderedCardIds(active: UniqueIdentifier, over: UniqueIdentifier) {
+    if (active === over) return cards.map((item) => item.id)
     const oldIndex = cards.findIndex((item) => item.id === active)
     const newIndex = cards.findIndex((item) => item.id === over)
-    if (oldIndex === -1 || newIndex === -1) return
-    onOrderPreview(arrayMove(cards, oldIndex, newIndex).map((item) => item.id))
+    if (oldIndex === -1 || newIndex === -1) return cards.map((item) => item.id)
+    return arrayMove(cards, oldIndex, newIndex).map((item) => item.id)
   }
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id)
-  }
-
-  function handleDragOver(event: DragOverEvent) {
-    if (!event.over) return
-    reorderCards(event.active.id, event.over.id)
+    const cardNode = document.querySelector<HTMLElement>(
+      cardNodeSelector(event.active.id),
+    )
+    const initialRect =
+      cardNode?.getBoundingClientRect() ?? event.active.rect.current.initial
+    setActiveCardSize(
+      initialRect
+        ? { width: initialRect.width, height: initialRect.height }
+        : undefined,
+    )
   }
 
   function handleDragEnd(event: DragEndEvent) {
-    const finalIds = cards.map((item) => item.id)
+    const currentIds = cards.map((item) => item.id)
+    const finalIds = event.over
+      ? reorderedCardIds(event.active.id, event.over.id)
+      : currentIds
     setActiveId(null)
-    setDroppingId(event.active.id)
-    window.setTimeout(() => setDroppingId(null), 500)
-    onOrderCommit(finalIds)
-  }
-
-  const dropAnimation = {
-    sideEffects: defaultDropAnimationSideEffects({
-      styles: {
-        active: { opacity: '1' },
-      },
-    }),
-    duration: 500,
-    easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+    setActiveCardSize(undefined)
+    if (finalIds.some((id, index) => id !== currentIds[index])) {
+      onOrderCommit(finalIds)
+    }
   }
 
   return (
@@ -3070,11 +3519,10 @@ function SortableMetricGrid({
       sensors={sensors}
       collisionDetection={closestCenter}
       onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={() => {
         setActiveId(null)
-        setDroppingId(null)
+        setActiveCardSize(undefined)
       }}
     >
       <StationCardGridStyles />
@@ -3103,7 +3551,8 @@ function SortableMetricGrid({
                     key={card.id}
                     card={card}
                     label={card.label}
-                    isDropping={droppingId === card.id}
+                    onToggleAxisMode={onToggleAxisMode}
+                    t={t}
                   />
                 ))}
               </SortableContext>
@@ -3140,23 +3589,25 @@ function SortableMetricGrid({
           <ChevronDown size={12} />
         </button>
       </div>
-      <DragOverlay dropAnimation={dropAnimation}>
+      <DragOverlay dropAnimation={null}>
         {activeCard ? (
-          <MetricCardView card={activeCard} label={activeCard.label} dragging />
+          <MetricCardDragPreview card={activeCard} size={activeCardSize} t={t} />
         ) : null}
       </DragOverlay>
     </DndContext>
   )
 }
 
-function SortableMetricCard({
+const SortableMetricCard = memo(function SortableMetricCard({
   card,
   label,
-  isDropping,
+  onToggleAxisMode,
+  t,
 }: {
   card: MetricCard
   label: string
-  isDropping: boolean
+  onToggleAxisMode: (id: string) => void
+  t: (key: string) => string
 }) {
   const {
     attributes,
@@ -3166,7 +3617,7 @@ function SortableMetricCard({
     transition,
     isDragging,
   } = useSortable({ id: card.id })
-  if (isDragging || isDropping) {
+  if (isDragging) {
     return (
       <div
         ref={setNodeRef}
@@ -3180,26 +3631,45 @@ function SortableMetricCard({
     <div
       ref={setNodeRef}
       className="metric-card-shell"
+      data-metric-card-id={card.id}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       {...attributes}
       {...listeners}
     >
-      <MetricCardView card={card} label={label} />
+      <MetricCardView
+        card={card}
+        label={label}
+        onToggleAxisMode={onToggleAxisMode}
+        t={t}
+      />
     </div>
   )
-}
+})
 
-function MetricCardView({
+const MetricCardView = memo(function MetricCardView({
   card,
   label,
+  onToggleAxisMode,
+  t,
   dragging = false,
 }: {
   card: MetricCard
   label: string
+  onToggleAxisMode: (id: string) => void
+  t: (key: string) => string
   dragging?: boolean
 }) {
   return (
     <article
+      role="button"
+      tabIndex={0}
+      title={t('station.chart.toggleScale')}
+      onClick={() => onToggleAxisMode(card.id)}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        onToggleAxisMode(card.id)
+      }}
       className={
         dragging
           ? 'metric-card glass-panel dragging'
@@ -3224,6 +3694,13 @@ function MetricCardView({
           <span />
           <span />
         </div>
+        <span className="metric-axis-mode">
+          {t(
+            card.axisMode === 'standard'
+              ? 'station.chart.standardScale'
+              : 'station.chart.autoScale',
+          )}
+        </span>
       </div>
       <div className="metric-chart">
         <CardChart
@@ -3231,9 +3708,55 @@ function MetricCardView({
           legendName={label}
           min={card.min}
           max={card.max}
+          axisMode={card.axisMode}
         />
       </div>
     </article>
+  )
+})
+
+function MetricCardDragPreview({
+  card,
+  size,
+  t,
+}: {
+  card: MetricCard
+  size?: { width: number; height: number }
+  t: (key: string) => string
+}) {
+  return (
+    <div
+      className="metric-card-drag-preview"
+      style={size ? { width: size.width, height: size.height } : undefined}
+    >
+      <div className="metric-card-drag-preview-head">
+        <div className="metric-title-group">
+          <span
+            className="metric-icon"
+            style={{ color: card.color, backgroundColor: `${card.color}18` }}
+          >
+            {card.icon}
+          </span>
+          <div>
+            <h2>{card.label}</h2>
+            <span>{card.unit}</span>
+          </div>
+        </div>
+        <span className="metric-axis-mode">
+          {t(
+            card.axisMode === 'standard'
+              ? 'station.chart.standardScale'
+              : 'station.chart.autoScale',
+          )}
+        </span>
+      </div>
+      <div className="metric-card-drag-preview-body" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+    </div>
   )
 }
 
@@ -3242,27 +3765,25 @@ function CardChart({
   legendName,
   min,
   max,
+  axisMode,
 }: {
   chartData: TrendPoint[]
   legendName: string
   min?: number
   max?: number
+  axisMode: ChartAxisMode
 }) {
-  const dataValues = chartData.map((item) => item.value)
-  const dataMin = Math.min(...dataValues)
-  const dataMax = Math.max(...dataValues)
-  const yMin = Math.min(dataMin, min ?? dataMin)
-  const yMax = Math.max(dataMax, max ?? dataMax)
-  const range = yMax - yMin
-  const buffer = range === 0 ? yMax * 0.1 || 1 : range * 0.1
-  const domain = [Math.floor(yMin - buffer), Math.ceil(yMax + buffer)]
+  const domain = buildChartDomain({ chartData, min, max, axisMode })
+  const { ref, size } = useChartContainerSize(140)
 
   return (
-    <div className="card-chart-line">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="card-chart-line" ref={ref}>
+      {size ? (
         <AreaChart
+          width={size.width}
+          height={size.height}
           data={chartData}
-          margin={{ top: 20, right: 10, left: -25, bottom: 0 }}
+          margin={{ top: 12, right: 10, left: -25, bottom: 0 }}
         >
           <CartesianGrid
             strokeDasharray="3 4"
@@ -3310,6 +3831,7 @@ function CardChart({
               stroke="#ff4d4f"
               strokeDasharray="2 3"
               strokeWidth={1}
+              ifOverflow="discard"
               label={{
                 position: 'insideTopLeft',
                 value: `Min ${min}`,
@@ -3327,6 +3849,7 @@ function CardChart({
               stroke="#8c8c8c"
               strokeDasharray="2 3"
               strokeWidth={1}
+              ifOverflow="discard"
               label={{
                 position: 'insideTopLeft',
                 value: `Max ${max}`,
@@ -3350,7 +3873,47 @@ function CardChart({
             activeDot={{ r: 3, strokeWidth: 0, fill: '#333' }}
           />
         </AreaChart>
-      </ResponsiveContainer>
+      ) : null}
     </div>
   )
+}
+
+function useChartContainerSize(minHeight: number) {
+  const [node, setNode] = useState<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null)
+
+  useEffect(() => {
+    if (!node) return undefined
+    const update = () => {
+      const rect = node.getBoundingClientRect()
+      const width = Math.floor(rect.width)
+      if (width <= 0) return
+      setSize({
+        width,
+        height: Math.max(minHeight, Math.floor(rect.height)),
+      })
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [minHeight, node])
+
+  return { ref: setNode, size }
+}
+
+function usePageVisibility() {
+  const [pageVisible, setPageVisible] = useState(() => !document.hidden)
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setPageVisible(!document.hidden)
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
+  return pageVisible
 }

@@ -681,14 +681,14 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 		c.JSON(http.StatusOK, standards)
 	})
 	protected.POST("/detection-standards", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
-		var req query.DetectionStandard
+		var req detectionStandardWriteRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
 			return
 		}
-		items := req.Items
-		req.Items = nil
-		standard, err := stationViewQuery.CreateDetectionStandard(&req, items, syncWriteMeta(c))
+		standardReq := req.toModel()
+		items := req.itemModels()
+		standard, err := stationViewQuery.CreateDetectionStandard(&standardReq, items, syncWriteMeta(c))
 		if err != nil {
 			writeSyncedReadError(c, err, "detection standard write failed")
 			return
@@ -753,13 +753,14 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid standard id", "code": "invalid_standard_id"})
 			return
 		}
-		var req query.DetectionStandard
+		var req detectionStandardWriteRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_body"})
 			return
 		}
-		items := req.Items
-		standard, err := stationViewQuery.UpdateDetectionStandard(uint(standardID), detectionStandardDefinitionUpdates(req), &items, syncWriteMeta(c))
+		standardReq := req.toModel()
+		items := req.itemModels()
+		standard, err := stationViewQuery.UpdateDetectionStandard(uint(standardID), detectionStandardDefinitionUpdates(standardReq), &items, syncWriteMeta(c))
 		if err != nil {
 			writeSyncedReadError(c, err, "detection standard write failed")
 			return
@@ -2398,6 +2399,158 @@ type stationViewItemsRequest struct {
 	TemplateUID string                     `json:"template_uid"`
 	ProjectID   uint                       `json:"project_id"`
 	Items       []query.StationViewItemDTO `json:"items"`
+}
+
+type flexibleJSONInt64 int64
+
+func (v *flexibleJSONInt64) UnmarshalJSON(raw []byte) error {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		*v = 0
+		return nil
+	}
+	if strings.HasPrefix(trimmed, `"`) {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return err
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			*v = 0
+			return nil
+		}
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return err
+		}
+		*v = flexibleJSONInt64(parsed)
+		return nil
+	}
+	parsed, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return err
+	}
+	*v = flexibleJSONInt64(parsed)
+	return nil
+}
+
+type detectionStandardWriteRequest struct {
+	ID               uint                                `json:"id"`
+	StandardCode     string                              `json:"standard_code"`
+	Name             string                              `json:"name"`
+	DisplayName      string                              `json:"display_name"`
+	DisplayNameEN    string                              `json:"display_name_en"`
+	DisplayNameJA    string                              `json:"display_name_ja"`
+	ProjectID        *uint                               `json:"project_id"`
+	ProjectCode      string                              `json:"project_code"`
+	ProjectGroup     string                              `json:"project_group"`
+	Mode             string                              `json:"mode"`
+	ReportTemplateID *uint                               `json:"report_template_id"`
+	Version          int                                 `json:"version"`
+	ConfigHash       string                              `json:"config_hash"`
+	Enabled          bool                                `json:"enabled"`
+	SyncScope        string                              `json:"sync_scope"`
+	EdgeInstanceID   string                              `json:"edge_instance_id"`
+	UpdatedByNode    string                              `json:"updated_by_node"`
+	UpdatedByUser    string                              `json:"updated_by_user"`
+	Remark           string                              `json:"remark"`
+	Items            []detectionStandardItemWriteRequest `json:"items"`
+}
+
+type detectionStandardItemWriteRequest struct {
+	ID              uint              `json:"id"`
+	StandardID      uint              `json:"standard_id"`
+	VarID           flexibleJSONInt64 `json:"var_id"`
+	VarName         string            `json:"var_name"`
+	DisplayName     string            `json:"display_name"`
+	DisplayNameEN   string            `json:"display_name_en"`
+	DisplayNameJA   string            `json:"display_name_ja"`
+	CheckEnabled    bool              `json:"check_enabled"`
+	AlarmEnabled    bool              `json:"alarm_enabled"`
+	StoreEnabled    bool              `json:"store_enabled"`
+	CheckCycleMS    int               `json:"check_cycle_ms"`
+	CheckOnStart    bool              `json:"check_on_start"`
+	Required        bool              `json:"required"`
+	CheckMethod     string            `json:"check_method"`
+	TargetValue     string            `json:"target_value"`
+	LimitLL         *float64          `json:"limit_ll"`
+	LimitL          *float64          `json:"limit_l"`
+	LimitH          *float64          `json:"limit_h"`
+	LimitHH         *float64          `json:"limit_hh"`
+	LimitDeadband   float64           `json:"limit_deadband"`
+	ViolationHoldMS int               `json:"violation_hold_ms"`
+	RecoverHoldMS   int               `json:"recover_hold_ms"`
+	QualityPolicy   string            `json:"quality_policy"`
+	Unit            string            `json:"unit"`
+	DecimalPlaces   int               `json:"decimal_places"`
+	SortOrder       int               `json:"sort_order"`
+	SyncScope       string            `json:"sync_scope"`
+	EdgeInstanceID  string            `json:"edge_instance_id"`
+	UpdatedByNode   string            `json:"updated_by_node"`
+	UpdatedByUser   string            `json:"updated_by_user"`
+}
+
+func (req detectionStandardWriteRequest) toModel() query.DetectionStandard {
+	return query.DetectionStandard{
+		ID:               req.ID,
+		StandardCode:     req.StandardCode,
+		Name:             req.Name,
+		DisplayName:      req.DisplayName,
+		DisplayNameEN:    req.DisplayNameEN,
+		DisplayNameJA:    req.DisplayNameJA,
+		ProjectID:        req.ProjectID,
+		ProjectCode:      req.ProjectCode,
+		ProjectGroup:     req.ProjectGroup,
+		Mode:             req.Mode,
+		ReportTemplateID: req.ReportTemplateID,
+		Version:          req.Version,
+		ConfigHash:       req.ConfigHash,
+		Enabled:          req.Enabled,
+		SyncScope:        req.SyncScope,
+		EdgeInstanceID:   req.EdgeInstanceID,
+		UpdatedByNode:    req.UpdatedByNode,
+		UpdatedByUser:    req.UpdatedByUser,
+		Remark:           req.Remark,
+	}
+}
+
+func (req detectionStandardWriteRequest) itemModels() []query.DetectionStandardItem {
+	items := make([]query.DetectionStandardItem, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, query.DetectionStandardItem{
+			ID:              item.ID,
+			StandardID:      item.StandardID,
+			VarID:           int64(item.VarID),
+			VarName:         item.VarName,
+			DisplayName:     item.DisplayName,
+			DisplayNameEN:   item.DisplayNameEN,
+			DisplayNameJA:   item.DisplayNameJA,
+			CheckEnabled:    item.CheckEnabled,
+			AlarmEnabled:    item.AlarmEnabled,
+			StoreEnabled:    item.StoreEnabled,
+			CheckCycleMS:    item.CheckCycleMS,
+			CheckOnStart:    item.CheckOnStart,
+			Required:        item.Required,
+			CheckMethod:     item.CheckMethod,
+			TargetValue:     item.TargetValue,
+			LimitLL:         item.LimitLL,
+			LimitL:          item.LimitL,
+			LimitH:          item.LimitH,
+			LimitHH:         item.LimitHH,
+			LimitDeadband:   item.LimitDeadband,
+			ViolationHoldMS: item.ViolationHoldMS,
+			RecoverHoldMS:   item.RecoverHoldMS,
+			QualityPolicy:   item.QualityPolicy,
+			Unit:            item.Unit,
+			DecimalPlaces:   item.DecimalPlaces,
+			SortOrder:       item.SortOrder,
+			SyncScope:       item.SyncScope,
+			EdgeInstanceID:  item.EdgeInstanceID,
+			UpdatedByNode:   item.UpdatedByNode,
+			UpdatedByUser:   item.UpdatedByUser,
+		})
+	}
+	return items
 }
 
 func syncWriteMeta(c *gin.Context) query.SyncWriteMeta {

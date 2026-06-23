@@ -1,0 +1,100 @@
+.workbench-content:has(.model-stage-debug-page) {
+  overflow: hidden;
+}
+
+.model-stage-debug-page {
+  height: calc(100vh - 56px);
+  min-height: 0;
+  padding: 18px 22px 22px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  overflow: hidden;
+  color: #123152;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.42) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.36) 1px, transparent 1px),
+    radial-gradient(circle at 52% 80%, rgba(255, 255, 255, 0.78), transparent 38%),
+    #a6c0df;
+  background-size: 64px 64px, 64px 64px, auto, auto;
+}
+
+.model-stage-debug-header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.model-stage-debug-header span {
+  color: rgba(18, 49, 82, 0.62);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+}
+
+.model-stage-debug-header h2 {
+  margin: 4px 0 0;
+  color: #07306e;
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.model-stage-debug-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow:
+    0 18px 44px rgba(20, 54, 93, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+}
+
+.model-stage-debug-toolbar {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  pointer-events: none;
+}
+
+.model-stage-debug-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  border-radius: 8px;
+  color: rgba(7, 48, 110, 0.78);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 20px rgba(20, 54, 93, 0.08);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+}
+
+.model-stage-debug-chip svg {
+  color: #1677ff;
+}
+
+.model-stage-debug-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.model-stage-debug-canvas .cockpit-model-stage {
+  inset: 0;
+}
