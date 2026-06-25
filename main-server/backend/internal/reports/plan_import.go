@@ -28,9 +28,10 @@ type PlanImportDraft struct {
 }
 
 type PlanImportCellMappingSpec struct {
-	Sheet  string                     `json:"sheet,omitempty"`
-	Common map[string]string          `json:"common,omitempty"`
-	Rows   []PlanImportCellMappingRow `json:"rows,omitempty"`
+	Sheet        string                     `json:"sheet,omitempty"`
+	Common       map[string]string          `json:"common,omitempty"`
+	CommonValues map[string]string          `json:"common_values,omitempty"`
+	Rows         []PlanImportCellMappingRow `json:"rows,omitempty"`
 }
 
 type PlanImportCellMappingRow struct {
@@ -243,6 +244,9 @@ func (s *Service) parsePlanImportMappedRows(workbook *excelize.File, mapping Pla
 		}
 		common[normalizePlanImportMappingKey(key)] = value
 	}
+	for key, value := range mapping.CommonValues {
+		common[normalizePlanImportMappingKey(key)] = strings.TrimSpace(value)
+	}
 	header := planHeaderIndex([]string{
 		"project_code", "project_name", "project_group", "test_no", "factory_no", "customer_name", "device_model",
 		"variable", "var_name", "display_name", "limit", "limit_l", "limit_h", "check_enabled", "formula_json", "params_json", "setting", "unit", "template_code", "report_name",
@@ -253,15 +257,15 @@ func (s *Service) parsePlanImportMappedRows(workbook *excelize.File, mapping Pla
 		for key, value := range common {
 			values[key] = value
 		}
-		for key, value := range mapped.Values {
-			values[normalizePlanImportMappingKey(key)] = strings.TrimSpace(value)
-		}
 		for key, cell := range mapped.Fields {
 			value, err := mappedCellValue(workbook, sheet, cell)
 			if err != nil {
 				return nil, err
 			}
 			values[normalizePlanImportMappingKey(key)] = value
+		}
+		for key, value := range mapped.Values {
+			values[normalizePlanImportMappingKey(key)] = strings.TrimSpace(value)
 		}
 		for key, cell := range mapped.Params {
 			value, err := mappedCellValue(workbook, sheet, cell)

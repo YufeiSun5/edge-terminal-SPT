@@ -102,10 +102,14 @@ func TestServiceParsesPlanImportDraftWithCellMapping(t *testing.T) {
 			"template_code":"B5",
 			"report_name":"B6"
 		},
+		"common_values":{
+			"report_name":"手动性能报表"
+		},
 		"rows":[{
 			"row_number":12,
 			"values":{
 				"var_name":"supply_air_temp",
+				"limit_h":"25",
 				"check_enabled":"false"
 			},
 			"fields":{
@@ -130,8 +134,11 @@ func TestServiceParsesPlanImportDraftWithCellMapping(t *testing.T) {
 	if row.VariableMatch.VarName != "supply_air_temp" || row.CheckEnabled || row.FormulaJSON != `{"expr":"avg*inlet_area_m2"}` || row.Params["operator"] != "tester" || row.Params["inlet_area_m2"] != "1.25" {
 		t.Fatalf("mapped row values mismatch: %+v", row)
 	}
+	if row.ReportName != "手动性能报表" {
+		t.Fatalf("mapped common value override mismatch: %+v", row)
+	}
 	assertFloatPtr(t, row.Limit.LimitL, floatPtr(1), "mapped lower")
-	assertFloatPtr(t, row.Limit.LimitH, floatPtr(21), "mapped upper")
+	assertFloatPtr(t, row.Limit.LimitH, floatPtr(25), "mapped upper")
 }
 
 func TestServiceConfirmsPlanImportCreatesDetectionStandard(t *testing.T) {

@@ -32,6 +32,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router'
 import {
+  Alert,
   Button,
   Form,
   Input,
@@ -78,14 +79,17 @@ import type {
   HistoryDataItem,
   LimitAlarm,
   LimitAlarmScope,
-  RealtimeVariablesSnapshotPayload,
+  RealtimeWebSocketSubscription,
+  RuntimeDraft,
   StationViewItem,
   StationViewItemPayload,
   StationViewResolvedBinding,
   TagSnapshot,
   TaskFlow,
+  TaskFlowRun,
   VariableConfig,
   VariableWriteResult,
+  VarIdentifier,
 } from '@/shared/api/types'
 import { useAuthStore } from '@/features/auth/authStore'
 import {
@@ -101,11 +105,14 @@ import {
   getLimitAlarms,
   getRealtimeVariables,
   getReportTemplates,
+  getRuntimeDraft,
   getStationViewEffective,
   getStationViewItems,
   getStationViewTemplates,
   getTaskFlows,
+  getTaskFlowRuns,
   getVariables,
+  putRuntimeDraft,
   replaceStationViewItems,
   startDetectionPlan,
   stopDetectionRun,
@@ -113,13 +120,14 @@ import {
 import {
   RealtimeWebSocketCommandError,
   sendRealtimeWebSocketCommand,
-  subscribeRealtimeWebSocket,
 } from '@/features/realtime/realtimeClient'
+import { useRealtimeSnapshots } from '@/features/realtime/useRealtimeSnapshots'
 import { getHistoryData } from '@/features/history-query/api'
 import {
   DetectionConfigEditor,
   type StationDetectionConfigDraft,
 } from '@/features/detection-config/DetectionConfigPage'
+import { ApiError } from '@/shared/api/http'
 import { detectionStandardScopeLabel } from '@/shared/detection/standardScope'
 import { languageCode } from '@/shared/i18n/language'
 import { StationCardGridStyles } from './components/StationCardGridStyles'
@@ -183,9 +191,43 @@ const startDetectionCommand = 'start_detection'
 const startDetectionModule = 'builtin.start_detection_run'
 const startDetectionConfirmAttempts = 8
 const startDetectionConfirmIntervalMs = 500
+const stationChartRealtimeThrottleMs = 2000
+const stationDetectionPreloadNamespace = 'station.detection_preload'
+const stationDetectionPreloadTTLSec = 24 * 60 * 60
+const emptyRealtimeVarIds: VarIdentifier[] = []
+
+type StationDetectionPreloadDraftData = {
+  standard_id?: number
+  config_code?: string
+  config_name?: string
+  config_version?: number
+  config_hash?: string
+  items?: DetectionStandardItemPayload[]
+  process_params?: {
+    inlet_area_m2?: number
+  }
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function stationDraftFromRuntimeDraft(
+  draft: RuntimeDraft<StationDetectionPreloadDraftData> | undefined,
+  projectId: number | undefined,
+): StationDetectionConfigDraft | undefined {
+  if (!draft || projectId === undefined) return undefined
+  return {
+    projectId,
+    standardId: draft.data.standard_id,
+    configCode: draft.data.config_code,
+    configName: draft.data.config_name,
+    configVersion: draft.data.config_version,
+    configHash: draft.data.config_hash,
+    items: draft.data.items ?? [],
+    processParams: draft.data.process_params ?? {},
+    updatedAt: Date.parse(draft.updated_at) || Date.now(),
+  }
 }
 
 function stationBindingDefaultOrder(
@@ -590,6 +632,50 @@ function buildCardTrend({
   return [...history, realtimePoint].slice(-61)
 }
 
+function useThrottledValue<T>(value: T, intervalMs: number) {
+  const [throttledValue, setThrottledValue] = useState(value)
+  const latestValueRef = useRef(value)
+  const lastUpdateAtRef = useRef(0)
+  const timerRef = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    latestValueRef.current = value
+    const now = Date.now()
+    const remaining = intervalMs - (now - lastUpdateAtRef.current)
+
+    if (remaining <= 0) {
+      if (timerRef.current !== undefined) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = undefined
+      }
+      lastUpdateAtRef.current = now
+      setThrottledValue(value)
+      return undefined
+    }
+
+    if (timerRef.current === undefined) {
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = undefined
+        lastUpdateAtRef.current = Date.now()
+        setThrottledValue(latestValueRef.current)
+      }, remaining)
+    }
+
+    return undefined
+  }, [intervalMs, value])
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== undefined) {
+        window.clearTimeout(timerRef.current)
+      }
+    },
+    [],
+  )
+
+  return throttledValue
+}
+
 function buildChartDomain({
   chartData,
   min,
@@ -672,6 +758,73 @@ function iconForBinding(binding: StationViewResolvedBinding) {
   return Gauge
 }
 
+function standardItemToStationBinding(
+  item:
+    | DetectionRunStandardItem
+    | DetectionStandardItem
+    | StationDetectionConfigDraft['items'][number],
+  index: number,
+): StationViewBindingWithItem {
+  const key = standardItemKey(item)
+  return {
+    source: 'detection_item',
+    var_id: item.var_id,
+    var_id_text: item.var_id_text ? String(item.var_id_text) : undefined,
+    var_name: item.var_name,
+    display_name: item.display_name,
+    display_name_en: item.display_name_en,
+    display_name_ja: item.display_name_ja,
+    unit: item.unit,
+    decimal_places: item.decimal_places ?? 2,
+    limit_l: item.limit_l,
+    limit_h: item.limit_h,
+    limit_ll: item.limit_ll,
+    limit_hh: item.limit_hh,
+    check_enabled: item.check_enabled,
+    alarm_enabled: item.alarm_enabled,
+    sort_order: item.sort_order ?? index + 1,
+    item_uid: `run-standard-${key}`,
+  }
+}
+
+function mergeMetricBindings(
+  templateBindings: StationViewBindingWithItem[],
+  configBindings: StationViewBindingWithItem[],
+) {
+  const result: StationViewBindingWithItem[] = []
+  const seen = new Set<string>()
+  for (const binding of [...configBindings, ...templateBindings]) {
+    const key = bindingWireId(binding)
+    const uniqueKey =
+      key !== undefined
+        ? `var:${String(key)}`
+        : `fallback:${binding.item_uid ?? binding.var_name ?? result.length}`
+    if (seen.has(uniqueKey)) continue
+    seen.add(uniqueKey)
+    result.push(binding)
+  }
+  return result
+}
+
+function mergeTableBindings(
+  templateBindings: StationViewBindingWithItem[],
+  configBindings: StationViewBindingWithItem[],
+) {
+  const result: StationViewBindingWithItem[] = []
+  const seen = new Set<string>()
+  for (const binding of [...templateBindings, ...configBindings]) {
+    const key = bindingWireId(binding)
+    const uniqueKey =
+      key !== undefined
+        ? `var:${String(key)}`
+        : `fallback:${binding.item_uid ?? binding.var_name ?? result.length}`
+    if (seen.has(uniqueKey)) continue
+    seen.add(uniqueKey)
+    result.push(binding)
+  }
+  return result
+}
+
 function buildReportRequest(
   values: StartDetectionFormValues,
   fallbackVarIds: Array<string | number> = [],
@@ -732,13 +885,51 @@ function taskFlowStartsDetection(flow: TaskFlow) {
   )
 }
 
-function findStartDetectionRequestVar(flows: TaskFlow[]) {
-  return flows
-    .filter((flow) => flow.enabled)
-    .filter((flow) => flow.trigger_type === 'data_change')
-    .filter(taskFlowStartsDetection)
-    .flatMap((flow) => flow.vars ?? [])
-    .find((variable) => variable.role === 'watch')
+function findStartDetectionRequestTarget(flows: TaskFlow[]) {
+  for (const flow of flows) {
+    if (!flow.enabled) continue
+    if (flow.trigger_type !== 'data_change') continue
+    if (!taskFlowStartsDetection(flow)) continue
+    const variable = (flow.vars ?? []).find((item) => item.role === 'watch')
+    if (variable) return { flow, variable }
+  }
+  return undefined
+}
+
+function nonEmptyText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function runtimeDraftMatchesStandard(
+  draft: StationDetectionConfigDraft | undefined,
+  standard: DetectionStandard | undefined,
+) {
+  if (!draft || !standard || draft.standardId !== standard.id) return false
+  const draftHash = nonEmptyText(draft.configHash)
+  const standardHash = nonEmptyText(standard.config_hash)
+  if (draftHash || standardHash) return draftHash !== '' && draftHash === standardHash
+  if (
+    draft.configVersion !== undefined &&
+    standard.version !== undefined &&
+    draft.configVersion !== standard.version
+  )
+    return false
+  return true
+}
+
+function runtimeDraftIsStaleForStandard(
+  draft: StationDetectionConfigDraft | undefined,
+  standard: DetectionStandard | undefined,
+) {
+  if (!draft || !standard || draft.standardId !== standard.id) return false
+  const draftHash = nonEmptyText(draft.configHash)
+  const standardHash = nonEmptyText(standard.config_hash)
+  if (draftHash && standardHash && draftHash !== standardHash) return true
+  return (
+    draft.configVersion !== undefined &&
+    standard.version !== undefined &&
+    draft.configVersion !== standard.version
+  )
 }
 
 async function waitForNewDetectionRun(
@@ -759,6 +950,68 @@ async function waitForNewDetectionRun(
     await sleep(startDetectionConfirmIntervalMs)
   }
   return undefined
+}
+
+function parseRecordJSON(value: string | undefined) {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return typeof parsed === 'object' && parsed ? parsed as Record<string, unknown> : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function taskFlowRunMatchesRequest(run: TaskFlowRun, requestId: string) {
+  const input = parseRecordJSON(run.input_snapshot)
+  if (input?.request_id === requestId) return true
+  const result = parseRecordJSON(run.result_json)
+  const context = result?.context
+  return (
+    typeof context === 'object' &&
+    context !== null &&
+    (context as Record<string, unknown>).request_id === requestId
+  )
+}
+
+function taskFlowRunFailureReason(run: TaskFlowRun) {
+  const direct = nonEmptyText(run.error_message)
+  if (direct) return direct
+  const result = parseRecordJSON(run.result_json)
+  const steps = Array.isArray(result?.steps) ? result.steps : []
+  for (const step of steps) {
+    if (typeof step !== 'object' || step === null) continue
+    const error = nonEmptyText((step as Record<string, unknown>).error)
+    if (error) return error
+  }
+  return ''
+}
+
+function isRuntimeDraftStaleError(reason: string) {
+  const normalized = reason.toLowerCase()
+  return normalized.includes('runtime draft') && normalized.includes('stale')
+}
+
+async function findFailedStartTaskFlowRun(
+  projectId: number,
+  flowId: number,
+  triggerVarId: VarIdentifier,
+  requestId: string,
+  fromMs: number,
+) {
+  const runs = await getTaskFlowRuns({
+    project_id: projectId,
+    flow_id: flowId,
+    trigger_var_id: triggerVarId,
+    trigger_type: 'data_change',
+    from: new Date(fromMs).toISOString(),
+    limit: 20,
+  })
+    .then((response) => response.items)
+    .catch(() => [] as TaskFlowRun[])
+  return runs.find(
+    (run) => run.status === 'failed' && taskFlowRunMatchesRequest(run, requestId),
+  )
 }
 
 function tagWireId(variable: Pick<TagSnapshot, 'var_id' | 'var_id_text'>) {
@@ -980,9 +1233,6 @@ export function StationOperationPage() {
   )
   const [startModalOpen, setStartModalOpen] = useState(false)
   const [configPreviewOpen, setConfigPreviewOpen] = useState(false)
-  const [previewConfigsByProject, setPreviewConfigsByProject] = useState<
-    Record<number, StationDetectionConfigDraft>
-  >({})
   const [alarmModalOpen, setAlarmModalOpen] = useState(false)
   const [pidModalOpen, setPIDModalOpen] = useState(false)
   const [previewCardOrder, setPreviewCardOrder] = useState<string[]>([])
@@ -1018,6 +1268,13 @@ export function StationOperationPage() {
     Number.isFinite(Number(startProjectId)) && Number(startProjectId) > 0
       ? Number(startProjectId)
       : validSelectedProjectId
+  const runtimeDraftQueryKey = [
+    'station',
+    'runtime-draft',
+    stationDetectionPreloadNamespace,
+    validSelectedProjectId,
+    selectedEdgeInstanceId,
+  ]
   const stationViewQuery = useQuery({
     queryKey: [
       'station',
@@ -1043,24 +1300,64 @@ export function StationOperationPage() {
     enabled: validSelectedProjectId !== undefined,
     retry: false,
   })
-  const variablesQuery = useQuery({
-    queryKey: [
+  const stationRealtimeVarIds = stationViewQuery.data?.ws_subscription.var_ids ?? emptyRealtimeVarIds
+  const stationRealtimeVarIdsKey = stationRealtimeVarIds.map((value) => String(value)).join(',')
+  const stationRealtimeSubscription = useMemo<RealtimeWebSocketSubscription>(
+    () => ({
+      topics: ['realtime.variables'],
+      edge_instance_id: selectedEdgeInstanceId,
+      project_id: validSelectedProjectId,
+      var_ids: stationRealtimeVarIds,
+    }),
+    [selectedEdgeInstanceId, stationRealtimeVarIds, validSelectedProjectId],
+  )
+  const stationRealtime = useRealtimeSnapshots({
+    enabled: validSelectedProjectId !== undefined,
+    subscription: stationRealtimeSubscription,
+    fallbackQueryKey: [
       'edge',
       'realtime-variables',
       validSelectedProjectId,
       selectedEdgeInstanceId,
+      stationRealtimeVarIdsKey,
     ],
-    queryFn: () =>
+    fallbackQueryFn: () =>
       getRealtimeVariables(
         validSelectedProjectId
           ? {
               project_id: validSelectedProjectId,
               edge_instance_id: selectedEdgeInstanceId,
+              var_id: stationRealtimeVarIds.length > 0 ? stationRealtimeVarIds : undefined,
             }
           : {},
       ),
+    fallbackIntervalMs: 2000,
+    uiCommitMs: 500,
+  })
+  const runtimeDraftQuery = useQuery<
+    RuntimeDraft<StationDetectionPreloadDraftData> | undefined
+  >({
+    queryKey: runtimeDraftQueryKey,
+    queryFn: async () => {
+      try {
+        return await getRuntimeDraft<StationDetectionPreloadDraftData>(
+          stationDetectionPreloadNamespace,
+          {
+            scope_type: 'project',
+            scope_id: String(validSelectedProjectId!),
+            project_id: validSelectedProjectId!,
+            edge_instance_id: selectedEdgeInstanceId,
+          },
+        )
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return undefined
+        }
+        throw error
+      }
+    },
     enabled: validSelectedProjectId !== undefined,
-    staleTime: 30000,
+    staleTime: 5000,
     retry: false,
   })
   const pidVariablesQuery = useQuery({
@@ -1151,44 +1448,6 @@ export function StationOperationPage() {
     refetchInterval: alarmModalOpen ? 5000 : false,
     retry: false,
   })
-  const [wsSnapshotState, setWsSnapshotState] = useState<{
-    key: string
-    items: TagSnapshot[]
-  }>({ key: '', items: [] })
-  const [pidWsSnapshotState, setPIDWsSnapshotState] = useState<{
-    key: string
-    items: TagSnapshot[]
-  }>({ key: '', items: [] })
-  const wsVarIdsKey = (
-    stationViewQuery.data?.ws_subscription.var_ids ?? []
-  ).join(',')
-  const wsSubscriptionKey = `${validSelectedProjectId ?? ''}:${wsVarIdsKey}`
-  useEffect(() => {
-    if (!validSelectedProjectId || !stationViewQuery.data) return undefined
-    return subscribeRealtimeWebSocket({
-      subscription: {
-        topics: ['realtime.variables'],
-        edge_instance_id: selectedEdgeInstanceId,
-        project_id: validSelectedProjectId,
-        var_ids: stationViewQuery.data.ws_subscription.var_ids,
-      },
-      onMessage: (envelope) => {
-        if (envelope.type !== 'realtime.variables.snapshot') return
-        const payload = envelope.payload as
-          | RealtimeVariablesSnapshotPayload
-          | undefined
-        setWsSnapshotState({
-          key: wsSubscriptionKey,
-          items: payload?.items ?? [],
-        })
-      },
-    })
-  }, [
-    selectedEdgeInstanceId,
-    validSelectedProjectId,
-    stationViewQuery.data,
-    wsSubscriptionKey,
-  ])
   const pidVariables = useMemo(
     () => pidVariablesQuery.data ?? [],
     [pidVariablesQuery.data],
@@ -1199,46 +1458,35 @@ export function StationOperationPage() {
     [pidVariables],
   )
   const pidSubscriptionKey = `${validSelectedProjectId ?? ''}:${pidVarIds.join(',')}`
-  useEffect(() => {
-    if (!pidModalOpen || !validSelectedProjectId || pidVarIds.length === 0)
-      return undefined
-    return subscribeRealtimeWebSocket({
-      subscription: {
-        topics: ['realtime.variables'],
+  const pidRealtimeSubscription = useMemo<RealtimeWebSocketSubscription>(
+    () => ({
+      topics: ['realtime.variables'],
+      edge_instance_id: selectedEdgeInstanceId,
+      project_id: validSelectedProjectId,
+      var_ids: pidVarIds,
+    }),
+    [pidVarIds, selectedEdgeInstanceId, validSelectedProjectId],
+  )
+  const pidRealtime = useRealtimeSnapshots({
+    enabled: pidModalOpen && validSelectedProjectId !== undefined && pidVarIds.length > 0,
+    subscription: pidRealtimeSubscription,
+    fallbackQueryKey: [
+      'station',
+      'pid-realtime',
+      validSelectedProjectId,
+      selectedEdgeInstanceId,
+      pidSubscriptionKey,
+    ],
+    fallbackQueryFn: () =>
+      getRealtimeVariables({
+        project_id: validSelectedProjectId!,
         edge_instance_id: selectedEdgeInstanceId,
-        project_id: validSelectedProjectId,
-        var_ids: pidVarIds,
-      },
-      onMessage: (envelope) => {
-        if (envelope.type !== 'realtime.variables.snapshot') return
-        const payload = envelope.payload as
-          | RealtimeVariablesSnapshotPayload
-          | undefined
-        setPIDWsSnapshotState({
-          key: pidSubscriptionKey,
-          items: payload?.items ?? [],
-        })
-      },
-    })
-  }, [
-    pidModalOpen,
-    selectedEdgeInstanceId,
-    validSelectedProjectId,
-    pidSubscriptionKey,
-    pidVarIds,
-  ])
-  const variables = useMemo(() => {
-    const merged = new Map<string, TagSnapshot>()
-    for (const variable of variablesQuery.data ?? []) {
-      merged.set(snapshotKey(variable), variable)
-    }
-    const currentWSSnapshots =
-      wsSnapshotState.key === wsSubscriptionKey ? wsSnapshotState.items : []
-    for (const variable of currentWSSnapshots) {
-      merged.set(snapshotKey(variable), variable)
-    }
-    return Array.from(merged.values())
-  }, [variablesQuery.data, wsSnapshotState, wsSubscriptionKey])
+        var_id: pidVarIds,
+      }),
+    fallbackIntervalMs: 2000,
+    uiCommitMs: 500,
+  })
+  const variables = useMemo(() => stationRealtime.snapshots, [stationRealtime.snapshots])
   const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === validSelectedProjectId),
@@ -1324,9 +1572,10 @@ export function StationOperationPage() {
     () => standards,
     [standards],
   )
-  const previewConfig = validSelectedProjectId
-    ? previewConfigsByProject[validSelectedProjectId]
-    : undefined
+  const previewConfig = useMemo(
+    () => stationDraftFromRuntimeDraft(runtimeDraftQuery.data, validSelectedProjectId),
+    [runtimeDraftQuery.data, validSelectedProjectId],
+  )
   const previewStandard = useMemo(
     () =>
       previewConfig
@@ -1336,16 +1585,31 @@ export function StationOperationPage() {
         : undefined,
     [availableStandards, previewConfig],
   )
+  const previewConfigStale = useMemo(
+    () => runtimeDraftIsStaleForStandard(previewConfig, previewStandard),
+    [previewConfig, previewStandard],
+  )
+  const effectivePreviewConfig = previewConfigStale ? undefined : previewConfig
   const selectedStartStandard = useMemo(
     () => availableStandards.find((standard) => standard.id === selectedStandardId),
     [availableStandards, selectedStandardId],
   )
+  const selectedStartDraft =
+    startProjectId === previewConfig?.projectId &&
+    selectedStartStandard?.id === previewConfig?.standardId
+      ? previewConfig
+      : undefined
+  const selectedStartDraftStale = runtimeDraftIsStaleForStandard(
+    selectedStartDraft,
+    selectedStartStandard,
+  )
   const selectedStartStandardForReport = useMemo(
     () =>
-      selectedStartStandard && previewConfig?.standardId === selectedStartStandard.id
-        ? { ...selectedStartStandard, items: previewConfig.items }
+      selectedStartStandard &&
+      effectivePreviewConfig?.standardId === selectedStartStandard.id
+        ? { ...selectedStartStandard, items: effectivePreviewConfig.items }
         : selectedStartStandard,
-    [previewConfig, selectedStartStandard],
+    [effectivePreviewConfig, selectedStartStandard],
   )
   const selectedStandardReportVarIds = useMemo(
     () => standardReportVarIds(selectedStartStandardForReport, stationVariables),
@@ -1383,17 +1647,17 @@ export function StationOperationPage() {
     }
     return result
   }, [stationVariables])
+  const chartSnapshotsByVarID = useThrottledValue(
+    snapshotsByVarID,
+    stationChartRealtimeThrottleMs,
+  )
   const pidSnapshotsByVarID = useMemo(() => {
     const result = new Map<string, TagSnapshot>(snapshotsByVarID)
-    const currentWSSnapshots =
-      pidWsSnapshotState.key === pidSubscriptionKey
-        ? pidWsSnapshotState.items
-        : []
-    for (const variable of currentWSSnapshots) {
+    for (const variable of pidRealtime.snapshots) {
       result.set(snapshotKey(variable), variable)
     }
     return result
-  }, [pidSubscriptionKey, pidWsSnapshotState, snapshotsByVarID])
+  }, [pidRealtime.snapshots, snapshotsByVarID])
   const rawStationViewItems = stationViewItemsQuery.data?.items ?? []
   const templateMetricBindings = useMemo<StationViewBindingWithItem[]>(
     () =>
@@ -1413,13 +1677,33 @@ export function StationOperationPage() {
         ),
     [previewPinnedRows, stationViewQuery.data],
   )
-  const metricBindings = useMemo(
+  const runMetricBindings = useMemo<StationViewBindingWithItem[]>(
     () =>
-      sortStationBindingsByDefaultOrder(templateMetricBindings).slice(
+      (currentRunDetailQuery.data?.standard_items ?? [])
+        .filter((item) => item.check_enabled || item.store_enabled)
+        .map((item, index) => standardItemToStationBinding(item, index)),
+    [currentRunDetailQuery.data?.standard_items],
+  )
+  const previewConfigBindings = useMemo<StationViewBindingWithItem[]>(
+    () =>
+      (effectivePreviewConfig?.items ?? previewStandard?.items ?? [])
+        .filter((item) => item.check_enabled !== false || item.store_enabled === true)
+        .map((item, index) => standardItemToStationBinding(item, index)),
+    [effectivePreviewConfig?.items, previewStandard?.items],
+  )
+  const displayConfigBindings = activeRun
+    ? runMetricBindings
+    : previewConfigBindings
+  const metricBindings = useMemo(
+    () => {
+      const sortedTemplateBindings =
+        sortStationBindingsByDefaultOrder(templateMetricBindings)
+      return mergeMetricBindings(sortedTemplateBindings, displayConfigBindings).slice(
         0,
         stationMetricCardLimit,
-      ),
-    [templateMetricBindings],
+      )
+    },
+    [displayConfigBindings, templateMetricBindings],
   )
   const defaultCardIds = useMemo(
     () => metricBindings.map((binding, index) => bindingKey(binding, index)),
@@ -1427,6 +1711,7 @@ export function StationOperationPage() {
   )
   useEffect(() => {
     setPreviewCardOrder([])
+    setPreviewPinnedRows({})
   }, [
     selectedEdgeInstanceId,
     validSelectedProjectId,
@@ -1455,11 +1740,11 @@ export function StationOperationPage() {
   }, [currentRunDetailQuery.data?.standard_items])
   const previewStandardItemByVarId = useMemo(() => {
     const result = new Map<string, DetectionStandardItem | StationDetectionConfigDraft['items'][number]>()
-    for (const item of previewConfig?.items ?? previewStandard?.items ?? []) {
+    for (const item of effectivePreviewConfig?.items ?? previewStandard?.items ?? []) {
       result.set(standardItemKey(item), item)
     }
     return result
-  }, [previewConfig?.items, previewStandard?.items])
+  }, [effectivePreviewConfig?.items, previewStandard?.items])
   const displayStandardItemByVarId = activeRun
     ? standardItemByVarId
     : previewStandardItemByVarId
@@ -1473,11 +1758,11 @@ export function StationOperationPage() {
         .map((id, index) => {
           const binding = bindingByCardId.get(id)
           if (!binding) return undefined
-          const snapshot =
+          const chartSnapshot =
             bindingWireId(binding) !== undefined
-              ? snapshotsByVarID.get(String(bindingWireId(binding)))
+              ? chartSnapshotsByVarID.get(String(bindingWireId(binding)))
               : undefined
-          const value = numericSnapshotValue(snapshot)
+          const chartValue = numericSnapshotValue(chartSnapshot)
           const standardItem =
             bindingWireId(binding) !== undefined
               ? displayStandardItemByVarId.get(String(bindingWireId(binding)))
@@ -1510,14 +1795,14 @@ export function StationOperationPage() {
             unit: binding.unit ?? '',
             color: cardColors[index % cardColors.length],
             icon: <Icon size={15} />,
-            value,
+            value: chartValue,
             precision,
             trend: buildCardTrend({
               history,
-              value,
+              value: chartValue,
               min: limits.min,
               max: limits.max,
-              lastUpdate: snapshot?.last_update,
+              lastUpdate: chartSnapshot?.last_update,
             }),
             axisMode: cardAxisModes[id] ?? 'standard',
             ...(limits.min !== undefined ? { min: limits.min } : {}),
@@ -1529,9 +1814,9 @@ export function StationOperationPage() {
       bindingByCardId,
       cardAxisModes,
       cardOrder,
+      chartSnapshotsByVarID,
       historyByVarId,
       i18n.resolvedLanguage,
-      snapshotsByVarID,
       displayStandardItemByVarId,
     ],
   )
@@ -1548,15 +1833,19 @@ export function StationOperationPage() {
           (item.resolved_bindings ?? []).map((binding) => ({
             ...binding,
             item_uid: item.item_uid,
-            pinned: item.pinned,
+            pinned: previewPinnedRows[item.item_uid] ?? item.pinned,
             sort_order: item.sort_order,
           })),
         ),
-    [stationViewQuery.data],
+    [previewPinnedRows, stationViewQuery.data],
   )
   const tableBindings = useMemo(
-    () => sortStationBindingsByDefaultOrder(templateTableBindings),
-    [templateTableBindings],
+    () =>
+      mergeTableBindings(
+        sortStationBindingsByDefaultOrder(templateTableBindings),
+        displayConfigBindings,
+      ),
+    [displayConfigBindings, templateTableBindings],
   )
   const stationRows = useMemo<StationTableRow[]>(
     () =>
@@ -1615,6 +1904,54 @@ export function StationOperationPage() {
     ])
   }
 
+  const saveRuntimeDraftMutation = useMutation({
+    mutationFn: (draft: StationDetectionConfigDraft) =>
+      putRuntimeDraft<StationDetectionPreloadDraftData>(
+        stationDetectionPreloadNamespace,
+        {
+          scope_type: 'project',
+          scope_id: String(draft.projectId),
+          expected_revision: runtimeDraftQuery.data?.revision ?? 0,
+          ttl_sec: stationDetectionPreloadTTLSec,
+          data: {
+            standard_id: draft.standardId,
+            config_code: draft.configCode,
+            config_name: draft.configName,
+            config_version: draft.configVersion,
+            config_hash: draft.configHash,
+            items: draft.items,
+            process_params: draft.processParams,
+          },
+        },
+      ),
+    onSuccess: (saved, draft) => {
+      queryClient.setQueryData(runtimeDraftQueryKey, saved)
+      const nextStandard = availableStandards.find(
+        (standard) => standard.id === draft.standardId,
+      )
+      const draftStandard = nextStandard
+        ? { ...nextStandard, items: draft.items }
+        : undefined
+      const nextVarIds = standardReportVarIds(draftStandard, stationVariables)
+      if (!activeRun) {
+        startForm.setFieldsValue({
+          project_id: draft.projectId,
+          mode: nextStandard?.mode ?? startForm.getFieldValue('mode'),
+          config_enabled: true,
+          standard_id: nextStandard?.id,
+        })
+        fillEmptyReportVariables(nextVarIds)
+      }
+      messageApi.success(t('station.configPreview.applied'))
+      setConfigPreviewOpen(false)
+    },
+    onError: (error) => {
+      messageApi.error(
+        error instanceof Error ? error.message : t('station.config.saveFailed'),
+      )
+    },
+  })
+
   const saveStationViewItemsMutation = useMutation({
     mutationFn: (items: StationViewItemPayload[]) => {
       const templateUID =
@@ -1640,14 +1977,21 @@ export function StationOperationPage() {
     },
   })
 
-  function saveStationViewItems(items: StationViewItem[]) {
+  function saveStationViewItems(
+    items: StationViewItem[],
+    options?: Parameters<typeof saveStationViewItemsMutation.mutate>[1],
+  ) {
     saveStationViewItemsMutation.mutate(
       items.map(stationViewItemPayloadFromItem),
+      options,
     )
   }
 
-  function persistCardOrder(ids: string[]) {
-    if (rawStationViewItems.length === 0) return
+  function persistCardOrder(ids: string[], previousOrder: string[]) {
+    if (rawStationViewItems.length === 0) {
+      setPreviewCardOrder(previousOrder)
+      return
+    }
     const itemUIDsByCardID = new Map<string, string>(
       cards.flatMap(
         (card): Array<[string, string]> =>
@@ -1657,19 +2001,25 @@ export function StationOperationPage() {
     const orderedItemUIDs = ids
       .map((id) => itemUIDsByCardID.get(id))
       .filter((value): value is string => Boolean(value))
-    if (orderedItemUIDs.length === 0) return
+    if (orderedItemUIDs.length === 0) {
+      setPreviewCardOrder(previousOrder)
+      return
+    }
     const nextItems = rawStationViewItems.map((item) => {
       if (item.layout_area !== stationLayoutAreaCardPool) return item
       const orderIndex = orderedItemUIDs.indexOf(item.item_uid)
       if (orderIndex === -1) return item
       return { ...item, sort_order: (orderIndex + 1) * 10 }
     })
-    saveStationViewItems(nextItems)
+    saveStationViewItems(nextItems, {
+      onError: () => setPreviewCardOrder(previousOrder),
+    })
   }
 
   function handleCardOrderCommit(ids: string[]) {
+    const previousOrder = cardOrder
     setPreviewCardOrder(ids)
-    persistCardOrder(ids)
+    persistCardOrder(ids, previousOrder)
   }
 
   const handleToggleCardAxisMode = useCallback(
@@ -1692,12 +2042,13 @@ export function StationOperationPage() {
 
   const startRunMutation = useMutation({
     mutationFn: async (values: StartDetectionFormValues) => {
-      const requestVariable = findStartDetectionRequestVar(
+      const requestTarget = findStartDetectionRequestTarget(
         startTaskFlowsQuery.data ?? [],
       )
-      if (!requestVariable) {
+      if (!requestTarget) {
         throw new Error(t('station.start.errors.startTaskFlowRequired'))
       }
+      const requestVariable = requestTarget.variable
       if (values.plan_id) {
         const response = await startDetectionPlan(values.plan_id, {
           project_id: values.project_id,
@@ -1709,15 +2060,23 @@ export function StationOperationPage() {
       const selectedStandard = availableStandards.find(
         (standard) => standard.id === values.standard_id,
       )
+      const configEnabled = values.config_enabled === true
       const selectedDraft =
-        values.project_id && selectedStandard
-          ? previewConfigsByProject[values.project_id]
+        values.project_id === previewConfig?.projectId && selectedStandard
+          ? previewConfig
           : undefined
       const draftMatchesStandard =
+        configEnabled && runtimeDraftMatchesStandard(selectedDraft, selectedStandard)
+      if (
+        configEnabled &&
         selectedDraft?.standardId !== undefined &&
-        selectedDraft.standardId === selectedStandard?.id
+        selectedDraft.standardId === selectedStandard?.id &&
+        !draftMatchesStandard
+      ) {
+        throw new Error(t('station.start.errors.staleRuntimeDraft'))
+      }
       const requestStandardForReport =
-        draftMatchesStandard && selectedStandard
+        draftMatchesStandard && selectedStandard && selectedDraft
           ? { ...selectedStandard, items: selectedDraft.items }
           : selectedStandard
       const requestProjectVariables = variables.filter(
@@ -1727,7 +2086,6 @@ export function StationOperationPage() {
         requestStandardForReport,
         requestProjectVariables,
       )
-      const configEnabled = values.config_enabled === true
       const taskRequest = {
         command: 'start_detection',
         project_id: values.project_id,
@@ -1746,9 +2104,15 @@ export function StationOperationPage() {
           : undefined,
         config_version: configEnabled ? selectedStandard?.version : undefined,
         config_hash: configEnabled && !draftMatchesStandard ? selectedStandard?.config_hash : undefined,
-        custom_items: configEnabled && draftMatchesStandard ? selectedDraft.items : undefined,
-        process_params: draftMatchesStandard ? selectedDraft.processParams : undefined,
+        runtime_draft:
+          configEnabled && draftMatchesStandard && runtimeDraftQuery.data?.revision
+            ? {
+                namespace: stationDetectionPreloadNamespace,
+                revision: runtimeDraftQuery.data.revision,
+              }
+            : undefined,
         report_request: buildReportRequest(values, defaultReportVarIds),
+        end_policy: values.duration_min ? 'fixed_duration' : 'manual',
         duration_sec: values.duration_min
           ? values.duration_min * 60
           : undefined,
@@ -1757,6 +2121,7 @@ export function StationOperationPage() {
         enable_alarm: true,
       }
       const commandID = `start-detection-${Date.now()}`
+      const commandStartedAt = Date.now()
       const previousRecentRuns = await getDetectionRuns({
         project_id: values.project_id,
         limit: 1,
@@ -1791,14 +2156,34 @@ export function StationOperationPage() {
         values.project_id,
         previousMaxRunId,
       )
+      if (!startedRun) {
+        const failedRun = await findFailedStartTaskFlowRun(
+          values.project_id,
+          requestTarget.flow.id,
+          requestVariable.var_id_text ?? requestVariable.var_id,
+          commandID,
+          commandStartedAt - 5000,
+        )
+        if (failedRun) {
+          const rawReason = taskFlowRunFailureReason(failedRun)
+          const reason = isRuntimeDraftStaleError(rawReason)
+            ? t('station.start.errors.staleRuntimeDraft')
+            : rawReason || failedRun.status
+          throw new Error(t('station.start.errors.taskRequestFlowFailed', { reason }))
+        }
+      }
       if (!startedRun && (result?.triggered ?? 0) <= 0) {
         throw new Error(t('station.start.errors.taskRequestFlowNotTriggered'))
+      }
+      if (!startedRun) {
+        throw new Error(t('station.start.errors.taskRequestStartNotConfirmed'))
       }
       return startedRun
     },
     onSuccess: async () => {
       messageApi.success(t('station.messages.started'))
       setStartModalOpen(false)
+      await queryClient.invalidateQueries({ queryKey: ['station', 'runtime-draft'] })
       await refreshRuns()
     },
     onError: (error) => {
@@ -2001,28 +2386,10 @@ export function StationOperationPage() {
 
   function applyConfigPreview(draft: StationDetectionConfigDraft) {
     if (!validSelectedProjectId) return
-    setPreviewConfigsByProject((current) => ({
-      ...current,
-      [validSelectedProjectId]: draft,
-    }))
-    const nextStandard = availableStandards.find(
-      (standard) => standard.id === draft.standardId,
-    )
-    const draftStandard = nextStandard
-      ? { ...nextStandard, items: draft.items }
-      : undefined
-    const nextVarIds = standardReportVarIds(draftStandard, stationVariables)
-    if (!activeRun) {
-      startForm.setFieldsValue({
-        project_id: validSelectedProjectId,
-        mode: nextStandard?.mode ?? startForm.getFieldValue('mode'),
-        config_enabled: true,
-        standard_id: nextStandard?.id,
-      })
-      fillEmptyReportVariables(nextVarIds)
-    }
-    messageApi.success(t('station.configPreview.applied'))
-    setConfigPreviewOpen(false)
+    saveRuntimeDraftMutation.mutate({
+      ...draft,
+      projectId: validSelectedProjectId,
+    })
   }
 
   function fillEmptyReportVariables(varIds = selectedStandardReportVarIds) {
@@ -2052,7 +2419,9 @@ export function StationOperationPage() {
   function openStartModal() {
     const targetProject = selectedProject ?? projects[0]
     const appliedDraft = targetProject?.id
-      ? previewConfigsByProject[targetProject.id]
+      ? targetProject.id === effectivePreviewConfig?.projectId
+        ? effectivePreviewConfig
+        : undefined
       : undefined
     const defaultStandard =
       availableStandards.find((standard) => standard.id === appliedDraft?.standardId) ??
@@ -2739,16 +3108,13 @@ export function StationOperationPage() {
           projectId={validSelectedProjectId}
           selectedProject={selectedProject}
           initialStandardId={previewConfig?.standardId ?? availableStandards[0]?.id}
-          initialDraft={validSelectedProjectId ? previewConfigsByProject[validSelectedProjectId] : undefined}
+          initialDraft={previewConfig}
           running={activeRun !== undefined}
           standards={availableStandards}
           projects={projects}
           variables={configVariablesQuery.data ?? []}
           reportTemplates={reportTemplates}
-          onApplyDraft={(draft) => {
-            applyConfigPreview(draft)
-            setConfigPreviewOpen(false)
-          }}
+          onApplyDraft={applyConfigPreview}
         />
       </Modal>
       <Modal
@@ -2896,6 +3262,13 @@ export function StationOperationPage() {
                 <Tag color={selectedStartStandard.project_id ? 'blue' : selectedStartStandard.project_group ? 'purple' : 'default'}>
                   {detectionStandardScopeLabel(selectedStartStandard, t, selectedProject)}
                 </Tag>
+              ) : null}
+              {configEnabled && !selectedPlan && selectedStartDraftStale ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={t('station.start.errors.staleRuntimeDraft')}
+                />
               ) : null}
             </section>
 
@@ -3706,6 +4079,7 @@ const MetricCardView = memo(function MetricCardView({
         <CardChart
           chartData={card.trend}
           legendName={label}
+          color={card.color}
           min={card.min}
           max={card.max}
           axisMode={card.axisMode}
@@ -3763,12 +4137,14 @@ function MetricCardDragPreview({
 function CardChart({
   chartData,
   legendName,
+  color,
   min,
   max,
   axisMode,
 }: {
   chartData: TrendPoint[]
   legendName: string
+  color: string
   min?: number
   max?: number
   axisMode: ChartAxisMode
@@ -3865,12 +4241,14 @@ function CardChart({
             type="monotone"
             dataKey="value"
             name={legendName}
-            stroke="#333"
-            strokeWidth={1.5}
-            fillOpacity={0.02}
-            fill="#333"
+            stroke={color}
+            strokeWidth={2.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fillOpacity={0}
+            fill="transparent"
             isAnimationActive={false}
-            activeDot={{ r: 3, strokeWidth: 0, fill: '#333' }}
+            activeDot={{ r: 4, strokeWidth: 0, fill: color }}
           />
         </AreaChart>
       ) : null}

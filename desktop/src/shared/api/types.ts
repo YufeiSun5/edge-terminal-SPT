@@ -1023,6 +1023,7 @@ export type DetectionRunStartPayload = {
   config_name?: string
   config_version?: number
   config_hash?: string
+  end_policy?: 'manual' | 'fixed_duration' | 'qualified_hold'
   duration_sec?: number
   operator_note?: string
   report_template_id?: number
@@ -1030,6 +1031,30 @@ export type DetectionRunStartPayload = {
   custom_items?: DetectionStandardItemPayload[]
   process_params?: Record<string, unknown>
   plc_writes?: Array<Record<string, unknown>>
+  runtime_draft?: RuntimeDraftReference
+}
+
+export type RuntimeDraftReference = {
+  namespace: string
+  revision: number
+}
+
+export type RuntimeDraft<TData = Record<string, unknown>> = {
+  namespace: string
+  scope_type: string
+  scope_id: string
+  revision: number
+  updated_at: string
+  expires_at?: string
+  data: TData
+}
+
+export type RuntimeDraftPutPayload<TData = Record<string, unknown>> = {
+  scope_type: string
+  scope_id: string
+  expected_revision: number
+  ttl_sec?: number
+  data: TData
 }
 
 export type DetectionRunStopPayload = {
@@ -1666,6 +1691,7 @@ export type PlanImportCellMappingRow = {
 export type PlanImportCellMapping = {
   sheet?: string
   common?: Record<string, string>
+  common_values?: Record<string, string>
   rows?: PlanImportCellMappingRow[]
 }
 
@@ -2001,6 +2027,11 @@ export type SsoTicketResponse = {
   expires_in: number
   edge_instance_id: string
   main_site_url: string
+}
+
+export type SsoTicketVerifyRequest = {
+  ticket: string
+  edge_id: string
 }
 
 export type RoleName = 'guest' | 'admin' | 'developer'

@@ -11,7 +11,6 @@ export const resources = {
         overview: '边缘概览',
         station: '工位操作',
         modelCockpit: '3D 驾驶舱',
-        modelCockpitDebug: '模型调试',
         history: '历史查询',
         historyAndPlans: '历史与计划',
         historyChildren: {
@@ -32,6 +31,10 @@ export const resources = {
         tasks: '任务',
         settings: '系统设置',
         debug: '调试看板',
+        debugChildren: {
+          runtime: '运行诊断',
+          modelCockpit: '模型调试',
+        },
       },
       actions: {
         refresh: '刷新',
@@ -60,6 +63,9 @@ export const resources = {
         openMainSite: '打开主站',
         ssoNotConfigured: '主站 SSO 地址尚未配置',
         ssoFailed: '主站跳转失败',
+        ssoVerifying: '正在验证主站登录...',
+        ssoInvalidTitle: '主站登录链接无效',
+        ssoInvalidDesc: '缺少一次性 ticket 或边缘标识，请从边缘端重新打开主站。',
         localCredentialHint: '本地测试账号：{{username}} / 看板密码',
       },
       notifications: {
@@ -86,6 +92,12 @@ export const resources = {
           resultNg: '结果 NG',
           reportJob: '报表任务',
         },
+        report: {
+          startedTitle: '报表开始生成',
+          startedMessage: '检测报表生成任务已开始',
+          readyTitle: '报表已准备好',
+          readyMessage: '检测报表已准备好，可下载查看',
+        },
         levels: {
           info: '信息',
           success: '成功',
@@ -95,7 +107,7 @@ export const resources = {
         center: {
           eyebrow: '事件通知',
           title: '通知中心',
-          desc: '集中查看边缘端通知、检测事件和报警通知；筛选条件会同步用于分类未读数和批量已读。',
+          desc: '只显示报警信息，以及报表开始生成、报表已准备好的记录；筛选条件会同步用于未读数和批量已读。',
           unreadCount: '当前筛选未读',
           read: '已读',
           unread: '未读',
@@ -105,6 +117,7 @@ export const resources = {
           to: '结束时间',
           markRead: '标为已读',
           readAllDone: '已标记 {{count}} 条通知',
+          paginationTotal: '第 {{from}}-{{to}} 条 / 共 {{total}} 条',
           columns: {
             status: '状态',
             type: '类型',
@@ -319,6 +332,17 @@ export const resources = {
           empty: '上传计划 Excel 后查看解析结果',
           ready: '可确认',
           needsConfirmation: '需确认',
+          review: {
+            title: '检测项核对',
+            issue: '有问题',
+            noLimit: '未设限值',
+            upper: '上限',
+            lower: '下限',
+            range: '判定区间',
+            optional: '可选',
+            noLimitHint: '采集和报表保留，不做上下限判定',
+            excelRow: 'Excel 第 {{row}} 行',
+          },
           issueSummary: '发现 {{count}} 个问题',
           resultTitle: '导入完成',
           resultDesc:
@@ -347,6 +371,13 @@ export const resources = {
             enable: '使用单元格配置解析',
             read: '读取',
             addRow: '新增变量行',
+            pickCell: '从表格选择单元格',
+            pickCellHint: '请点击右侧 Excel 预览中的目标单元格',
+            cellPicked: '已读取 {{value}}（来源 {{cell}}）',
+            sourceCell: '来源：{{cell}}',
+            valuePlaceholder: '输入值，或点右侧表格读取',
+            pickedCellValue: '读取：{{cell}} = {{value}}',
+            emptyCellValue: '空',
             fields: {
               project_code: '项目',
               params_json: '参数 JSON',
@@ -533,6 +564,12 @@ export const resources = {
               '当前项目没有启用的 start_detection 任务流，请先配置 watched STRING 虚拟变量和启动检测任务流。',
             taskRequestFlowNotTriggered:
               '任务请求已写入，但没有命中 watched STRING 任务流，请检查请求变量和任务流配置。',
+            taskRequestFlowFailed:
+              '任务请求已触发启动任务流，但开工失败：{{reason}}',
+            taskRequestStartNotConfirmed:
+              '任务请求已触发启动任务流，但未确认新检测任务，请查看任务流运行记录。',
+            staleRuntimeDraft:
+              '检测配置已更新，当前预载配置已失效，请重新应用检测配置后再开始检测。',
             invalidJson: '任务请求 JSON 无效，请检查 custom_items 或参数值。',
           },
         },
@@ -1805,7 +1842,6 @@ export const resources = {
         overview: 'Edge overview',
         station: 'Station operation',
         modelCockpit: '3D cockpit',
-        modelCockpitDebug: 'Model debug',
         history: 'History query',
         historyAndPlans: 'History and plans',
         historyChildren: {
@@ -1826,6 +1862,10 @@ export const resources = {
         tasks: 'Tasks',
         settings: 'Settings',
         debug: 'Debug board',
+        debugChildren: {
+          runtime: 'Runtime diagnostics',
+          modelCockpit: 'Model debug',
+        },
       },
       actions: {
         refresh: 'Refresh',
@@ -1855,6 +1895,10 @@ export const resources = {
         openMainSite: 'Open main site',
         ssoNotConfigured: 'Main-site SSO URL is not configured',
         ssoFailed: 'Main-site handoff failed',
+        ssoVerifying: 'Verifying main-site sign-in...',
+        ssoInvalidTitle: 'Invalid main-site sign-in link',
+        ssoInvalidDesc:
+          'The one-time ticket or edge identifier is missing. Open the main site from the edge terminal again.',
         localCredentialHint:
           'Local test account: {{username}} / board password',
       },
@@ -1882,6 +1926,12 @@ export const resources = {
           resultNg: 'Result NG',
           reportJob: 'Report job',
         },
+        report: {
+          startedTitle: 'Report generation started',
+          startedMessage: 'The report generation job has started.',
+          readyTitle: 'Report ready',
+          readyMessage: 'The report is ready to download.',
+        },
         levels: {
           info: 'Info',
           success: 'Success',
@@ -1891,7 +1941,7 @@ export const resources = {
         center: {
           eyebrow: 'Events',
           title: 'Notification center',
-          desc: 'Review edge notifications, detection events, and alarm notifications. Filters also apply to unread counts and bulk read operations.',
+          desc: 'Shows only alarms plus report generation started and report ready records. Filters also apply to unread counts and bulk read operations.',
           unreadCount: 'Unread in current filter',
           read: 'Read',
           unread: 'Unread',
@@ -1901,6 +1951,7 @@ export const resources = {
           to: 'To',
           markRead: 'Mark read',
           readAllDone: 'Marked {{count}} notifications',
+          paginationTotal: '{{from}}-{{to}} of {{total}}',
           columns: {
             status: 'Status',
             type: 'Type',
@@ -2117,6 +2168,17 @@ export const resources = {
           empty: 'Upload a plan Excel file to view parsed rows',
           ready: 'Ready',
           needsConfirmation: 'Needs confirmation',
+          review: {
+            title: 'Detection item review',
+            issue: 'Issue',
+            noLimit: 'No limits',
+            upper: 'Upper',
+            lower: 'Lower',
+            range: 'Valid range',
+            optional: 'Optional',
+            noLimitHint: 'Collected and reported without limit checking',
+            excelRow: 'Excel row {{row}}',
+          },
           issueSummary: '{{count}} issues found',
           resultTitle: 'Import complete',
           resultDesc:
@@ -2146,6 +2208,13 @@ export const resources = {
             enable: 'Parse with cell mapping',
             read: 'Read',
             addRow: 'Add variable row',
+            pickCell: 'Pick cell from sheet',
+            pickCellHint: 'Click a target cell in the Excel preview on the right',
+            cellPicked: 'Read {{value}} (source {{cell}})',
+            sourceCell: 'Source: {{cell}}',
+            valuePlaceholder: 'Enter a value or pick from the sheet',
+            pickedCellValue: 'Read: {{cell}} = {{value}}',
+            emptyCellValue: 'empty',
             fields: {
               project_code: 'Project',
               params_json: 'Params JSON',
@@ -2334,6 +2403,12 @@ export const resources = {
               'No enabled start_detection task flow is configured for this project. Configure a watched STRING virtual variable and start-detection task flow first.',
             taskRequestFlowNotTriggered:
               'The task request was written, but no watched STRING task flow was triggered. Check the request variable and task flow configuration.',
+            taskRequestFlowFailed:
+              'The task request triggered the start task flow, but start failed: {{reason}}',
+            taskRequestStartNotConfirmed:
+              'The task request triggered the start task flow, but no new detection run was confirmed. Check task-flow runs.',
+            staleRuntimeDraft:
+              'The detection configuration has changed. Reapply the detection configuration before starting the test.',
             invalidJson:
               'Task request JSON is invalid. Check custom_items or parameter values.',
           },
@@ -3637,7 +3712,6 @@ export const resources = {
         overview: 'エッジ概要',
         station: '工位操作',
         modelCockpit: '3D コックピット',
-        modelCockpitDebug: 'モデル調整',
         history: '履歴検索',
         historyAndPlans: '履歴と計画',
         historyChildren: {
@@ -3658,6 +3732,10 @@ export const resources = {
         tasks: 'タスク',
         settings: 'システム設定',
         debug: 'デバッグボード',
+        debugChildren: {
+          runtime: '実行診断',
+          modelCockpit: 'モデル調整',
+        },
       },
       actions: {
         refresh: '更新',
@@ -3687,6 +3765,10 @@ export const resources = {
         openMainSite: '主サイトを開く',
         ssoNotConfigured: '主サイト SSO URL が未設定です',
         ssoFailed: '主サイト連携に失敗しました',
+        ssoVerifying: '主サイトログインを検証しています...',
+        ssoInvalidTitle: '主サイトログインリンクが無効です',
+        ssoInvalidDesc:
+          '一回限りの ticket またはエッジ識別子がありません。エッジ端末から主サイトを開き直してください。',
         localCredentialHint:
           'ローカル試験アカウント：{{username}} / ボード記載のパスワード',
       },
@@ -3714,6 +3796,12 @@ export const resources = {
           resultNg: '結果 NG',
           reportJob: 'レポートタスク',
         },
+        report: {
+          startedTitle: 'レポート生成開始',
+          startedMessage: 'レポート生成ジョブを開始しました。',
+          readyTitle: 'レポート準備完了',
+          readyMessage: 'レポートをダウンロードできます。',
+        },
         levels: {
           info: '情報',
           success: '成功',
@@ -3723,7 +3811,7 @@ export const resources = {
         center: {
           eyebrow: 'イベント通知',
           title: '通知センター',
-          desc: 'エッジ端末の通知、検出イベント、アラーム通知をまとめて確認します。フィルターは未読数と一括既読にも適用されます。',
+          desc: 'アラーム情報と、レポート生成開始・準備完了の記録だけを表示します。フィルターは未読数と一括既読にも適用されます。',
           unreadCount: '現在フィルターの未読',
           read: '既読',
           unread: '未読',
@@ -3733,6 +3821,7 @@ export const resources = {
           to: '終了時刻',
           markRead: '既読にする',
           readAllDone: '{{count}} 件を既読にしました',
+          paginationTotal: '{{from}}-{{to}} / {{total}} 件',
           columns: {
             status: '状態',
             type: '種類',
@@ -3949,6 +4038,17 @@ export const resources = {
           empty: '計画 Excel をアップロードすると解析結果が表示されます',
           ready: '確認可',
           needsConfirmation: '確認必要',
+          review: {
+            title: '検出項目の確認',
+            issue: '問題あり',
+            noLimit: '上下限なし',
+            upper: '上限',
+            lower: '下限',
+            range: '判定範囲',
+            optional: '任意',
+            noLimitHint: '収集と帳票出力のみ行い、上下限判定はしません',
+            excelRow: 'Excel {{row}} 行目',
+          },
           issueSummary: '{{count}} 件の問題があります',
           resultTitle: 'インポート完了',
           resultDesc:
@@ -3978,6 +4078,13 @@ export const resources = {
             enable: 'セルマッピングで解析',
             read: '読取',
             addRow: '変数行を追加',
+            pickCell: 'シートからセルを選択',
+            pickCellHint: '右側の Excel プレビューで対象セルをクリックしてください',
+            cellPicked: '{{value}} を読み取りました（参照 {{cell}}）',
+            sourceCell: '参照：{{cell}}',
+            valuePlaceholder: '値を入力、または右側のシートから選択',
+            pickedCellValue: '読取：{{cell}} = {{value}}',
+            emptyCellValue: '空',
             fields: {
               project_code: 'プロジェクト',
               params_json: 'パラメータ JSON',
@@ -4167,6 +4274,12 @@ export const resources = {
               'このプロジェクトには有効な start_detection タスクフローがありません。watched STRING 仮想変数と検査開始タスクフローを先に設定してください。',
             taskRequestFlowNotTriggered:
               'タスク要求は書き込まれましたが、watched STRING タスクフローに一致しません。要求変数とタスクフロー設定を確認してください。',
+            taskRequestFlowFailed:
+              'タスク要求は開始タスクフローを起動しましたが、開始に失敗しました：{{reason}}',
+            taskRequestStartNotConfirmed:
+              'タスク要求は開始タスクフローを起動しましたが、新しい検査タスクを確認できません。タスクフロー実行記録を確認してください。',
+            staleRuntimeDraft:
+              '検査設定が更新されています。検査を開始する前に検査設定を再適用してください。',
             invalidJson:
               'タスク要求 JSON が無効です。custom_items またはパラメータ値を確認してください。',
           },

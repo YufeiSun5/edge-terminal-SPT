@@ -7,6 +7,16 @@ export type SpreadsheetMountOptions = {
   toolbar?: boolean
   sheetbar?: boolean
   deferCreate?: boolean
+  onCellSelect?: (selection: SpreadsheetCellSelection) => void
+}
+
+export type SpreadsheetCellSelection = {
+  sheetName: string
+  address: string
+  row: number
+  column: number
+  value: string
+  mergedAddress?: string
 }
 
 export type SpreadsheetAdapter = {
@@ -21,6 +31,22 @@ type LuckysheetApi = {
   create: (options: Record<string, unknown>) => void
   destroy?: () => void
   getLuckysheetfile?: () => unknown
+}
+
+type LuckysheetCell = {
+  r: number
+  c: number
+  v?: Record<string, unknown>
+}
+
+type LuckysheetSheet = {
+  name?: string
+  status?: number
+  images?: unknown
+  celldata?: LuckysheetCell[]
+  config?: {
+    merge?: Record<string, { r: number; c: number; rs: number; cs: number }>
+  }
 }
 
 type LuckysheetWindow = Window &
@@ -73,7 +99,7 @@ function normalizeImages(data: unknown) {
 }
 
 function normalizeWorkbook(data: unknown) {
-  const sheets = normalizeSheets(data)
+  const sheets = normalizeSheets(data) as LuckysheetSheet[]
   const images = normalizeImages(data)
 
   if (images && sheets[0] && typeof sheets[0] === 'object' && !('images' in sheets[0])) {
@@ -81,6 +107,60 @@ function normalizeWorkbook(data: unknown) {
   }
 
   return { sheets, images }
+}
+
+function columnNumberToName(columnIndex: number) {
+  let column = columnIndex + 1
+  let name = ''
+  while (column > 0) {
+    const remainder = (column - 1) % 26
+    name = String.fromCharCode(65 + remainder) + name
+    column = Math.floor((column - 1) / 26)
+  }
+  return name
+}
+
+function cellAddress(rowIndex: number, columnIndex: number) {
+  return `${columnNumberToName(columnIndex)}${rowIndex + 1}`
+}
+
+function luckysheetDisplayValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value !== 'object') return String(value)
+  const cell = value as Record<string, unknown>
+  const display = cell.m ?? cell.v
+  if (display === null || display === undefined) return ''
+  return typeof display === 'object' ? String(display) : String(display)
+}
+
+function activeLuckysheetSheet(sheets: LuckysheetSheet[]) {
+  return sheets.find((sheet) => sheet.status === 1) ?? sheets[0]
+}
+
+function resolveMergedCell(sheet: LuckysheetSheet, rowIndex: number, columnIndex: number) {
+  const merge = sheet.config?.merge ?? {}
+  const direct = merge[`${rowIndex}_${columnIndex}`]
+  if (direct) return direct
+  return Object.values(merge).find(
+    (item) => rowIndex >= item.r && rowIndex < item.r + item.rs && columnIndex >= item.c && columnIndex < item.c + item.cs,
+  )
+}
+
+function resolveSelection(sheets: LuckysheetSheet[], rowIndex: number, columnIndex: number): SpreadsheetCellSelection | undefined {
+  const sheet = activeLuckysheetSheet(sheets)
+  if (!sheet) return undefined
+  const merge = resolveMergedCell(sheet, rowIndex, columnIndex)
+  const sourceRow = merge?.r ?? rowIndex
+  const sourceColumn = merge?.c ?? columnIndex
+  const cell = sheet.celldata?.find((item) => item.r === sourceRow && item.c === sourceColumn)
+  return {
+    sheetName: sheet.name ?? '',
+    address: cellAddress(sourceRow, sourceColumn),
+    row: sourceRow + 1,
+    column: sourceColumn + 1,
+    value: luckysheetDisplayValue(cell?.v),
+    mergedAddress: merge ? cellAddress(rowIndex, columnIndex) : undefined,
+  }
 }
 
 function cellDisplayValue(value: ExcelJS.CellValue) {
@@ -266,14 +346,24 @@ function sheetImages(workbook: ExcelJS.Workbook, sheet: ExcelJS.Worksheet) {
   sheet.getImages().forEach((item, index) => {
     const src = imageSource(workbook, item.imageId)
     if (!src) return
-    const tl = item.range.tl
-    const br = item.range.br
+    const range = item.range as {
+      tl?: { col?: number; row?: number }
+      br?: { col?: number; row?: number }
+      ext?: { width?: number; height?: number }
+    }
+    const tl = range.tl
+    if (typeof tl?.col !== 'number' || typeof tl?.row !== 'number') return
     const start = anchorPositionToPixels(sheet, tl.col, tl.row)
-    const end = anchorPositionToPixels(sheet, br.col, br.row)
+    const br = range.br
     const left = start.left
     const top = start.top
-    const width = Math.max(120, end.left - start.left)
-    const height = Math.max(80, end.top - start.top)
+    let width = Math.max(120, Math.round(range.ext?.width ?? 0))
+    let height = Math.max(80, Math.round(range.ext?.height ?? 0))
+    if (typeof br?.col === 'number' && typeof br?.row === 'number') {
+      const end = anchorPositionToPixels(sheet, br.col, br.row)
+      width = Math.max(120, end.left - start.left)
+      height = Math.max(80, end.top - start.top)
+    }
     images[`image_${index}`] = {
       type: '2',
       src,
@@ -421,6 +511,35 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
   let iframe: HTMLIFrameElement | undefined
   let luckyWindow: LuckysheetWindow | undefined
   let mountedContainer: HTMLElement | undefined
+  let currentWorkbook: { sheets: LuckysheetSheet[]; images?: unknown } | undefined
+  let cellSelectHandler: ((selection: SpreadsheetCellSelection) => void) | undefined
+
+  function createOptions(options: SpreadsheetMountOptions, workbook: { sheets: LuckysheetSheet[]; images?: unknown }, readonly: boolean) {
+    currentWorkbook = workbook
+    cellSelectHandler = options.onCellSelect
+    return {
+      container: 'luckysheet-root',
+      lang: 'zh',
+      data: workbook.sheets,
+      images: workbook.images,
+      showinfobar: false,
+      showtoolbar: options.toolbar ?? !readonly,
+      showsheetbar: options.sheetbar ?? true,
+      allowEdit: !readonly,
+      enableAddRow: !readonly,
+      enableAddBackTop: false,
+      hook: {
+        cellMousedown: (_cell: unknown, position: { r?: number; c?: number; start_r?: number; start_c?: number }) => {
+          const rowIndex = typeof position?.r === 'number' ? position.r : position?.start_r
+          const columnIndex = typeof position?.c === 'number' ? position.c : position?.start_c
+          if (typeof rowIndex !== 'number' || typeof columnIndex !== 'number') return
+          const liveWorkbook = normalizeWorkbook(luckyWindow?.luckysheet?.getLuckysheetfile?.() ?? currentWorkbook)
+          const selection = resolveSelection(liveWorkbook.sheets, rowIndex, columnIndex)
+          if (selection) cellSelectHandler?.(selection)
+        },
+      },
+    }
+  }
 
   async function prepareFrame(container: HTMLElement) {
     iframe = document.createElement('iframe')
@@ -471,6 +590,7 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
       if (!container) throw new Error(`Luckysheet container not found: ${options.containerId}`)
 
       mountedContainer = container
+      cellSelectHandler = options.onCellSelect
       await prepareFrame(container)
 
       const luckysheet = luckyWindow?.luckysheet
@@ -482,18 +602,7 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
         const workbook = normalizeWorkbook(options.data)
 
         luckysheet.destroy?.()
-        luckysheet.create({
-          container: 'luckysheet-root',
-          lang: 'zh',
-          data: workbook.sheets,
-          images: workbook.images,
-          showinfobar: false,
-          showtoolbar: options.toolbar ?? !options.readonly,
-          showsheetbar: options.sheetbar ?? true,
-          allowEdit: !options.readonly,
-          enableAddRow: !options.readonly,
-          enableAddBackTop: false,
-        })
+        luckysheet.create(createOptions(options, workbook, options.readonly ?? false))
       }
     },
     unmount() {
@@ -506,6 +615,8 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
       iframe = undefined
       luckyWindow = undefined
       mountedContainer = undefined
+      currentWorkbook = undefined
+      cellSelectHandler = undefined
     },
     async importFile(file) {
       const container = mountedContainer
@@ -515,18 +626,19 @@ export function createLuckysheetAdapter(): SpreadsheetAdapter {
       const luckysheet = luckyWindow?.luckysheet
       if (!luckysheet?.create) throw new Error('Luckysheet vendor assets are not ready.')
       luckysheet.destroy?.()
-      luckysheet.create({
-        container: 'luckysheet-root',
-        lang: 'zh',
-        data: workbook.sheets,
-        images: workbook.images,
-        showinfobar: false,
-        showtoolbar: false,
-        showsheetbar: true,
-        allowEdit: false,
-        enableAddRow: false,
-        enableAddBackTop: false,
-      })
+      luckysheet.create(
+        createOptions(
+          {
+            containerId: 'luckysheet-root',
+            readonly: true,
+            toolbar: false,
+            sheetbar: true,
+            onCellSelect: cellSelectHandler,
+          },
+          workbook,
+          true,
+        ),
+      )
     },
     async exportFile() {
       const file = luckyWindow?.luckysheet?.getLuckysheetfile?.() ?? []
