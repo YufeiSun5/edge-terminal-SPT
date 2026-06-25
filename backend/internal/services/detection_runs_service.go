@@ -17,13 +17,14 @@ import (
 )
 
 type DetectionRunsService struct {
-	repo     *database.Repository
-	tasks    *pipeline.TaskManager
-	tags     *pipeline.TagManager
-	channels *pipeline.Channels
-	flows    *pipeline.TaskFlowExecutor
-	guardMu  sync.Mutex
-	guards   map[string]struct{}
+	repo          *database.Repository
+	tasks         *pipeline.TaskManager
+	tags          *pipeline.TagManager
+	channels      *pipeline.Channels
+	flows         *pipeline.TaskFlowExecutor
+	runtimeDrafts *RuntimeDraftService
+	guardMu       sync.Mutex
+	guards        map[string]struct{}
 }
 
 type AddNoteInput struct {
@@ -80,9 +81,10 @@ type ApplyDetectionConfigResult struct {
 }
 
 type DetectionRunsRuntimeDeps struct {
-	Tags     *pipeline.TagManager
-	Channels *pipeline.Channels
-	Flows    *pipeline.TaskFlowExecutor
+	Tags          *pipeline.TagManager
+	Channels      *pipeline.Channels
+	Flows         *pipeline.TaskFlowExecutor
+	RuntimeDrafts *RuntimeDraftService
 }
 
 func NewDetectionRunsService(repo *database.Repository, tasks *pipeline.TaskManager, deps ...DetectionRunsRuntimeDeps) *DetectionRunsService {
@@ -91,6 +93,7 @@ func NewDetectionRunsService(repo *database.Repository, tasks *pipeline.TaskMana
 		service.tags = deps[0].Tags
 		service.channels = deps[0].Channels
 		service.flows = deps[0].Flows
+		service.runtimeDrafts = deps[0].RuntimeDrafts
 	}
 	return service
 }
@@ -99,9 +102,16 @@ func (s *DetectionRunsService) Start(opts database.StartDetectionOptions) (*mode
 	if strings.TrimSpace(opts.FactoryNo) == "" {
 		return nil, fmt.Errorf("factory_no is required")
 	}
+	clearDraft, err := s.applyRuntimeDraft(&opts)
+	if err != nil {
+		return nil, err
+	}
 	task, err := s.repo.StartDetectionTaskWithOptions(opts)
 	if err != nil {
 		return nil, err
+	}
+	if clearDraft != nil {
+		clearDraft()
 	}
 	s.tasks.SetActive(*task)
 	s.recordRunEvent(*task, models.DetectionEventRunStarted, "info", "detection run started")
@@ -111,6 +121,22 @@ func (s *DetectionRunsService) Start(opts database.StartDetectionOptions) (*mode
 	s.triggerProjectLifecycle(models.TaskFlowTriggerProjectStart, *task)
 	s.scheduleEndPolicyGuard(*task)
 	return task, nil
+}
+
+func (s *DetectionRunsService) applyRuntimeDraft(opts *database.StartDetectionOptions) (func(), error) {
+	if opts == nil || opts.RuntimeDraft == nil {
+		return nil, nil
+	}
+	result, err := ResolveDetectionRuntimeDraft(s.runtimeDrafts, s.repo, opts.ProjectID, *opts.RuntimeDraft, len(opts.CustomItems) > 0)
+	if err != nil {
+		return nil, err
+	}
+	opts.CustomItems = result.CustomItems
+	if opts.ProcessParams == nil {
+		opts.ProcessParams = result.ProcessParams
+	}
+	opts.StandardID = nil
+	return result.Clear, nil
 }
 
 func (s *DetectionRunsService) scheduleEndPolicyGuard(task models.DetectionTask) {
@@ -723,6 +749,15 @@ func HTTPStatusForError(err error) int {
 	if typed, ok := err.(KIOServiceError); ok && typed.Status > 0 {
 		return typed.Status
 	}
+	if errors.Is(err, ErrRuntimeDraftTooLarge) {
+		return 413
+	}
+	if errors.Is(err, ErrRuntimeDraftRevisionConflict) || errors.Is(err, ErrRuntimeDraftProjectRunning) || errors.Is(err, ErrRuntimeDraftStale) {
+		return 409
+	}
+	if errors.Is(err, ErrRuntimeDraftNotFound) {
+		return 404
+	}
 	if errors.Is(err, database.ErrProjectAlreadyRunning) || errors.Is(err, database.ErrReferenced) || errors.Is(err, database.ErrEdgeInstanceMismatch) || errors.Is(err, database.ErrDetectionPlanNotPending) {
 		return 409
 	}
@@ -730,4 +765,41 @@ func HTTPStatusForError(err error) int {
 		return 404
 	}
 	return 400
+}
+
+func ErrorCodeForError(err error) (string, bool) {
+	if code, ok := VariableWriteErrorCode(err); ok {
+		return code, true
+	}
+	if errors.Is(err, ErrRuntimeDraftNotFound) {
+		return "runtime_draft_not_found", true
+	}
+	if errors.Is(err, ErrRuntimeDraftRevisionConflict) {
+		return "runtime_draft_revision_conflict", true
+	}
+	if errors.Is(err, ErrRuntimeDraftTooLarge) {
+		return "runtime_draft_payload_too_large", true
+	}
+	if errors.Is(err, ErrRuntimeDraftProjectRunning) {
+		return "runtime_draft_project_running", true
+	}
+	if errors.Is(err, ErrRuntimeDraftStale) {
+		return "runtime_draft_stale", true
+	}
+	if errors.Is(err, database.ErrProjectAlreadyRunning) {
+		return "project_already_running", true
+	}
+	if errors.Is(err, database.ErrDetectionPlanNotPending) {
+		return "detection_plan_not_pending", true
+	}
+	if errors.Is(err, database.ErrEdgeInstanceMismatch) {
+		return "edge_instance_mismatch", true
+	}
+	if errors.Is(err, database.ErrReferenced) {
+		return "referenced_resource", true
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "not_found", true
+	}
+	return "", false
 }

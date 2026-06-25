@@ -182,12 +182,27 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	if total != 2 || len(notifications) != 2 || !reportNotificationsContain(notifications, "报表开始生成") || !reportNotificationsContain(notifications, "报表生成完成") {
 		t.Fatalf("expected start/success report notifications, total=%d items=%+v", total, notifications)
 	}
+	startNotifications, startTotal, _, _, err := service.ListNotifications(1, NotificationFilter{EventTypes: []string{EventStarted}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startTotal != 1 || len(startNotifications) != 1 || !reportNotificationsContain(startNotifications, "报表开始生成") {
+		t.Fatalf("expected started report notification only, total=%d items=%+v", startTotal, startNotifications)
+	}
+	firstStartedNotificationID := startNotifications[0].ID
 	unread, err := service.UnreadNotificationCount(1, NotificationFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unread != 2 {
 		t.Fatalf("expected 2 unread report notifications, got %d", unread)
+	}
+	startUnread, err := service.UnreadNotificationCount(1, NotificationFilter{EventTypes: []string{EventStarted}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if startUnread != 1 {
+		t.Fatalf("expected 1 started unread report notification, got %d", startUnread)
 	}
 	if err := service.MarkNotificationRead(1, notifications[0].ID); err != nil {
 		t.Fatal(err)
@@ -198,6 +213,57 @@ func TestServiceEnqueueProcessAndRetryBoundaries(t *testing.T) {
 	}
 	if unread != 1 {
 		t.Fatalf("expected 1 unread report notification after read, got %d", unread)
+	}
+	service.recordEvent(processed[0].ID, EventStarted, "info", "report job processing started again", map[string]any{
+		"attempts": 2,
+	})
+	dedupedNotifications, dedupedTotal, _, _, err := service.ListNotifications(1, NotificationFilter{EventTypes: []string{EventStarted, EventSucceeded}, DedupeJobEvent: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dedupedTotal != 1 || len(dedupedNotifications) != 1 || !reportNotificationsContain(dedupedNotifications, "报表生成完成") {
+		t.Fatalf("expected succeeded job lifecycle view to keep ready notification only, total=%d items=%+v", dedupedTotal, dedupedNotifications)
+	}
+	if reportNotificationsContainID(dedupedNotifications, firstStartedNotificationID) {
+		t.Fatalf("succeeded job started notification should be hidden from lifecycle view, got %+v started_id=%d", dedupedNotifications, firstStartedNotificationID)
+	}
+	pendingJob := processed[0]
+	pendingJob.ID = 0
+	pendingJob.JobKey = pendingJob.JobKey + "-pending"
+	pendingJob.Status = StatusPending
+	pendingJob.ArtifactRef = ""
+	pendingJob.ArtifactName = ""
+	if err := db.Create(&pendingJob).Error; err != nil {
+		t.Fatal(err)
+	}
+	service.recordEvent(pendingJob.ID, EventStarted, "info", "pending report job processing started", map[string]any{
+		"attempts": 0,
+	})
+	dedupedNotifications, dedupedTotal, _, _, err = service.ListNotifications(1, NotificationFilter{EventTypes: []string{EventStarted, EventSucceeded}, DedupeJobEvent: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dedupedTotal != 2 || !reportNotificationsContainJobID(dedupedNotifications, pendingJob.ID) {
+		t.Fatalf("pending job started notification should remain in lifecycle view, total=%d items=%+v pending_job=%d", dedupedTotal, dedupedNotifications, pendingJob.ID)
+	}
+	failedJob := processed[0]
+	failedJob.ID = 0
+	failedJob.JobKey = failedJob.JobKey + "-failed"
+	failedJob.Status = StatusFailed
+	failedJob.ArtifactRef = ""
+	failedJob.ArtifactName = ""
+	if err := db.Create(&failedJob).Error; err != nil {
+		t.Fatal(err)
+	}
+	service.recordEvent(failedJob.ID, EventStarted, "info", "failed report job processing started", map[string]any{
+		"attempts": 0,
+	})
+	dedupedNotifications, dedupedTotal, _, _, err = service.ListNotifications(1, NotificationFilter{EventTypes: []string{EventStarted, EventSucceeded}, DedupeJobEvent: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dedupedTotal != 2 || reportNotificationsContainJobID(dedupedNotifications, failedJob.ID) || !reportNotificationsContainJobID(dedupedNotifications, pendingJob.ID) {
+		t.Fatalf("failed job started notification should be hidden from lifecycle view, total=%d items=%+v failed_job=%d", dedupedTotal, dedupedNotifications, failedJob.ID)
 	}
 	if _, err := service.RetryJob(processed[0].ID); err != ErrJobNotRetryable {
 		t.Fatalf("success job should not be retryable, err=%v", err)
@@ -1144,6 +1210,24 @@ func reportEventsContain(events []MainReportJobEvent, eventType string) bool {
 func reportNotificationsContain(items []ReportNotificationDTO, title string) bool {
 	for _, item := range items {
 		if item.Title == title {
+			return true
+		}
+	}
+	return false
+}
+
+func reportNotificationsContainID(items []ReportNotificationDTO, id uint64) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func reportNotificationsContainJobID(items []ReportNotificationDTO, jobID uint64) bool {
+	for _, item := range items {
+		if item.JobID == jobID {
 			return true
 		}
 	}

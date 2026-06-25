@@ -75,6 +75,8 @@ import type {
   ReportTemplateUploadPayload,
   ReportTemplateUploadResponse,
   RuntimeChannelDetailsResponse,
+  RuntimeDraft,
+  RuntimeDraftPutPayload,
   RuntimeNotificationStats,
   RuntimeWorkersResponse,
   StorageRoute,
@@ -216,21 +218,33 @@ export function markAllNotificationsRead(params: NotificationListParams = {}) {
 	return postJson<{ updated: number }, Record<string, never>>(`/api/v1/notifications/read-all${suffix ? `?${suffix}` : ""}`, {});
 }
 
-export function getMainReportNotifications(params: NotificationListParams & { job_id?: number } = {}) {
-	const query = new URLSearchParams();
+type MainReportNotificationParams = NotificationListParams & {
+	job_id?: number;
+	event_type?: string | string[];
+	dedupe?: 'job_event';
+};
+
+function appendReportNotificationQuery(query: URLSearchParams, params: MainReportNotificationParams) {
 	if (params.unread !== undefined) query.set("unread", String(params.unread));
 	if (params.level) query.set("level", params.level);
 	if (params.limit !== undefined) query.set("limit", String(params.limit));
 	if (params.offset !== undefined) query.set("offset", String(params.offset));
 	if (params.job_id !== undefined) query.set("job_id", String(params.job_id));
+	if (params.dedupe) query.set("dedupe", params.dedupe);
+	const eventTypes = Array.isArray(params.event_type) ? params.event_type : params.event_type ? [params.event_type] : [];
+	eventTypes.forEach((eventType) => query.append("event_type", eventType));
+}
+
+export function getMainReportNotifications(params: MainReportNotificationParams = {}) {
+	const query = new URLSearchParams();
+	appendReportNotificationQuery(query, params);
 	const suffix = query.toString();
 	return getJson<MainReportNotificationListResponse>(`/api/v1/main-server/report-notifications${suffix ? `?${suffix}` : ""}`);
 }
 
-export function getMainReportNotificationUnreadCount(params: NotificationListParams & { job_id?: number } = {}) {
+export function getMainReportNotificationUnreadCount(params: MainReportNotificationParams = {}) {
 	const query = new URLSearchParams();
-	if (params.level) query.set("level", params.level);
-	if (params.job_id !== undefined) query.set("job_id", String(params.job_id));
+	appendReportNotificationQuery(query, params);
 	const suffix = query.toString();
 	return getJson<MainReportNotificationUnreadCount>(`/api/v1/main-server/report-notifications/unread-count${suffix ? `?${suffix}` : ""}`);
 }
@@ -239,11 +253,9 @@ export function markMainReportNotificationRead(notificationId: number) {
   return postJson<{ ok: true }, Record<string, never>>(`/api/v1/main-server/report-notifications/${notificationId}/read`, {});
 }
 
-export function markAllMainReportNotificationsRead(params: NotificationListParams & { job_id?: number } = {}) {
+export function markAllMainReportNotificationsRead(params: MainReportNotificationParams = {}) {
 	const query = new URLSearchParams();
-	if (params.unread !== undefined) query.set("unread", String(params.unread));
-	if (params.level) query.set("level", params.level);
-	if (params.job_id !== undefined) query.set("job_id", String(params.job_id));
+	appendReportNotificationQuery(query, params);
 	const suffix = query.toString();
 	return postJson<{ updated: number }, Record<string, never>>(`/api/v1/main-server/report-notifications/read-all${suffix ? `?${suffix}` : ""}`, {});
 }
@@ -541,6 +553,29 @@ export function getDetectionRunReportRequests(runId: number) {
 export function getDetectionRunStorageRoutes(runId: number) {
   return getJson<DetectionRunStorageRoutesResponse>(`/api/v1/detection-runs/${runId}/storage-routes`)
     .then((response) => ({ ...response, items: response.items.map(withStorageRouteAliases) }));
+}
+
+export function getRuntimeDraft<TData = Record<string, unknown>>(
+  namespace: string,
+  params: { scope_type?: string; scope_id?: string; project_id?: number; edge_instance_id?: string } = {},
+) {
+  const query = new URLSearchParams();
+  if (params.scope_type) query.set("scope_type", params.scope_type);
+  if (params.scope_id) query.set("scope_id", params.scope_id);
+  if (params.project_id !== undefined) query.set("project_id", String(params.project_id));
+  if (params.edge_instance_id) query.set("edge_instance_id", params.edge_instance_id);
+  const suffix = query.toString();
+  return getJson<RuntimeDraft<TData>>(`/api/v1/runtime-drafts/${encodeURIComponent(namespace)}${suffix ? `?${suffix}` : ""}`);
+}
+
+export function putRuntimeDraft<TData = Record<string, unknown>>(namespace: string, payload: RuntimeDraftPutPayload<TData>) {
+  return putJson<RuntimeDraft<TData>, RuntimeDraftPutPayload<TData>>(`/api/v1/runtime-drafts/${encodeURIComponent(namespace)}`, payload);
+}
+
+export function deleteRuntimeDraft(namespace: string, params: { scope_type: string; scope_id: string; expected_revision?: number }) {
+  const query = new URLSearchParams({ scope_type: params.scope_type, scope_id: params.scope_id });
+  if (params.expected_revision !== undefined) query.set("expected_revision", String(params.expected_revision));
+  return deleteJson<{ status: string }>(`/api/v1/runtime-drafts/${encodeURIComponent(namespace)}?${query.toString()}`);
 }
 
 export function startDetectionRun(payload: DetectionRunStartPayload) {

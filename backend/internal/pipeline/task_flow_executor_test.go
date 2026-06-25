@@ -877,6 +877,170 @@ func TestTaskFlowStringVirtualPayloadStartsCustomDetection(t *testing.T) {
 	}
 }
 
+func TestTaskFlowStringPayloadFallsBackToRuntimeDraftAndFixedDuration(t *testing.T) {
+	db := newTaskFlowTestDB(t)
+	repo := database.NewRepository(db)
+	channels := NewChannels()
+	tags := NewTagManager()
+	tasks := NewTaskManager()
+	project := &models.Project{ProjectCode: "UNIT-DRAFT", Name: "Unit Draft", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	requestTag := models.TagConfig{
+		VarID:       1601,
+		SourceType:  models.TagSourceVirtual,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "task_request",
+		RawName:     "task_request",
+		VarName:     "task_request",
+		JSONPath:    "task_request",
+		DataType:    "STRING",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	tempTag := models.TagConfig{
+		VarID:       7943629295557820374,
+		GatewayID:   1,
+		SourceTopic: "topic",
+		SourcePath:  "draft.temp",
+		RawName:     "draft.temp",
+		VarName:     "draft_temp",
+		JSONPath:    "draft.temp",
+		DataType:    "FLOAT",
+		ProjectID:   &project.ID,
+		ProjectCode: project.ProjectCode,
+		Enabled:     true,
+		ScaleFactor: 1,
+	}
+	if err := repo.CreateTag(&requestTag); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateTag(&tempTag); err != nil {
+		t.Fatal(err)
+	}
+	tags.Load([]models.TagConfig{requestTag, tempTag})
+
+	steps := mustStepsJSON(t, []map[string]any{{
+		"code":   "start",
+		"module": models.TaskFlowActionBuiltinStartDetectionRun,
+		"params": map[string]any{
+			"project_id":     map[string]any{"source": "trigger_param", "key": "project_id"},
+			"test_no":        map[string]any{"source": "trigger_param", "key": "test_no"},
+			"end_policy":     map[string]any{"source": "trigger_param", "key": "end_policy", "default": models.DetectionEndPolicyManual},
+			"duration_sec":   map[string]any{"source": "trigger_param", "key": "duration_sec"},
+			"enable_storage": false,
+			"enable_alarm":   false,
+		},
+	}})
+	executor := NewTaskFlowExecutor(repo, tags, tasks, channels)
+	cleared := false
+	executor.SetRuntimeDraftResolver(func(projectID uint, ref database.RuntimeDraftReference, customItemsPresent bool) (TaskFlowRuntimeDraftResult, error) {
+		if projectID != project.ID || ref.Namespace != "station.detection_preload" || ref.Revision != 3 || customItemsPresent {
+			t.Fatalf("unexpected runtime draft resolver input project_id=%d ref=%+v custom=%t", projectID, ref, customItemsPresent)
+		}
+		return TaskFlowRuntimeDraftResult{
+			CustomItems: []models.DetectionStandardItem{{
+				VarID:         tempTag.VarID,
+				VarName:       tempTag.VarName,
+				CheckEnabled:  true,
+				AlarmEnabled:  true,
+				StoreEnabled:  true,
+				CheckOnStart:  true,
+				CheckMethod:   models.CheckMethodNumericRange,
+				QualityPolicy: models.QualityPolicyIgnoreBad,
+			}},
+			ProcessParams: map[string]any{"draft": true},
+			Clear: func() {
+				cleared = true
+			},
+		}, nil
+	})
+	flow := models.TaskFlow{
+		ID:              160,
+		ProjectID:       project.ID,
+		FlowCode:        "request-draft-fixed-duration",
+		Name:            "Request Draft Fixed Duration",
+		Enabled:         true,
+		TriggerType:     models.TaskFlowTriggerDataChange,
+		ConditionScript: `task_params.command === "start_detection"`,
+		StepsJSON:       steps,
+		TimeoutMS:       3000,
+		Vars:            []models.TaskFlowVar{{FlowID: 160, ProjectID: project.ID, VarID: requestTag.VarID, Role: models.TaskFlowVarRoleWatch}},
+	}
+	executor.Load([]models.TaskFlow{flow})
+	executor.Start(1)
+
+	request, _ := json.Marshal(map[string]any{
+		"command":    "start_detection",
+		"project_id": project.ID,
+		"test_no":    "TF-DRAFT-FIXED",
+		"runtime_draft": map[string]any{
+			"namespace": "station.detection_preload",
+			"revision":  3,
+		},
+		"duration_sec": 600,
+	})
+	payload, _ := json.Marshal(map[string]any{"task_request": string(request)})
+	processMessage(1, &models.MQTTMessage{GatewayID: 1, Topic: "topic", Payload: payload, Timestamp: time.Now()}, channels, tags, tasks, executor)
+
+	waitForTaskFlowRunStatus(t, db, flow.ID, models.TaskFlowStatusSuccess, time.Second)
+	var run models.TaskFlowRun
+	if err := db.First(&run, "flow_id = ?", flow.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(run.ScriptLogs, "runtime_draft_from_task_params") || !strings.Contains(run.ScriptLogs, "end_policy_fixed_duration_from_duration_sec") {
+		t.Fatalf("expected fallback markers in task flow logs, logs=%s", run.ScriptLogs)
+	}
+	if !cleared {
+		t.Fatalf("expected runtime draft to be cleared after successful start")
+	}
+	var task models.DetectionTask
+	if err := db.First(&task, "test_no = ?", "TF-DRAFT-FIXED").Error; err != nil {
+		t.Fatal(err)
+	}
+	if task.EndPolicy != models.DetectionEndPolicyFixedDuration || task.DurationSec != 600 || task.ExpectedEndAt == nil {
+		t.Fatalf("expected fixed-duration task from STRING fallback, got %+v", task)
+	}
+	if task.StandardID != nil || task.StandardCode != "custom" || !strings.Contains(task.CustomConfigJSON, `"process_params"`) {
+		t.Fatalf("expected runtime draft custom config snapshot, got %+v json=%s", task, task.CustomConfigJSON)
+	}
+	item, err := repo.UpdateDetectionRunStandardItem(task.ID, tempTag.VarID, nil)
+	if err != nil || item.VarID != tempTag.VarID {
+		t.Fatalf("expected runtime draft standard item for exact var_id, item=%+v err=%v", item, err)
+	}
+}
+
+func TestNormalizeStartDetectionRunParamsNoFallbackOnDesignedPath(t *testing.T) {
+	ctx := &taskFlowRunContext{Params: map[string]any{
+		"command":    "start_detection",
+		"project_id": 1,
+		"runtime_draft": map[string]any{
+			"namespace": "station.detection_preload",
+			"revision":  7,
+		},
+		"end_policy":   models.DetectionEndPolicyFixedDuration,
+		"duration_sec": 600,
+	}}
+	params, fallbacks := normalizeStartDetectionRunParams(ctx, map[string]any{
+		"runtime_draft": map[string]any{
+			"namespace": "station.detection_preload",
+			"revision":  7,
+		},
+		"end_policy":   models.DetectionEndPolicyFixedDuration,
+		"duration_sec": 600,
+	})
+	if len(fallbacks) != 0 {
+		t.Fatalf("designed path should not use fallbacks, got %v", fallbacks)
+	}
+	if params["end_policy"] != models.DetectionEndPolicyFixedDuration {
+		t.Fatalf("unexpected end policy: %+v", params)
+	}
+}
+
 func TestTaskFlowStringPayloadWritesPLCBeforeStartingDetection(t *testing.T) {
 	db := newTaskFlowTestDB(t)
 	repo := database.NewRepository(db)

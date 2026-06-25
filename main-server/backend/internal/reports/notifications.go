@@ -38,11 +38,13 @@ func (MainReportNotificationRecipient) TableName() string {
 }
 
 type NotificationFilter struct {
-	JobID  *uint64
-	Level  string
-	Unread *bool
-	Limit  int
-	Offset int
+	JobID          *uint64
+	Level          string
+	EventTypes     []string
+	DedupeJobEvent bool
+	Unread         *bool
+	Limit          int
+	Offset         int
 }
 
 type ReportNotificationDTO struct {
@@ -160,6 +162,28 @@ func (s *Service) notificationRecipientQuery(userID uint, filter NotificationFil
 	}
 	if strings.TrimSpace(filter.Level) != "" {
 		stmt = stmt.Where("n.level = ?", strings.TrimSpace(filter.Level))
+	}
+	if len(filter.EventTypes) > 0 {
+		stmt = stmt.Joins("JOIN main_report_job_events AS e ON e.id = n.event_id").
+			Where("e.event_type IN ?", filter.EventTypes)
+	}
+	if filter.DedupeJobEvent {
+		subQuery := s.db.Table("main_report_notifications AS dn").
+			Select("CASE WHEN de.event_type = ? THEN MIN(dn.id) ELSE MAX(dn.id) END", EventStarted).
+			Joins("JOIN main_report_job_events AS de ON de.id = dn.event_id").
+			Joins("JOIN main_report_jobs AS dj ON dj.id = dn.job_id").
+			Where("NOT (de.event_type = ? AND dj.status IN ?)", EventStarted, []string{StatusSucceeded, StatusSuccessLegacy, StatusFailed}).
+			Group("dn.job_id, de.event_type")
+		if filter.JobID != nil {
+			subQuery = subQuery.Where("dn.job_id = ?", *filter.JobID)
+		}
+		if strings.TrimSpace(filter.Level) != "" {
+			subQuery = subQuery.Where("dn.level = ?", strings.TrimSpace(filter.Level))
+		}
+		if len(filter.EventTypes) > 0 {
+			subQuery = subQuery.Where("de.event_type IN ?", filter.EventTypes)
+		}
+		stmt = stmt.Where("n.id IN (?)", subQuery)
 	}
 	if filter.Unread != nil {
 		if *filter.Unread {

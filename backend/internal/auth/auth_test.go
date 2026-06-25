@@ -202,6 +202,7 @@ func TestLoginMeSSOTicketVerifyFlow(t *testing.T) {
 	protected := router.Group("")
 	protected.Use(svc.RequireUser())
 	protected.GET("/me", svc.Me)
+	protected.POST("/refresh", svc.Refresh)
 	protected.POST("/sso-ticket", svc.RequirePermission(PermSSOHandoff), svc.CreateSSOTicket)
 	router.POST("/sso-ticket/verify", svc.RequireServiceScope(ScopeServiceSSOVerify), svc.VerifySSOTicket)
 
@@ -220,6 +221,17 @@ func TestLoginMeSSOTicketVerifyFlow(t *testing.T) {
 	meResp := performJSON(router, http.MethodGet, "/me", accessToken, "")
 	if meResp.Code != http.StatusOK {
 		t.Fatalf("me status=%d body=%s", meResp.Code, meResp.Body.String())
+	}
+
+	refreshResp := performJSON(router, http.MethodPost, "/refresh", accessToken, "")
+	if refreshResp.Code != http.StatusOK {
+		t.Fatalf("refresh status=%d body=%s", refreshResp.Code, refreshResp.Body.String())
+	}
+	var refreshPayload map[string]any
+	mustDecode(t, refreshResp, &refreshPayload)
+	refreshedToken, _ := refreshPayload["access_token"].(string)
+	if refreshedToken == "" || refreshedToken == accessToken || refreshPayload["expires_in"].(float64) != float64(int(jwt.TTL().Seconds())) {
+		t.Fatalf("unexpected refresh payload: %+v", refreshPayload)
 	}
 
 	ticketResp := performJSON(router, http.MethodPost, "/sso-ticket", accessToken, "")
@@ -242,6 +254,34 @@ func TestLoginMeSSOTicketVerifyFlow(t *testing.T) {
 	reuseResp := performJSON(router, http.MethodPost, "/sso-ticket/verify", serviceToken, verifyBody)
 	if reuseResp.Code != http.StatusUnauthorized {
 		t.Fatalf("reuse status=%d body=%s", reuseResp.Code, reuseResp.Body.String())
+	}
+}
+
+func TestRefreshRejectsExpiredToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := newFakeStore()
+	store.putUser(models.SysUser{
+		ID:                 1,
+		Username:           "admin",
+		Role:               RoleAdmin,
+		Enabled:            true,
+		PermissionsVersion: 1,
+	})
+	now := time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC)
+	jwt := NewJWTManager("test-secret", time.Minute)
+	jwt.now = func() time.Time { return now }
+	token, _, err := jwt.Sign(UserTokenSubject{ID: 1, Username: "admin", Role: RoleAdmin, PermissionsVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwt.now = func() time.Time { return now.Add(2 * time.Minute) }
+	svc := NewService(store, jwt, Options{})
+	router := gin.New()
+	router.POST("/refresh", svc.RequireUser(), svc.Refresh)
+
+	resp := performJSON(router, http.MethodPost, "/refresh", token, "")
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected expired refresh to be unauthorized, got status=%d body=%s", resp.Code, resp.Body.String())
 	}
 }
 

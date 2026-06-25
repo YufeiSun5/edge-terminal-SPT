@@ -23,6 +23,9 @@
     "bootstrap_admin_password": "change-me-before-release",
     "service_clients": []
   },
+  "realtime": {
+    "ws_snapshot_interval_ms": 500
+  },
   "gateways": [
     {
       "id": 1,

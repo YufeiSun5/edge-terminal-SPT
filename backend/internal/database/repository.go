@@ -82,6 +82,7 @@ type StartDetectionOptions struct {
 	ProcessParams     any
 	PLCWrites         any
 	ReportRequest     any
+	RuntimeDraft      *RuntimeDraftReference
 	LimitCheckEnabled *bool
 	EndPolicy         string
 	DurationSec       int
@@ -89,6 +90,11 @@ type StartDetectionOptions struct {
 	OperatorNote      string
 	ReportTemplateID  *uint
 	StartedByUserID   uint
+}
+
+type RuntimeDraftReference struct {
+	Namespace string `json:"namespace"`
+	Revision  int64  `json:"revision"`
 }
 
 var (

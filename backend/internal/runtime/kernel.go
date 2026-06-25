@@ -230,10 +230,12 @@ func (k *Kernel) mountRoutes() {
 	protected.Use(k.auth.RequireUser(), auditWriteMiddleware(k.repo))
 	protected.GET("/auth/me", k.auth.Me)
 	protected.POST("/auth/logout", k.auth.Logout)
+	protected.POST("/auth/refresh", k.auth.Refresh)
 	protected.POST("/auth/sso-ticket", k.auth.RequirePermission(auth.PermSSOHandoff), k.auth.CreateSSOTicket)
 
 	variablesService := services.NewVariablesService(k.repo, k.tags, k.cfg.Auth.EdgeInstanceID)
-	detectionRunsService := services.NewDetectionRunsService(k.repo, k.tasks, services.DetectionRunsRuntimeDeps{Tags: k.tags, Channels: k.channels, Flows: k.flows})
+	runtimeDraftsService := services.NewRuntimeDraftService(k.tasks)
+	detectionRunsService := services.NewDetectionRunsService(k.repo, k.tasks, services.DetectionRunsRuntimeDeps{Tags: k.tags, Channels: k.channels, Flows: k.flows, RuntimeDrafts: runtimeDraftsService})
 	runtimeSettingsService := services.NewRuntimeSettingsService(k.repo)
 	if err := runtimeSettingsService.Load(); err != nil {
 		log.Printf("load runtime settings failed: %v", err)
@@ -281,10 +283,22 @@ func (k *Kernel) mountRoutes() {
 		}
 		return out, err
 	})
+	k.flows.SetRuntimeDraftResolver(func(projectID uint, ref database.RuntimeDraftReference, customItemsPresent bool) (pipeline.TaskFlowRuntimeDraftResult, error) {
+		result, err := services.ResolveDetectionRuntimeDraft(runtimeDraftsService, k.repo, projectID, ref, customItemsPresent)
+		return pipeline.TaskFlowRuntimeDraftResult{
+			CustomItems:   result.CustomItems,
+			ProcessParams: result.ProcessParams,
+			Clear:         result.Clear,
+		}, err
+	})
 
-	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).WithNotificationHub(k.notify).Register(v1, k.auth)
-	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).WithRuntimeSettings(runtimeSettingsService).WithNotificationHub(k.notify).WithDetectionPlans(detectionPlansService).Register(v1, k.auth)
+	handlers.NewRealtimeWSHandler(realtimeWSService, detectionRunsService, k.repo, variableWriteService).
+		WithSnapshotInterval(time.Duration(k.cfg.Realtime.WSSnapshotIntervalMS)*time.Millisecond).
+		WithNotificationHub(k.notify).
+		Register(v1, k.auth)
+	handlers.NewEdgeControlHandler(k.repo, detectionRunsService, variableWriteService).WithRuntimeSettings(runtimeSettingsService).WithNotificationHub(k.notify).WithDetectionPlans(detectionPlansService).WithRuntimeDrafts(runtimeDraftsService).Register(v1, k.auth)
 	handlers.NewEdgeRealtimeHandler(variablesService).Register(v1, k.auth)
+	handlers.NewRuntimeDraftsHandler(runtimeDraftsService).RegisterServiceRoutes(v1, k.auth)
 	gatewaysHandler := handlers.NewGatewaysHandler(k.repo, k.mqtt, k.channels, k.notify)
 	taskFlowsHandler := handlers.NewTaskFlowsHandler(k.repo, k.flows)
 	gatewaysHandler.RegisterServiceRoutes(v1, k.auth)
@@ -300,6 +314,7 @@ func (k *Kernel) mountRoutes() {
 	handlers.NewReportTemplatesHandler(reportTemplatesService).Register(protected, k.auth)
 	handlers.NewDetectionRunsHandler(detectionRunsService).Register(protected, k.auth)
 	handlers.NewDetectionPlansHandler(detectionPlansService).Register(protected, k.auth)
+	handlers.NewRuntimeDraftsHandler(runtimeDraftsService).Register(protected, k.auth)
 	handlers.NewSystemConfigHandler(systemConfigService).Register(protected, k.auth)
 	handlers.NewRuntimeSettingsHandler(runtimeSettingsService).Register(protected, k.auth)
 	handlers.NewAuditLogsHandler(k.repo).Register(protected, k.auth)

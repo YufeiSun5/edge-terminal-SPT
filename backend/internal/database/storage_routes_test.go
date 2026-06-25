@@ -350,6 +350,125 @@ func TestFreezeDetectionRunStorageRoutesDoesNotUseCheckCycleAsStorageCycle(t *te
 	}
 }
 
+func TestFreezeDetectionRunStorageRoutesIncludesCheckedAndConfiguredStorageVars(t *testing.T) {
+	db := newRepositoryTestDB(t)
+	repo := NewRepository(db)
+	project := &models.Project{ProjectCode: "D-FREEZE-UNION", Name: "Freeze Union Project", Enabled: true}
+	if err := repo.CreateProject(project); err != nil {
+		t.Fatal(err)
+	}
+	tags := []models.TagConfig{
+		{
+			VarID:       920,
+			GatewayID:   1,
+			SourcePath:  "calc.temp",
+			RawName:     "Calculated Temp",
+			ProjectID:   &project.ID,
+			ProjectCode: project.ProjectCode,
+			VarName:     "Calculated Temp",
+			JSONPath:    "calc.temp",
+			DataType:    "FLOAT",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+		{
+			VarID:       921,
+			GatewayID:   1,
+			SourcePath:  "stored.only",
+			RawName:     "Stored Only",
+			ProjectID:   &project.ID,
+			ProjectCode: project.ProjectCode,
+			VarName:     "Stored Only",
+			JSONPath:    "stored.only",
+			DataType:    "FLOAT",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+		{
+			VarID:       922,
+			GatewayID:   1,
+			SourcePath:  "not.stored",
+			RawName:     "Not Stored",
+			ProjectID:   &project.ID,
+			ProjectCode: project.ProjectCode,
+			VarName:     "Not Stored",
+			JSONPath:    "not.stored",
+			DataType:    "FLOAT",
+			ScaleFactor: 1,
+			Enabled:     true,
+		},
+	}
+	for i := range tags {
+		if err := repo.CreateTag(&tags[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkedDefault, err := repo.EnsureDefaultStorageRouteForTag(tags[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedOnlyRoute, err := repo.EnsureDefaultStorageRouteForTag(tags[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateStorageRoute(storedOnlyRoute.ID, map[string]interface{}{
+		"enabled":        true,
+		"trigger_mode":   models.StoreTriggerOnCycle,
+		"cycle_ms":       10000,
+		"store_on_start": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.EnsureDefaultStorageRouteForTag(tags[2]); err != nil {
+		t.Fatal(err)
+	}
+	task := &models.DetectionTask{
+		TestNo:      "T-FREEZE-UNION",
+		FactoryNo:   "F-FREEZE-UNION",
+		ProjectID:   project.ID,
+		ProjectCode: project.ProjectCode,
+		Mode:        "standard",
+		Status:      models.DetectionStatusRunning,
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+	runRoutes, err := freezeDetectionRunStorageRoutes(db, task, []models.DetectionRunStandardItem{{
+		TaskID:       task.ID,
+		TestNo:       task.TestNo,
+		VarID:        tags[0].VarID,
+		VarName:      tags[0].VarName,
+		CheckEnabled: true,
+		StoreEnabled: false,
+	}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]models.DetectionRunStorageRoute{}
+	for _, route := range runRoutes {
+		got[route.VarID] = route
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected checked var plus independently configured storage var, got %+v", runRoutes)
+	}
+	if got[tags[0].VarID].RouteID != checkedDefault.ID {
+		t.Fatalf("expected checked var default route to be frozen, got %+v", got[tags[0].VarID])
+	}
+	if got[tags[1].VarID].CycleMS != 10000 {
+		t.Fatalf("expected independently configured storage route to keep own cycle, got %+v", got[tags[1].VarID])
+	}
+	if _, ok := got[tags[2].VarID]; ok {
+		t.Fatalf("unexpected disabled non-detection route frozen: %+v", got[tags[2].VarID])
+	}
+	var checkedRoute models.StorageRoute
+	if err := db.First(&checkedRoute, "id = ?", checkedDefault.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !checkedRoute.Enabled {
+		t.Fatalf("checked detection item should force its default storage route enabled, got %+v", checkedRoute)
+	}
+}
+
 func TestStorageRouteSkipsUnassignedAndRejectsInvalidSchema(t *testing.T) {
 	db := newRepositoryTestDB(t)
 	repo := NewRepository(db)

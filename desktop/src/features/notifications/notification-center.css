@@ -131,6 +131,32 @@
 
 .ops-center-table {
   min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ops-center-table .ant-spin-nested-loading,
+.ops-center-table .ant-spin-container {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ops-center-table .ant-table {
+  min-height: 0;
+  flex: 1;
+}
+
+.ops-center-table .ant-table-pagination {
+  margin: 12px 0 0;
+  flex: 0 0 auto;
+}
+
+.ops-center-table .ant-pagination-total-text {
+  color: rgba(20, 35, 56, 0.58);
+  font-size: 12px;
 }
 
 .ops-center-page .ant-table {

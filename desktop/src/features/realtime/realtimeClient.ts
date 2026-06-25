@@ -33,17 +33,27 @@ export function subscribeSse<TPayload>(
 
 type RealtimeWebSocketHandlers = {
   onMessage: (message: RealtimeWebSocketEnvelope) => void
+  onStatus?: (status: RealtimeWebSocketStatus) => void
   onClose?: () => void
   onError?: (error: Event | Error) => void
   subscription?: RealtimeWebSocketSubscription
 }
 
+export type RealtimeWebSocketStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
+
 type SharedRealtimeWebSocket = {
-  socket: WebSocket
+  key: string
+  subscription?: RealtimeWebSocketSubscription
+  socket?: WebSocket
   handlers: Set<RealtimeWebSocketHandlers>
+  reconnectAttempt: number
+  reconnectTimer?: number
+  reconnecting: boolean
 }
 
 const sharedRealtimeSockets = new Map<string, SharedRealtimeWebSocket>()
+const reconnectBackoffMs = [500, 1000, 2000, 5000, 10000, 30000]
+let onlineListenerInstalled = false
 
 export class RealtimeWebSocketCommandError extends Error {
   code?: string
@@ -57,43 +67,50 @@ export class RealtimeWebSocketCommandError extends Error {
   }
 }
 
-export function subscribeRealtimeWebSocket({ onMessage, onClose, onError, subscription }: RealtimeWebSocketHandlers) {
-  const token = getAccessToken()
-  const url = new URL('/api/v1/ws', env.apiBaseUrl)
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  if (token) url.searchParams.set('access_token', token)
-  subscription?.topics.forEach((topic) => url.searchParams.append('topic', topic))
-  if (subscription?.edge_instance_id) url.searchParams.set('edge_instance_id', subscription.edge_instance_id)
-  if (subscription?.project_id !== undefined) url.searchParams.set('project_id', String(subscription.project_id))
-  if (subscription?.source_type) url.searchParams.set('source_type', subscription.source_type)
-  if (subscription?.gateway_id !== undefined) url.searchParams.set('gateway_id', String(subscription.gateway_id))
-  subscription?.var_ids?.forEach((varId) => url.searchParams.append('var_id', String(varId)))
+export function subscribeRealtimeWebSocket({ onMessage, onStatus, onClose, onError, subscription }: RealtimeWebSocketHandlers) {
+  installOnlineReconnectListener()
 
-  const key = url.toString()
-  const handler: RealtimeWebSocketHandlers = { onMessage, onClose, onError, subscription }
+  const key = buildRealtimeWebSocketKey(subscription)
+  const handler: RealtimeWebSocketHandlers = { onMessage, onStatus, onClose, onError, subscription }
   const existing = sharedRealtimeSockets.get(key)
   if (existing) {
     existing.handlers.add(handler)
+    handler.onStatus?.(existing.socket?.readyState === WebSocket.OPEN ? 'open' : existing.reconnecting ? 'reconnecting' : 'connecting')
     return () => {
-      existing.handlers.delete(handler)
-      if (existing.handlers.size === 0 && existing.socket.readyState === WebSocket.OPEN) {
-        sharedRealtimeSockets.delete(key)
-        existing.socket.close()
-      }
-      if (existing.handlers.size === 0 && existing.socket.readyState === WebSocket.CLOSED) {
-        sharedRealtimeSockets.delete(key)
-      }
+      releaseRealtimeHandler(existing, handler)
     }
   }
 
-  const socket = new WebSocket(url)
-  const shared: SharedRealtimeWebSocket = { socket, handlers: new Set([handler]) }
+  const shared: SharedRealtimeWebSocket = {
+    key,
+    subscription,
+    handlers: new Set([handler]),
+    reconnectAttempt: 0,
+    reconnecting: false,
+  }
   sharedRealtimeSockets.set(key, shared)
+  connectSharedRealtimeSocket(shared, false)
+
+  return () => {
+    releaseRealtimeHandler(shared, handler)
+  }
+}
+
+function connectSharedRealtimeSocket(shared: SharedRealtimeWebSocket, reconnecting: boolean) {
+  if (shared.handlers.size === 0) return
+  clearReconnectTimer(shared)
+  shared.reconnecting = reconnecting
+  notifyRealtimeStatus(shared, reconnecting ? 'reconnecting' : 'connecting')
+  const socket = new WebSocket(buildRealtimeWebSocketURL(shared.subscription))
+  shared.socket = socket
   socket.addEventListener('open', () => {
     if (shared.handlers.size === 0) {
-      sharedRealtimeSockets.delete(key)
       socket.close()
+      return
     }
+    shared.reconnectAttempt = 0
+    shared.reconnecting = false
+    notifyRealtimeStatus(shared, 'open')
   })
   socket.addEventListener('message', (event) => {
     try {
@@ -108,20 +125,91 @@ export function subscribeRealtimeWebSocket({ onMessage, onClose, onError, subscr
     shared.handlers.forEach((item) => item.onError?.(event))
   })
   socket.addEventListener('close', () => {
-    sharedRealtimeSockets.delete(key)
+    if (shared.socket !== socket) return
+    shared.socket = undefined
     shared.handlers.forEach((item) => item.onClose?.())
+    scheduleRealtimeReconnect(shared)
   })
+}
 
-  return () => {
-    shared.handlers.delete(handler)
-    if (shared.handlers.size === 0 && socket.readyState === WebSocket.OPEN) {
-      sharedRealtimeSockets.delete(key)
-      socket.close()
-    }
-    if (shared.handlers.size === 0 && socket.readyState === WebSocket.CLOSED) {
-      sharedRealtimeSockets.delete(key)
-    }
+function scheduleRealtimeReconnect(shared: SharedRealtimeWebSocket, immediate = false) {
+  if (shared.handlers.size === 0) {
+    sharedRealtimeSockets.delete(shared.key)
+    return
   }
+  if (shared.reconnectTimer !== undefined) return
+  const baseDelay = reconnectBackoffMs[Math.min(shared.reconnectAttempt, reconnectBackoffMs.length - 1)]
+  const jitter = immediate ? 0 : Math.floor(Math.random() * Math.min(250, baseDelay / 2))
+  const delay = immediate ? 0 : baseDelay + jitter
+  shared.reconnectAttempt += 1
+  shared.reconnecting = true
+  notifyRealtimeStatus(shared, 'reconnecting')
+  shared.reconnectTimer = window.setTimeout(() => {
+    shared.reconnectTimer = undefined
+    connectSharedRealtimeSocket(shared, true)
+  }, delay)
+}
+
+function releaseRealtimeHandler(shared: SharedRealtimeWebSocket, handler: RealtimeWebSocketHandlers) {
+  shared.handlers.delete(handler)
+  if (shared.handlers.size > 0) return
+  clearReconnectTimer(shared)
+  sharedRealtimeSockets.delete(shared.key)
+  notifyRealtimeStatus(shared, 'closed')
+  const socket = shared.socket
+  shared.socket = undefined
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    socket.close()
+  }
+}
+
+function clearReconnectTimer(shared: SharedRealtimeWebSocket) {
+  if (shared.reconnectTimer === undefined) return
+  window.clearTimeout(shared.reconnectTimer)
+  shared.reconnectTimer = undefined
+}
+
+function notifyRealtimeStatus(shared: SharedRealtimeWebSocket, status: RealtimeWebSocketStatus) {
+  shared.handlers.forEach((item) => item.onStatus?.(status))
+}
+
+function installOnlineReconnectListener() {
+  if (onlineListenerInstalled || typeof window === 'undefined') return
+  onlineListenerInstalled = true
+  window.addEventListener('online', () => {
+    sharedRealtimeSockets.forEach((shared) => {
+      if (shared.socket && (shared.socket.readyState === WebSocket.OPEN || shared.socket.readyState === WebSocket.CONNECTING)) {
+        return
+      }
+      clearReconnectTimer(shared)
+      scheduleRealtimeReconnect(shared, true)
+    })
+  })
+}
+
+function buildRealtimeWebSocketURL(subscription?: RealtimeWebSocketSubscription) {
+  const token = getAccessToken()
+  const url = new URL('/api/v1/ws', env.apiBaseUrl)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  if (token) url.searchParams.set('access_token', token)
+  appendRealtimeSubscriptionParams(url, subscription)
+  return url
+}
+
+function buildRealtimeWebSocketKey(subscription?: RealtimeWebSocketSubscription) {
+  const url = new URL('/api/v1/ws', env.apiBaseUrl)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  appendRealtimeSubscriptionParams(url, subscription)
+  return url.toString()
+}
+
+function appendRealtimeSubscriptionParams(url: URL, subscription?: RealtimeWebSocketSubscription) {
+  subscription?.topics.forEach((topic) => url.searchParams.append('topic', topic))
+  if (subscription?.edge_instance_id) url.searchParams.set('edge_instance_id', subscription.edge_instance_id)
+  if (subscription?.project_id !== undefined) url.searchParams.set('project_id', String(subscription.project_id))
+  if (subscription?.source_type) url.searchParams.set('source_type', subscription.source_type)
+  if (subscription?.gateway_id !== undefined) url.searchParams.set('gateway_id', String(subscription.gateway_id))
+  subscription?.var_ids?.forEach((varId) => url.searchParams.append('var_id', String(varId)))
 }
 
 export function sendRealtimeWebSocketCommand<TPayload = unknown, TResult = unknown>(

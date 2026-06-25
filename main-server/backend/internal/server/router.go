@@ -62,6 +62,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 	protected.Use(authService.RequireUser())
 	protected.GET("/auth/me", authService.Me)
 	protected.POST("/auth/logout", authService.Logout)
+	protected.POST("/auth/refresh", authService.Refresh)
 	protected.POST("/auth/sso-ticket", authService.RequirePermission(auth.PermSSOHandoff), authService.CreateSSOTicket)
 	protected.GET("/users", authService.RequirePermission(auth.PermManageUsers), authService.ListUsers)
 	protected.GET("/gateways", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
@@ -117,6 +118,15 @@ func NewRouter(cfg *config.Config, db *gorm.DB) http.Handler {
 	})
 	protected.GET("/runtime/workers", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		forwardEdgeRuntimeRead(c, edges, stationViewQuery, "api/v1/edge-control/runtime/workers")
+	})
+	protected.GET("/runtime-drafts/:namespace", authService.RequirePermission(auth.PermViewRealtime), func(c *gin.Context) {
+		forwardRuntimeDraftRead(c, edges, stationViewQuery)
+	})
+	protected.PUT("/runtime-drafts/:namespace", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
+		forwardRuntimeDraftWrite(c, edges, stationViewQuery, "save")
+	})
+	protected.DELETE("/runtime-drafts/:namespace", authService.RequirePermission(auth.PermStartDetection), func(c *gin.Context) {
+		forwardRuntimeDraftWrite(c, edges, stationViewQuery, "clear")
 	})
 	protected.GET("/task-modules", authService.RequirePermission(auth.PermSystemSettings), func(c *gin.Context) {
 		forwardEdgeMetadataRead(c, edges, stationViewQuery, "api/v1/edge-control/task-modules")
@@ -1465,11 +1475,17 @@ func registerEdgeControlRoutes(router *gin.Engine, registry *edgeRegistry, stati
 		"/api/v1/edge-control/detection/apply-config",
 		"/api/v1/edge-control/detection/refresh-features",
 		"/api/v1/edge-control/detection/report-requests",
+		"/api/v1/edge-control/runtime-drafts/:namespace/save",
+		"/api/v1/edge-control/runtime-drafts/:namespace/clear",
 		"/api/v1/edge-control/variables/write",
 	} {
 		path := route
 		router.POST(path, func(c *gin.Context) {
-			forwardEdgeControl(c, registry, stationViewQuery, strings.TrimPrefix(path, "/"))
+			edgePath := strings.TrimPrefix(path, "/")
+			if namespace := strings.TrimSpace(c.Param("namespace")); namespace != "" {
+				edgePath = strings.ReplaceAll(edgePath, ":namespace", namespace)
+			}
+			forwardEdgeControl(c, registry, stationViewQuery, edgePath)
 		})
 	}
 }
@@ -1548,6 +1564,153 @@ func forwardUserDetectionControl(c *gin.Context, registry *edgeRegistry, station
 		contentType = "application/json"
 	}
 	c.Data(resp.StatusCode, contentType, resp.Body)
+}
+
+func forwardRuntimeDraftRead(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery) {
+	scopeType, scopeID, projectID, ok := runtimeDraftScopeFromQuery(c)
+	if !ok {
+		return
+	}
+	client, ok := runtimeDraftEdgeClient(c, registry, stationViewQuery, projectID)
+	if !ok {
+		return
+	}
+	queryValues := c.Request.URL.Query()
+	queryValues.Del("edge_instance_id")
+	queryValues.Set("scope_type", scopeType)
+	queryValues.Set("scope_id", scopeID)
+	queryValues.Del("project_id")
+	resp, err := client.ForwardRead(c.Request.Context(), "api/v1/edge-control/runtime-drafts/"+c.Param("namespace"), queryValues.Encode())
+	if err != nil {
+		writeEdgeRuntimeForwardError(c, err, client.ServiceTokenRef())
+		return
+	}
+	writeForwardResponse(c, resp)
+}
+
+func forwardRuntimeDraftWrite(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery, action string) {
+	payload := map[string]any{}
+	if c.Request.Body != nil && c.Request.Method != http.MethodDelete {
+		body, err := io.ReadAll(io.LimitReader(c.Request.Body, 4*1024*1024))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "runtime draft request body is invalid", "code": "invalid_payload"})
+			return
+		}
+		if strings.TrimSpace(string(body)) != "" {
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			if err := decoder.Decode(&payload); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "runtime draft request body is invalid", "code": "invalid_payload"})
+				return
+			}
+		}
+	}
+	scopeType, scopeID, projectID, ok := runtimeDraftScopeFromPayloadOrQuery(c, payload)
+	if !ok {
+		return
+	}
+	client, ok := runtimeDraftEdgeClient(c, registry, stationViewQuery, projectID)
+	if !ok {
+		return
+	}
+	payload["scope_type"] = scopeType
+	payload["scope_id"] = scopeID
+	if expected := strings.TrimSpace(c.Query("expected_revision")); expected != "" {
+		if value, err := strconv.ParseInt(expected, 10, 64); err == nil && value >= 0 {
+			payload["expected_revision"] = value
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid expected_revision", "code": "invalid_query"})
+			return
+		}
+	}
+	principal, ok := auth.PrincipalFromContext(c)
+	if !ok || strings.TrimSpace(principal.Username) == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user principal is missing", "code": "unauthorized"})
+		return
+	}
+	commandID := firstNonEmpty(c.GetHeader("X-Command-ID"), newMainCommandID())
+	envelope, err := json.Marshal(gin.H{
+		"command_id":        commandID,
+		"operator_id":       strconv.FormatUint(uint64(principal.UserID), 10),
+		"operator_name":     principal.Username,
+		"operator_username": principal.Username,
+		"payload":           payload,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "edge control envelope build failed", "code": "internal_error"})
+		return
+	}
+	resp, err := client.Forward(c.Request.Context(), "api/v1/edge-control/runtime-drafts/"+c.Param("namespace")+"/"+action, edgeForwardRawQuery(c.Request.URL.Query()), envelope, commandID)
+	if err != nil {
+		writeEdgeControlForwardError(c, err, client.ServiceTokenRef())
+		return
+	}
+	writeForwardResponse(c, resp)
+}
+
+func runtimeDraftScopeFromQuery(c *gin.Context) (string, string, uint64, bool) {
+	payload := map[string]any{}
+	return runtimeDraftScopeFromPayloadOrQuery(c, payload)
+}
+
+func runtimeDraftScopeFromPayloadOrQuery(c *gin.Context, payload map[string]any) (string, string, uint64, bool) {
+	scopeType := strings.TrimSpace(firstNonEmpty(stringFromAny(payload["scope_type"]), c.Query("scope_type")))
+	if scopeType == "" {
+		scopeType = "project"
+	}
+	scopeID := strings.TrimSpace(firstNonEmpty(stringFromAny(payload["scope_id"]), c.Query("scope_id")))
+	projectID := uint64FromAny(payload["project_id"])
+	if projectID == 0 {
+		if raw := strings.TrimSpace(c.Query("project_id")); raw != "" {
+			value, err := strconv.ParseUint(raw, 10, 64)
+			if err != nil || value == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid project_id", "code": "invalid_project_id"})
+				return "", "", 0, false
+			}
+			projectID = value
+		}
+	}
+	if scopeType == "project" {
+		if scopeID == "" && projectID > 0 {
+			scopeID = strconv.FormatUint(projectID, 10)
+		}
+		if projectID == 0 && scopeID != "" {
+			value, err := strconv.ParseUint(scopeID, 10, 64)
+			if err != nil || value == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid scope_id", "code": "invalid_scope_id"})
+				return "", "", 0, false
+			}
+			projectID = value
+		}
+	}
+	if scopeType != "project" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "runtime draft scope_type must be project", "code": "invalid_scope_type"})
+		return "", "", 0, false
+	}
+	if scopeID == "" || projectID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_id or scope_id is required", "code": "invalid_scope"})
+		return "", "", 0, false
+	}
+	return scopeType, scopeID, projectID, true
+}
+
+func runtimeDraftEdgeClient(c *gin.Context, registry *edgeRegistry, stationViewQuery *query.StationViewQuery, projectID uint64) (*edgecontrol.Client, bool) {
+	requestedEdgeID := controlRequestedEdgeID(c)
+	edgeInstanceID, err := resolveControlEdgeInstanceIDFromTarget(registry, stationViewQuery, requestedEdgeID, controlTarget{ProjectID: projectID})
+	if err != nil {
+		writeControlEdgeResolveError(c, err)
+		return nil, false
+	}
+	client, exists := registry.Client(edgeInstanceID)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":            "edge instance is not available on this main-server bridge",
+			"code":             "edge_instance_not_found",
+			"edge_instance_id": edgeInstanceID,
+		})
+		return nil, false
+	}
+	return client, true
 }
 
 func userDetectionControlPayload(body []byte, taskIDParam string) ([]byte, error) {
@@ -2313,6 +2476,14 @@ func parseReportNotificationFilter(c *gin.Context) (reports.NotificationFilter, 
 	if err := validateReportNotificationLevel(level); err != nil {
 		return reports.NotificationFilter{}, err
 	}
+	eventTypes, err := parseReportNotificationEventTypes(c)
+	if err != nil {
+		return reports.NotificationFilter{}, err
+	}
+	dedupeJobEvent, err := parseReportNotificationDedupe(c)
+	if err != nil {
+		return reports.NotificationFilter{}, err
+	}
 	var unread *bool
 	if raw := strings.TrimSpace(c.Query("unread")); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -2322,12 +2493,71 @@ func parseReportNotificationFilter(c *gin.Context) (reports.NotificationFilter, 
 		unread = &value
 	}
 	return reports.NotificationFilter{
-		JobID:  jobID,
-		Level:  level,
-		Unread: unread,
-		Limit:  limit,
-		Offset: offset,
+		JobID:          jobID,
+		Level:          level,
+		EventTypes:     eventTypes,
+		DedupeJobEvent: dedupeJobEvent,
+		Unread:         unread,
+		Limit:          limit,
+		Offset:         offset,
 	}, nil
+}
+
+func parseReportNotificationDedupe(c *gin.Context) (bool, error) {
+	raw := strings.ToLower(strings.TrimSpace(c.Query("dedupe")))
+	if raw == "" {
+		raw = strings.ToLower(strings.TrimSpace(c.Query("dedupe_by")))
+	}
+	if raw == "" {
+		return false, nil
+	}
+	if raw == "job_event" {
+		return true, nil
+	}
+	return false, errors.New("invalid report notification dedupe")
+}
+
+func parseReportNotificationEventTypes(c *gin.Context) ([]string, error) {
+	rawValues := c.QueryArray("event_type")
+	if len(rawValues) == 0 {
+		rawValues = c.QueryArray("event_types")
+	}
+	if len(rawValues) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(rawValues))
+	eventTypes := make([]string, 0, len(rawValues))
+	for _, rawValue := range rawValues {
+		for _, part := range strings.Split(rawValue, ",") {
+			eventType := strings.ToLower(strings.TrimSpace(part))
+			if eventType == "" {
+				continue
+			}
+			if err := validateReportNotificationEventType(eventType); err != nil {
+				return nil, err
+			}
+			if _, exists := seen[eventType]; exists {
+				continue
+			}
+			seen[eventType] = struct{}{}
+			eventTypes = append(eventTypes, eventType)
+		}
+	}
+	return eventTypes, nil
+}
+
+func validateReportNotificationEventType(eventType string) error {
+	switch eventType {
+	case reports.EventEnqueued,
+		reports.EventStarted,
+		reports.EventWaiting,
+		reports.EventSucceeded,
+		reports.EventFailed,
+		reports.EventRetried:
+		return nil
+	default:
+		return errors.New("invalid report notification event_type")
+	}
 }
 
 func validateReportNotificationLevel(level string) error {

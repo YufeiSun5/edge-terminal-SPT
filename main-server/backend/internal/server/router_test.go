@@ -2159,7 +2159,7 @@ func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
 		t.Fatalf("notification count status=%d body=%s", notificationCount.Code, notificationCount.Body.String())
 	}
 	notifications := httptest.NewRecorder()
-	router.ServeHTTP(notifications, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications?unread=true&job_id="+strconv.FormatUint(processed[0].ID, 10)+"&limit=10", token, nil))
+	router.ServeHTTP(notifications, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications?unread=true&dedupe=job_event&event_type=started&event_type=succeeded&job_id="+strconv.FormatUint(processed[0].ID, 10)+"&limit=10", token, nil))
 	if notifications.Code != http.StatusOK || !strings.Contains(notifications.Body.String(), `"title":"报表生成完成"`) || !strings.Contains(notifications.Body.String(), `"event_type":"succeeded"`) {
 		t.Fatalf("notifications status=%d body=%s", notifications.Code, notifications.Body.String())
 	}
@@ -2169,8 +2169,18 @@ func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
 	if err := json.Unmarshal(notifications.Body.Bytes(), &notificationsPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(notificationsPayload.Items) != 2 {
-		t.Fatalf("expected two unread report notifications, body=%s", notifications.Body.String())
+	if len(notificationsPayload.Items) != 1 || notificationsPayload.Items[0].Title != "报表生成完成" {
+		t.Fatalf("expected lifecycle view to keep only ready notification for succeeded job, body=%s", notifications.Body.String())
+	}
+	invalidNotifications := httptest.NewRecorder()
+	router.ServeHTTP(invalidNotifications, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications?event_type=deleted", token, nil))
+	if invalidNotifications.Code != http.StatusBadRequest || !strings.Contains(invalidNotifications.Body.String(), "invalid report notification event_type") {
+		t.Fatalf("invalid report notification event type status=%d body=%s", invalidNotifications.Code, invalidNotifications.Body.String())
+	}
+	invalidDedupe := httptest.NewRecorder()
+	router.ServeHTTP(invalidDedupe, authedRequest(http.MethodGet, "/api/v1/main-server/report-notifications?dedupe=job", token, nil))
+	if invalidDedupe.Code != http.StatusBadRequest || !strings.Contains(invalidDedupe.Body.String(), "invalid report notification dedupe") {
+		t.Fatalf("invalid report notification dedupe status=%d body=%s", invalidDedupe.Code, invalidDedupe.Body.String())
 	}
 	readOne := httptest.NewRecorder()
 	router.ServeHTTP(readOne, authedRequest(http.MethodPost, "/api/v1/main-server/report-notifications/"+strconv.FormatUint(notificationsPayload.Items[0].ID, 10)+"/read", token, nil))
@@ -2178,7 +2188,7 @@ func TestMainServerReportJobsEnqueueAndGenerateManifest(t *testing.T) {
 		t.Fatalf("read one notification status=%d body=%s", readOne.Code, readOne.Body.String())
 	}
 	readAll := httptest.NewRecorder()
-	router.ServeHTTP(readAll, authedRequest(http.MethodPost, "/api/v1/main-server/report-notifications/read-all?job_id="+strconv.FormatUint(processed[0].ID, 10), token, nil))
+	router.ServeHTTP(readAll, authedRequest(http.MethodPost, "/api/v1/main-server/report-notifications/read-all?event_type=started,succeeded&job_id="+strconv.FormatUint(processed[0].ID, 10), token, nil))
 	if readAll.Code != http.StatusOK || !strings.Contains(readAll.Body.String(), `"updated":1`) {
 		t.Fatalf("read all notifications status=%d body=%s", readAll.Code, readAll.Body.String())
 	}

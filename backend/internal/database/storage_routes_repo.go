@@ -419,7 +419,7 @@ func freezeDetectionRunStorageRoutes(tx *gorm.DB, task *models.DetectionTask, ru
 	}
 	itemByVarID := make(map[int64]models.DetectionRunStandardItem, len(runItems))
 	for _, item := range runItems {
-		if item.StoreEnabled {
+		if runStandardItemRequiresStorage(item) {
 			itemByVarID[item.VarID] = item
 		}
 	}
@@ -481,6 +481,10 @@ func freezeDetectionRunStorageRoutes(tx *gorm.DB, task *models.DetectionTask, ru
 	return runRoutes, nil
 }
 
+func runStandardItemRequiresStorage(item models.DetectionRunStandardItem) bool {
+	return item.CheckEnabled || item.StoreEnabled
+}
+
 func loadEnabledStorageRoutesForTag(db *gorm.DB, projectID uint, varID int64) ([]models.StorageRoute, error) {
 	var routes []models.StorageRoute
 	err := db.Where("project_id = ? AND var_id = ? AND enabled = ?", projectID, varID, true).
@@ -492,20 +496,33 @@ func loadEnabledStorageRoutesForTag(db *gorm.DB, projectID uint, varID int64) ([
 func loadTagsForStorageRoutes(db *gorm.DB, ProjectID uint, runItems []models.DetectionRunStandardItem) ([]models.TagConfig, error) {
 	query := db.Model(&models.TagConfig{}).Where("project_id = ? AND enabled = ?", ProjectID, true)
 	if len(runItems) > 0 {
-		varIDs := make([]int64, 0, len(runItems))
 		seen := make(map[int64]struct{}, len(runItems))
 		for _, item := range runItems {
-			if !item.StoreEnabled {
-				continue
-			}
-			if _, ok := seen[item.VarID]; ok {
+			if !runStandardItemRequiresStorage(item) {
 				continue
 			}
 			seen[item.VarID] = struct{}{}
-			varIDs = append(varIDs, item.VarID)
 		}
-		if len(varIDs) == 0 {
+
+		var routeVarIDs []int64
+		if err := db.Model(&models.StorageRoute{}).
+			Where("project_id = ? AND enabled = ? AND storage_target <> ?", ProjectID, true, models.StorageTargetNone).
+			Distinct("var_id").
+			Pluck("var_id", &routeVarIDs).Error; err != nil {
+			return nil, err
+		}
+		for _, varID := range routeVarIDs {
+			if varID == 0 {
+				continue
+			}
+			seen[varID] = struct{}{}
+		}
+		if len(seen) == 0 {
 			return nil, nil
+		}
+		varIDs := make([]int64, 0, len(seen))
+		for varID := range seen {
+			varIDs = append(varIDs, varID)
 		}
 		query = query.Where("var_id IN ?", varIDs)
 	}

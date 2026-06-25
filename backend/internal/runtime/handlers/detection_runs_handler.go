@@ -18,22 +18,23 @@ type DetectionRunsHandler struct {
 }
 
 type startDetectionRequest struct {
-	ProjectID        uint           `json:"project_id" binding:"required"`
-	TestNo           string         `json:"test_no"`
-	FactoryNo        string         `json:"factory_no"`
-	CustomerName     string         `json:"customer_name"`
-	DeviceModel      string         `json:"device_model"`
-	Mode             string         `json:"mode"`
-	StandardID       *uint          `json:"standard_id"`
-	ConfigEnabled    *bool          `json:"config_enabled"`
-	ConfigCode       string         `json:"config_code"`
-	ConfigName       string         `json:"config_name"`
-	ConfigVersion    int            `json:"config_version"`
-	ConfigHash       string         `json:"config_hash"`
-	DurationSec      int            `json:"duration_sec"`
-	OperatorNote     string         `json:"operator_note"`
-	ReportTemplateID *uint          `json:"report_template_id"`
-	ReportRequest    map[string]any `json:"report_request"`
+	ProjectID        uint                            `json:"project_id" binding:"required"`
+	TestNo           string                          `json:"test_no"`
+	FactoryNo        string                          `json:"factory_no"`
+	CustomerName     string                          `json:"customer_name"`
+	DeviceModel      string                          `json:"device_model"`
+	Mode             string                          `json:"mode"`
+	StandardID       *uint                           `json:"standard_id"`
+	ConfigEnabled    *bool                           `json:"config_enabled"`
+	ConfigCode       string                          `json:"config_code"`
+	ConfigName       string                          `json:"config_name"`
+	ConfigVersion    int                             `json:"config_version"`
+	ConfigHash       string                          `json:"config_hash"`
+	DurationSec      int                             `json:"duration_sec"`
+	OperatorNote     string                          `json:"operator_note"`
+	ReportTemplateID *uint                           `json:"report_template_id"`
+	ReportRequest    map[string]any                  `json:"report_request"`
+	RuntimeDraft     *database.RuntimeDraftReference `json:"runtime_draft"`
 }
 
 type stopDetectionRequest struct {
@@ -217,9 +218,10 @@ func (h *DetectionRunsHandler) start(c *gin.Context) {
 		OperatorNote:     req.OperatorNote,
 		ReportTemplateID: req.ReportTemplateID,
 		ReportRequest:    req.ReportRequest,
+		RuntimeDraft:     req.RuntimeDraft,
 	})
 	if err != nil {
-		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), errorBody(err))
 		return
 	}
 	c.JSON(http.StatusOK, task)

@@ -23,6 +23,7 @@ type EdgeControlHandler struct {
 	detection       *services.DetectionRunsService
 	detectionPlans  *services.DetectionPlansService
 	variables       *services.VariableWriteService
+	runtimeDrafts   *services.RuntimeDraftService
 	runtimeSettings *services.RuntimeSettingsService
 	notify          *services.NotificationHub
 	now             func() time.Time
@@ -62,6 +63,11 @@ func (h *EdgeControlHandler) WithDetectionPlans(service *services.DetectionPlans
 	return h
 }
 
+func (h *EdgeControlHandler) WithRuntimeDrafts(service *services.RuntimeDraftService) *EdgeControlHandler {
+	h.runtimeDrafts = service
+	return h
+}
+
 type edgeControlAsyncAccepted struct {
 	Status   string         `json:"status"`
 	TargetID string         `json:"target_id,omitempty"`
@@ -82,6 +88,8 @@ func (h *EdgeControlHandler) Register(group *gin.RouterGroup, authService *auth.
 	control.POST("/detection/refresh-features", authService.RequireServiceScope(auth.ScopeEdgeFeatureRefresh), h.handle("detection.refresh_features", "task", h.refreshDetectionFeatures))
 	control.POST("/detection/report-requests", authService.RequireServiceScope(auth.ScopeEdgeReportRequest), h.handle("detection.report_request", "task", h.createReportRequests))
 	control.POST("/detection-plans/:id/start", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("detection_plan.start", "plan", h.startDetectionPlan))
+	control.POST("/runtime-drafts/:namespace/save", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("runtime_draft.save", "runtime_draft", h.saveRuntimeDraft))
+	control.POST("/runtime-drafts/:namespace/clear", authService.RequireServiceScope(auth.ScopeEdgeDetectionStart), h.handle("runtime_draft.clear", "runtime_draft", h.clearRuntimeDraft))
 	control.POST("/variables/write", authService.RequireServiceScope(auth.ScopeEdgeVariableWrite), h.handle("variable.write", "variable", h.writeVariable))
 }
 
@@ -273,6 +281,7 @@ func (h *EdgeControlHandler) startDetection(c *gin.Context, envelope edgeControl
 				OperatorNote:     operatorNote,
 				ReportTemplateID: req.ReportTemplateID,
 				ReportRequest:    req.ReportRequest,
+				RuntimeDraft:     req.RuntimeDraft,
 				StartedByUserID:  edgeUser.ID,
 			}
 			h.publishConfigNotification(models.NotificationDetectionConfigWaiting, models.NotificationLevelInfo, req.ProjectID, "detection config is waiting for database sync", detail)
@@ -309,6 +318,7 @@ func (h *EdgeControlHandler) startDetection(c *gin.Context, envelope edgeControl
 		OperatorNote:     operatorNote,
 		ReportTemplateID: req.ReportTemplateID,
 		ReportRequest:    req.ReportRequest,
+		RuntimeDraft:     req.RuntimeDraft,
 		StartedByUserID:  edgeUser.ID,
 	})
 	if err != nil {
@@ -354,6 +364,63 @@ func (h *EdgeControlHandler) startDetectionPlan(c *gin.Context, envelope edgeCon
 	return result, strconv.FormatUint(uint64(result.Plan.ID), 10), nil
 }
 
+func (h *EdgeControlHandler) saveRuntimeDraft(c *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
+	if h.runtimeDrafts == nil {
+		return nil, "", edgeControlRequestError("runtime_draft_service_missing", "runtime draft service is not available", true, http.StatusServiceUnavailable)
+	}
+	var req runtimeDraftPutRequest
+	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
+		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
+	}
+	draft, err := h.runtimeDrafts.Put(services.RuntimeDraftPutInput{
+		Namespace:        c.Param("namespace"),
+		ScopeType:        req.ScopeType,
+		ScopeID:          req.ScopeID,
+		ExpectedRevision: req.ExpectedRevision,
+		TTLSec:           req.TTLSec,
+		Data:             req.Data,
+	})
+	if err != nil {
+		return nil, runtimeDraftTargetID(req.ScopeType, req.ScopeID), err
+	}
+	return draft, runtimeDraftTargetID(draft.ScopeType, draft.ScopeID), nil
+}
+
+func (h *EdgeControlHandler) clearRuntimeDraft(c *gin.Context, envelope edgeControlEnvelope) (any, string, error) {
+	if h.runtimeDrafts == nil {
+		return nil, "", edgeControlRequestError("runtime_draft_service_missing", "runtime draft service is not available", true, http.StatusServiceUnavailable)
+	}
+	var req struct {
+		ScopeType        string `json:"scope_type"`
+		ScopeID          string `json:"scope_id"`
+		ExpectedRevision *int64 `json:"expected_revision"`
+	}
+	if err := json.Unmarshal(envelope.Payload, &req); err != nil {
+		return nil, "", edgeControlRequestError("invalid_payload", "payload is invalid", false, http.StatusBadRequest)
+	}
+	if err := h.runtimeDrafts.Clear(services.RuntimeDraftClearInput{
+		Namespace:        c.Param("namespace"),
+		ScopeType:        req.ScopeType,
+		ScopeID:          req.ScopeID,
+		ExpectedRevision: req.ExpectedRevision,
+	}); err != nil {
+		return nil, runtimeDraftTargetID(req.ScopeType, req.ScopeID), err
+	}
+	return gin.H{"status": "deleted"}, runtimeDraftTargetID(req.ScopeType, req.ScopeID), nil
+}
+
+func runtimeDraftTargetID(scopeType string, scopeID string) string {
+	scopeType = strings.TrimSpace(scopeType)
+	scopeID = strings.TrimSpace(scopeID)
+	if scopeType == "" {
+		scopeType = services.RuntimeDraftScopeProject
+	}
+	if scopeID == "" {
+		return scopeType
+	}
+	return scopeType + ":" + scopeID
+}
+
 func (h *EdgeControlHandler) waitAndStartDetection(clientID string, commandID string, opts database.StartDetectionOptions, firstDetail map[string]any) {
 	timeout := h.configReadyTimeout()
 	interval := h.configReadyInterval()
@@ -375,6 +442,7 @@ func (h *EdgeControlHandler) waitAndStartDetection(clientID string, commandID st
 		DurationSec:      opts.DurationSec,
 		OperatorNote:     opts.OperatorNote,
 		ReportTemplateID: opts.ReportTemplateID,
+		RuntimeDraft:     opts.RuntimeDraft,
 	}
 	var lastDetail map[string]any
 	for {
@@ -941,6 +1009,21 @@ func edgeControlErrorMeta(err error) (string, bool, int) {
 	}
 	if errors.Is(err, database.ErrDetectionPlanNotPending) {
 		return "detection_plan_not_pending", false, http.StatusConflict
+	}
+	if errors.Is(err, services.ErrRuntimeDraftNotFound) {
+		return "not_found", false, http.StatusNotFound
+	}
+	if errors.Is(err, services.ErrRuntimeDraftRevisionConflict) {
+		return "revision_conflict", false, http.StatusConflict
+	}
+	if errors.Is(err, services.ErrRuntimeDraftTooLarge) {
+		return "payload_too_large", false, http.StatusRequestEntityTooLarge
+	}
+	if errors.Is(err, services.ErrRuntimeDraftProjectRunning) {
+		return "project_running", false, http.StatusConflict
+	}
+	if errors.Is(err, services.ErrRuntimeDraftStale) {
+		return "runtime_draft_stale", false, http.StatusConflict
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "not_found", false, http.StatusNotFound

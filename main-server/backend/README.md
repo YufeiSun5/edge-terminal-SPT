@@ -27,6 +27,7 @@ Current scaffold:
 - `POST /api/v1/main-server/report-notifications/:id/read`
 - `POST /api/v1/main-server/report-notifications/read-all`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
 - `GET /api/v1/auth/me`
 - `POST /api/v1/auth/logout`
 - `POST /api/v1/auth/sso-ticket`
@@ -108,6 +109,7 @@ The local read-only routes read synchronized tables directly from the main-serve
 Business read routes are still authenticated. Synchronized read-only data is exposed only through main-server JWT plus the matching permission; read-only does not mean public.
 
 - `/api/v1/auth/login` reads synchronized `sys_users`, verifies the same bcrypt password hash used by the edge backend, and issues a main-server JWT. The main-server JWT is separate from the edge JWT.
+- `/api/v1/auth/refresh` requires the current main-server JWT to still be valid, rechecks synchronized `sys_users`, and returns the same token response shape as login. Expired or invalid tokens return `401`, so the shared frontend can keep long-running WS sessions alive without persisting tokens.
 - `/api/v1/auth/me` validates the main-server JWT and rechecks synchronized `sys_users` so disabled users or permission-version changes take effect after synchronization.
 - `/api/v1/auth/sso-ticket/verify` verifies an edge-created one-time SSO ticket by calling the configured edge backend `/api/v1/auth/sso-ticket/verify` with the service token from `edge.service_token_ref`, then issues a main-server JWT for the synchronized user. The main server does not update synchronized `sys_sso_tickets`.
 - `/api/v1/auth/sso-ticket` currently returns `501 main_server_sso_ticket_unsupported`; one-time tickets are created on the edge side for handoff to the main server.

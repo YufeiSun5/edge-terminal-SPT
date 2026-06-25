@@ -6,6 +6,7 @@ import type {
   LoginResponse,
   LogoutResponse,
   SsoTicketResponse,
+  SsoTicketVerifyRequest,
   SystemUser,
   UserCreatePayload,
   UserPatchPayload,
@@ -22,6 +23,10 @@ export async function login(payload: LoginRequest) {
   return postJson<LoginResponse, LoginRequest>('/api/v1/auth/login', body)
 }
 
+export function refreshAuthSession() {
+  return postJson<LoginResponse, Record<string, never>>('/api/v1/auth/refresh', {})
+}
+
 export function getCurrentUser() {
   return getJson<AuthMeResponse>('/api/v1/auth/me')
 }
@@ -32,6 +37,10 @@ export function logout() {
 
 export function createSsoTicket() {
   return postJson<SsoTicketResponse, Record<string, never>>('/api/v1/auth/sso-ticket', {})
+}
+
+export function verifySsoTicket(payload: SsoTicketVerifyRequest) {
+  return postJson<LoginResponse, SsoTicketVerifyRequest>('/api/v1/auth/sso-ticket/verify', payload)
 }
 
 export function getUsers() {

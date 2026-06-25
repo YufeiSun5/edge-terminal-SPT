@@ -10,6 +10,7 @@ import (
 func TestDefaultAndMissingFileLoad(t *testing.T) {
 	t.Setenv("EDGE_HTTP_ADDR", "127.0.0.1:19090")
 	t.Setenv("EDGE_JWT_SECRET", "secret-from-env")
+	t.Setenv("EDGE_WS_SNAPSHOT_INTERVAL_MS", "200")
 	t.Setenv("EDGE_MAIN_SERVICE_TOKEN", "service-token")
 	t.Setenv("EDGE_MAIN_SERVICE_CLIENT_ID", "main")
 
@@ -19,6 +20,9 @@ func TestDefaultAndMissingFileLoad(t *testing.T) {
 	}
 	if cfg.App.HTTPAddr != "127.0.0.1:19090" || cfg.Auth.JWTSecret != "secret-from-env" {
 		t.Fatalf("env overrides not applied: %+v", cfg)
+	}
+	if cfg.Realtime.WSSnapshotIntervalMS != 250 {
+		t.Fatalf("expected realtime interval clamp to 250ms, got %+v", cfg.Realtime)
 	}
 	if len(cfg.Auth.ServiceClients) != 1 || cfg.Auth.ServiceClients[0].ClientID != "main" || !cfg.Auth.ServiceClients[0].Enabled {
 		t.Fatalf("service client env seed not applied: %+v", cfg.Auth.ServiceClients)
@@ -56,6 +60,23 @@ func TestLoadNormalizesPartialConfigAndEnvTTLs(t *testing.T) {
 	}
 	if cfg.Auth.AccessTokenTTLSeconds != 900 || cfg.Auth.SSOTicketTTLSeconds != 45 || cfg.Auth.EdgeInstanceID != "edge-001" {
 		t.Fatalf("unexpected auth cfg: %+v", cfg.Auth)
+	}
+	if cfg.Realtime.WSSnapshotIntervalMS != 500 {
+		t.Fatalf("unexpected realtime default: %+v", cfg.Realtime)
+	}
+}
+
+func TestRealtimeIntervalClamp(t *testing.T) {
+	cfg := Default()
+	cfg.Realtime.WSSnapshotIntervalMS = 6000
+	normalize(cfg)
+	if cfg.Realtime.WSSnapshotIntervalMS != 5000 {
+		t.Fatalf("expected upper clamp, got %d", cfg.Realtime.WSSnapshotIntervalMS)
+	}
+	cfg.Realtime.WSSnapshotIntervalMS = 10
+	normalize(cfg)
+	if cfg.Realtime.WSSnapshotIntervalMS != 250 {
+		t.Fatalf("expected lower clamp, got %d", cfg.Realtime.WSSnapshotIntervalMS)
 	}
 }
 

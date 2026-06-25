@@ -118,6 +118,37 @@ func (s *Service) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+func (s *Service) Refresh(c *gin.Context) {
+	principal, ok := PrincipalFromContext(c)
+	if !ok || principal.AuthType != "user" {
+		writeUnauthorized(c, "login required")
+		return
+	}
+	user, err := s.store.FindUserByID(principal.UserID)
+	if err != nil || !user.Enabled {
+		writeUnauthorized(c, "user disabled or missing")
+		return
+	}
+	token, _, err := s.jwt.Sign(UserTokenSubject{
+		ID:                 user.ID,
+		Username:           user.Username,
+		Role:               user.Role,
+		PermissionsVersion: user.PermissionsVersion,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to sign token", "code": "internal_error"})
+		return
+	}
+	s.audit("user", strconv.FormatUint(uint64(user.ID), 10), "auth.refresh", "user", user.Username, "success", "{}")
+	c.JSON(http.StatusOK, gin.H{
+		"access_token": token,
+		"token_type":   "Bearer",
+		"expires_in":   int(s.jwt.TTL().Seconds()),
+		"user":         userResponse(user),
+		"permissions":  PermissionsForRole(user.Role),
+	})
+}
+
 func (s *Service) Me(c *gin.Context) {
 	principal, ok := PrincipalFromContext(c)
 	if !ok || principal.AuthType != "user" {

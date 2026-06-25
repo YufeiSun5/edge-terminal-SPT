@@ -25,20 +25,21 @@ import (
 )
 
 type TaskFlowExecutor struct {
-	repo             *database.Repository
-	tags             *TagManager
-	tasks            *TaskManager
-	channels         *Channels
-	variableWriter   TaskFlowVariableWriter
-	index            *TaskFlowIndex
-	input            chan taskFlowJob
-	submitted        atomic.Uint64
-	enqueued         atomic.Uint64
-	dropped          atomic.Uint64
-	guardsMu         sync.Mutex
-	guards           map[string]struct{}
-	schedulerMu      sync.Mutex
-	schedulerStarted bool
+	repo                 *database.Repository
+	tags                 *TagManager
+	tasks                *TaskManager
+	channels             *Channels
+	variableWriter       TaskFlowVariableWriter
+	runtimeDraftResolver TaskFlowRuntimeDraftResolver
+	index                *TaskFlowIndex
+	input                chan taskFlowJob
+	submitted            atomic.Uint64
+	enqueued             atomic.Uint64
+	dropped              atomic.Uint64
+	guardsMu             sync.Mutex
+	guards               map[string]struct{}
+	schedulerMu          sync.Mutex
+	schedulerStarted     bool
 }
 
 type taskFlowJob struct {
@@ -70,6 +71,14 @@ type taskFlowRunContext struct {
 }
 
 type TaskFlowVariableWriter func(context.Context, TaskFlowVariableWriteInput) (map[string]any, error)
+
+type TaskFlowRuntimeDraftResolver func(projectID uint, ref database.RuntimeDraftReference, customItemsPresent bool) (TaskFlowRuntimeDraftResult, error)
+
+type TaskFlowRuntimeDraftResult struct {
+	CustomItems   []models.DetectionStandardItem
+	ProcessParams any
+	Clear         func()
+}
 
 type TaskFlowVariableWriteInput struct {
 	VarID          int64
@@ -112,6 +121,10 @@ func NewTaskFlowExecutor(repo *database.Repository, tags *TagManager, tasks *Tas
 
 func (e *TaskFlowExecutor) SetVariableWriter(writer TaskFlowVariableWriter) {
 	e.variableWriter = writer
+}
+
+func (e *TaskFlowExecutor) SetRuntimeDraftResolver(resolver TaskFlowRuntimeDraftResolver) {
+	e.runtimeDraftResolver = resolver
 }
 
 func (e *TaskFlowExecutor) RuntimeStats(threshold float64) TaskFlowRuntimeStats {
@@ -1058,6 +1071,11 @@ func (e *TaskFlowExecutor) recordTaskFlowWriteAudit(ctx *taskFlowRunContext, var
 }
 
 func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode string, params map[string]any, logs *[]string) (map[string]any, error) {
+	var fallbacks []string
+	params, fallbacks = normalizeStartDetectionRunParams(ctx, params)
+	for _, item := range fallbacks {
+		*logs = append(*logs, "WARN start_detection fallback "+item)
+	}
 	if errText := strings.TrimSpace(stringFromAny(ctx.Params["_error"])); errText != "" {
 		return nil, fmt.Errorf("invalid task_params: %s", errText)
 	}
@@ -1091,6 +1109,30 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 	if err != nil {
 		return nil, err
 	}
+	runtimeDraftRef, err := runtimeDraftReferenceFromTaskParams(params["runtime_draft"])
+	if err != nil {
+		return nil, err
+	}
+	var clearRuntimeDraft func()
+	processParams := params["process_params"]
+	if runtimeDraftRef != nil {
+		if e.runtimeDraftResolver == nil {
+			return nil, fmt.Errorf("runtime draft resolver is not available")
+		}
+		result, err := e.runtimeDraftResolver(projectID, *runtimeDraftRef, len(customItems) > 0)
+		if err != nil {
+			return nil, err
+		}
+		customItems = result.CustomItems
+		if processParams == nil {
+			processParams = result.ProcessParams
+		}
+		clearRuntimeDraft = result.Clear
+	}
+	standardID := optionalUintFromAny(params["standard_id"])
+	if runtimeDraftRef != nil {
+		standardID = nil
+	}
 	opts := database.StartDetectionOptions{
 		ProjectID:         projectID,
 		TestNo:            testNo,
@@ -1098,16 +1140,17 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 		CustomerName:      stringFromAny(params["customer_name"]),
 		DeviceModel:       stringFromAny(params["device_model"]),
 		Mode:              mode,
-		StandardID:        optionalUintFromAny(params["standard_id"]),
+		StandardID:        standardID,
 		ConfigEnabled:     optionalBoolFromAny(params["config_enabled"]),
 		ConfigCode:        stringFromAny(params["config_code"]),
 		ConfigName:        stringFromAny(params["config_name"]),
 		ConfigVersion:     int(toFloat64(params["config_version"])),
 		ConfigHash:        stringFromAny(params["config_hash"]),
 		CustomItems:       customItems,
-		ProcessParams:     params["process_params"],
+		ProcessParams:     processParams,
 		PLCWrites:         params["plc_writes"],
 		ReportRequest:     params["report_request"],
+		RuntimeDraft:      runtimeDraftRef,
 		LimitCheckEnabled: &limitCheckEnabled,
 		EndPolicy:         endPolicy,
 		DurationSec:       int(toFloat64(params["duration_sec"])),
@@ -1118,6 +1161,9 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 	task, err := e.repo.StartDetectionTaskWithOptions(opts)
 	if err != nil {
 		return nil, err
+	}
+	if clearRuntimeDraft != nil {
+		clearRuntimeDraft()
 	}
 	runtimeTask := *task
 	enableStorage := boolFromAnyDefault(params["enable_storage"], true)
@@ -1153,7 +1199,7 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 		started := e.startQualifiedHoldGuard(task.ID, time.Duration(opts.QualifiedHoldMS)*time.Millisecond, 500*time.Millisecond)
 		*logs = append(*logs, fmt.Sprintf("qualified hold guard started=%t task_id=%d", started, task.ID))
 	}
-	return map[string]any{
+	result := map[string]any{
 		"task_id":             task.ID,
 		"project_id":          task.ProjectID,
 		"test_no":             task.TestNo,
@@ -1164,7 +1210,43 @@ func (e *TaskFlowExecutor) startDetectionRun(ctx *taskFlowRunContext, stepCode s
 		"enable_storage":      enableStorage,
 		"enable_alarm":        enableAlarm,
 		"project_start_flows": triggeredLifecycle,
-	}, nil
+	}
+	if len(fallbacks) > 0 {
+		result["fallbacks"] = fallbacks
+	}
+	return result, nil
+}
+
+func normalizeStartDetectionRunParams(ctx *taskFlowRunContext, params map[string]any) (map[string]any, []string) {
+	fallbacks := make([]string, 0)
+	if params == nil {
+		params = map[string]any{}
+	}
+	if ctx == nil || ctx.Params == nil {
+		return params, fallbacks
+	}
+	command := strings.TrimSpace(stringFromAny(ctx.Params["command"]))
+	if _, ok := params["runtime_draft"]; !ok {
+		if value, exists := ctx.Params["runtime_draft"]; exists {
+			params["runtime_draft"] = value
+			fallbacks = append(fallbacks, "runtime_draft_from_task_params")
+		}
+	}
+	if _, ok := params["duration_sec"]; !ok {
+		if value, exists := ctx.Params["duration_sec"]; exists {
+			params["duration_sec"] = value
+			fallbacks = append(fallbacks, "duration_sec_from_task_params")
+		}
+	}
+	_, triggerHasEndPolicy := ctx.Params["end_policy"]
+	if command == "start_fixed_duration_detection" || command == "start_detection" {
+		endPolicy := strings.TrimSpace(stringFromAny(params["end_policy"]))
+		if !triggerHasEndPolicy && toFloat64(params["duration_sec"]) > 0 && (endPolicy == "" || endPolicy == models.DetectionEndPolicyManual) {
+			params["end_policy"] = models.DetectionEndPolicyFixedDuration
+			fallbacks = append(fallbacks, "end_policy_fixed_duration_from_duration_sec")
+		}
+	}
+	return params, fallbacks
 }
 
 func (e *TaskFlowExecutor) stopDetectionRunFromParams(params map[string]any, defaultEndType string, defaultReason string) (*models.DetectionTask, error) {
@@ -1246,6 +1328,27 @@ func detectionStandardItemsFromTaskParams(value any) ([]models.DetectionStandard
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func runtimeDraftReferenceFromTaskParams(value any) (*database.RuntimeDraftReference, error) {
+	if value == nil {
+		return nil, nil
+	}
+	itemMap, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("runtime_draft must be an object")
+	}
+	ref := database.RuntimeDraftReference{
+		Namespace: strings.TrimSpace(stringFromAny(itemMap["namespace"])),
+		Revision:  int64(toFloat64(itemMap["revision"])),
+	}
+	if ref.Namespace == "" {
+		ref.Namespace = "station.detection_preload"
+	}
+	if ref.Revision <= 0 {
+		return nil, fmt.Errorf("runtime_draft.revision is required")
+	}
+	return &ref, nil
 }
 
 func floatPointerFromTaskParam(values map[string]any, key string) *float64 {

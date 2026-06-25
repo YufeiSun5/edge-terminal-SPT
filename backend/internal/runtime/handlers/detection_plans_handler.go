@@ -84,7 +84,7 @@ func (h *DetectionPlansHandler) start(c *gin.Context) {
 		RequestVarName: req.RequestVarName,
 	})
 	if err != nil {
-		c.JSON(services.HTTPStatusForError(err), gin.H{"error": err.Error()})
+		c.JSON(services.HTTPStatusForError(err), errorBody(err))
 		return
 	}
 	c.JSON(http.StatusOK, result)

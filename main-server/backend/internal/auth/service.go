@@ -93,6 +93,20 @@ func (s *Service) Logout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+func (s *Service) Refresh(c *gin.Context) {
+	principal, ok := PrincipalFromContext(c)
+	if !ok || principal.AuthType != "user" {
+		writeUnauthorized(c, "login required")
+		return
+	}
+	user, err := s.store.FindUserByID(principal.UserID)
+	if err != nil || !user.Enabled {
+		writeUnauthorized(c, "user disabled or missing")
+		return
+	}
+	s.writeLoginResponse(c, user)
+}
+
 func (s *Service) Me(c *gin.Context) {
 	principal, ok := PrincipalFromContext(c)
 	if !ok || principal.AuthType != "user" {

@@ -23,8 +23,17 @@ import {
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
 import { getCurrentDetectionRun, getLimitAlarms, getRealtimeVariables, getStationViewEffective } from '@/features/edge-status/api'
 import { getHistoryData } from '@/features/history-query/api'
+import { useRealtimeSnapshots } from '@/features/realtime/useRealtimeSnapshots'
 import { ApiError } from '@/shared/api/http'
-import type { DetectionRun, DetectionRunStandardItem, HistoryDataItem, StationViewResolvedBinding, TagSnapshot, VarIdentifier } from '@/shared/api/types'
+import type {
+  DetectionRun,
+  DetectionRunStandardItem,
+  HistoryDataItem,
+  RealtimeWebSocketSubscription,
+  StationViewResolvedBinding,
+  TagSnapshot,
+  VarIdentifier,
+} from '@/shared/api/types'
 import { CockpitModelStage } from '@/features/model-cockpit/components/CockpitModelStage'
 import { StationLightBackground } from '@/features/station-operation/components/StationLightBackground'
 import { languageCode } from '@/shared/i18n/language'
@@ -74,13 +83,24 @@ export function ModelCockpitPage() {
   })
   const bindings = useMemo(() => stationViewBindings(stationViewQuery.data?.items ?? []), [stationViewQuery.data?.items])
   const cockpitVarIds = useMemo(() => uniqueVarIds(bindings), [bindings])
-  const realtimeQuery = useQuery({
-    queryKey: ['model-cockpit', 'realtime', selectedProjectId, selectedEdgeInstanceId ?? 'local', cockpitVarIds.join('|')],
-    queryFn: () => getRealtimeVariables({ project_id: selectedProjectId!, edge_instance_id: selectedEdgeInstanceId, var_id: cockpitVarIds }),
+  const realtimeSubscription = useMemo<RealtimeWebSocketSubscription>(
+    () => ({
+      topics: ['realtime.variables'],
+      edge_instance_id: selectedEdgeInstanceId,
+      project_id: selectedProjectId,
+      var_ids: cockpitVarIds,
+    }),
+    [cockpitVarIds, selectedEdgeInstanceId, selectedProjectId],
+  )
+  const realtime = useRealtimeSnapshots({
     enabled: selectedProjectId !== undefined && cockpitVarIds.length > 0,
-    refetchInterval: 2000,
-    retry: false,
+    subscription: realtimeSubscription,
+    fallbackQueryKey: ['model-cockpit', 'realtime', selectedProjectId, selectedEdgeInstanceId ?? 'local', cockpitVarIds.join('|')],
+    fallbackQueryFn: () => getRealtimeVariables({ project_id: selectedProjectId!, edge_instance_id: selectedEdgeInstanceId, var_id: cockpitVarIds }),
+    fallbackIntervalMs: 2000,
+    uiCommitMs: 500,
   })
+  const realtimeSnapshots = realtime.snapshots
   const currentRunQuery = useQuery({
     queryKey: ['model-cockpit', 'current-run', selectedProjectId],
     queryFn: () => getCurrentRunOrNull(selectedProjectId!),
@@ -120,12 +140,12 @@ export function ModelCockpitPage() {
     () =>
       resolveMetricCards({
         bindings,
-        snapshots: realtimeQuery.data ?? [],
+        snapshots: realtimeSnapshots,
         standardItems: currentRunQuery.data?.standard_items ?? [],
         historyItems: historyQuery.data?.items ?? [],
         language: languageCode(i18n.resolvedLanguage),
       }),
-    [bindings, currentRunQuery.data?.standard_items, historyQuery.data?.items, i18n.resolvedLanguage, realtimeQuery.data],
+    [bindings, currentRunQuery.data?.standard_items, historyQuery.data?.items, i18n.resolvedLanguage, realtimeSnapshots],
   )
   const monitorMetrics = metricCards.slice(0, 10)
   const trendCards = metricCards.filter((metric) => metric.numericValue !== undefined || metric.history.length > 0).slice(0, 2)
@@ -133,7 +153,7 @@ export function ModelCockpitPage() {
     () => buildTopCards(stationViewQuery.data, currentRunQuery.data, alarmsQuery.data?.items.length ?? 0, t, i18n.resolvedLanguage),
     [alarmsQuery.data?.items.length, currentRunQuery.data, i18n.resolvedLanguage, stationViewQuery.data, t],
   )
-  const lastUpdatedAt = latestSnapshotTime(realtimeQuery.data ?? [])
+  const lastUpdatedAt = realtime.lastUpdatedAt ?? latestSnapshotTime(realtimeSnapshots)
 
   return (
     <div

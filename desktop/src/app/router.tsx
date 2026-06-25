@@ -1,7 +1,8 @@
-import { createHashRouter } from 'react-router'
+import { Navigate, createHashRouter } from 'react-router'
 import { ShellLayout } from './ShellLayout'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute'
+import { SsoHandoffPage } from '@/features/auth/SsoHandoffPage'
 import { EdgeStatusPage } from '@/features/edge-status/EdgeStatusPage'
 import { StationOperationPage } from '@/features/station-operation/StationOperationPage'
 import { HistoryQueryPage } from '@/features/history-query/HistoryQueryPage'
@@ -25,6 +26,10 @@ export const router = createHashRouter([
     element: <LoginPage />,
   },
   {
+    path: '/sso/edge',
+    element: <SsoHandoffPage />,
+  },
+  {
     path: '/',
     element: <ProtectedRoute />,
     children: [
@@ -46,6 +51,10 @@ export const router = createHashRouter([
               {
                 index: true,
                 element: <EdgeStatusPage />,
+              },
+              {
+                path: 'model-cockpit',
+                element: <ModelStageDebugPage />,
               },
             ],
           },
@@ -133,7 +142,7 @@ export const router = createHashRouter([
               },
               {
                 path: 'debug',
-                element: <ModelStageDebugPage />,
+                element: <Navigate to="/debug/model-cockpit" replace />,
               },
             ],
           },

@@ -564,6 +564,12 @@ func TestDetectionRunsServiceLifecycleAndNotes(t *testing.T) {
 	if status := HTTPStatusForError(database.ErrReferenced); status != 409 {
 		t.Fatalf("referenced resource should map to 409, got %d", status)
 	}
+	if status := HTTPStatusForError(ErrRuntimeDraftStale); status != 409 {
+		t.Fatalf("stale runtime draft should map to 409, got %d", status)
+	}
+	if code, ok := ErrorCodeForError(ErrRuntimeDraftStale); !ok || code != "runtime_draft_stale" {
+		t.Fatalf("stale runtime draft code=%q ok=%v", code, ok)
+	}
 }
 
 func waitServiceTaskFlowRunStatus(t *testing.T, db *gorm.DB, flowID uint64, status string, timeout time.Duration) models.TaskFlowRun {

@@ -31,20 +31,27 @@ import {
 import { openExternal, openLogs, restartSidecar } from '@/shared/desktop/desktopBridge'
 import { createSsoTicket, logout } from '@/features/auth/api'
 import { useAuthStore } from '@/features/auth/authStore'
+import { env } from '@/shared/config/env'
 import {
-  getMainReportNotificationUnreadCount,
-  getMainReportNotifications,
-  getNotificationUnreadCount,
-  getNotifications,
   getProjects,
-  markAllMainReportNotificationsRead,
-  markAllNotificationsRead,
   markMainReportNotificationRead,
   markNotificationRead,
 } from '@/features/edge-status/api'
+import {
+  canIncludeReportNotifications,
+  emptyNotificationList,
+  getVisibleBaseNotifications,
+  getVisibleBaseUnreadCount,
+  getVisibleReportNotifications,
+  getVisibleReportUnreadCount,
+  markVisibleBaseNotificationsRead,
+  markVisibleReportNotificationsRead,
+  notificationTypeOptions,
+  reportNotificationType,
+  sortNotifications,
+} from '@/features/notifications/notificationPolicy'
 import { subscribeRealtimeWebSocket } from '@/features/realtime/realtimeClient'
-import { env } from '@/shared/config/env'
-import type { MainReportNotification, Project, UserNotification } from '@/shared/api/types'
+import type { Project, UserNotification } from '@/shared/api/types'
 import { languageCode } from '@/shared/i18n/language'
 import { queryClient } from './queryClient'
 
@@ -62,49 +69,6 @@ const navItems = [
   { path: '/debug', key: 'debug', icon: LayoutDashboard, permissions: ['system_settings'] },
 ]
 
-const notificationTypeOptions = [
-  { value: 'alarm.limit.enter', labelKey: 'notifications.types.alarmEnter' },
-  { value: 'alarm.limit.recover', labelKey: 'notifications.types.alarmRecover' },
-  { value: 'detection.run_started', labelKey: 'notifications.types.runStarted' },
-  { value: 'detection.run_stopped', labelKey: 'notifications.types.runStopped' },
-  { value: 'detection.result_ok', labelKey: 'notifications.types.resultOk' },
-  { value: 'detection.result_ng', labelKey: 'notifications.types.resultNg' },
-  { value: 'report.job', labelKey: 'notifications.types.reportJob' },
-]
-
-function reportNotificationToUserNotification(notification: MainReportNotification): UserNotification {
-  const payload = notification.payload ?? {}
-  const taskId = Number(payload.task_id ?? 0)
-  const projectId = Number(payload.project_id ?? 0)
-  const reportName = String(payload.report_name ?? notification.title ?? '')
-  return {
-    id: -notification.id,
-    event_uid: `main-report-${notification.id}`,
-    type: 'report.job',
-    level: notification.level,
-    target_type: 'all',
-    target_id: String(notification.job_id),
-    project_id: Number.isFinite(projectId) ? projectId : 0,
-    project_code: typeof payload.project_code === 'string' ? payload.project_code : undefined,
-    task_id: Number.isFinite(taskId) && taskId > 0 ? taskId : undefined,
-    test_no: typeof payload.test_no === 'string' ? payload.test_no : undefined,
-    display_name: reportName || notification.title,
-    message: notification.message,
-    payload: { ...payload, report_notification_id: notification.id, job_id: notification.job_id },
-    occurred_at: notification.created_at,
-    created_at: notification.created_at,
-    read_at: notification.read_at,
-  }
-}
-
-function sortNotifications(items: UserNotification[]) {
-  return items.sort((left, right) => {
-    const leftTime = Date.parse(left.occurred_at || left.created_at || '')
-    const rightTime = Date.parse(right.occurred_at || right.created_at || '')
-    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0)
-  })
-}
-
 export function ShellLayout() {
   const { t, i18n } = useTranslation()
   const location = useLocation()
@@ -114,6 +78,7 @@ export function ShellLayout() {
   const [cockpitExpanded, setCockpitExpanded] = useState(true)
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const [reportSettingsExpanded, setReportSettingsExpanded] = useState(true)
+  const [debugExpanded, setDebugExpanded] = useState(true)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const [notificationUnreadFilter, setNotificationUnreadFilter] = useState<'all' | 'unread'>('all')
   const [notificationTypeFilter, setNotificationTypeFilter] = useState<string>()
@@ -131,9 +96,9 @@ export function ShellLayout() {
   const unreadQuery = useQuery({
     queryKey: ['shell', 'notifications', 'unread-count'],
     queryFn: async () => {
-      const base = await getNotificationUnreadCount()
-      if (env.runtimeRole !== 'main_server') return base
-      const report = await getMainReportNotificationUnreadCount()
+      const base = await getVisibleBaseUnreadCount()
+      if (!canIncludeReportNotifications({})) return base
+      const report = await getVisibleReportUnreadCount()
       return { unread: base.unread + report.unread }
     },
     refetchInterval: 10000,
@@ -142,31 +107,33 @@ export function ShellLayout() {
   const notificationsQuery = useQuery({
     queryKey: ['shell', 'notifications', 'latest', notificationUnreadFilter, notificationTypeFilter ?? 'all', notificationProjectFilter ?? 'all'],
     queryFn: async () => {
-      if (notificationTypeFilter === 'report.job') {
-        if (env.runtimeRole !== 'main_server' || notificationProjectFilter) {
-          return { items: [], total: 0, limit: 20, offset: 0 }
-        }
-        const report = await getMainReportNotifications({
-          limit: 20,
-          unread: notificationUnreadFilter === 'unread' ? true : undefined,
-        })
-        return { ...report, items: report.items.map(reportNotificationToUserNotification) }
-      }
-      const base = await getNotifications({
-        limit: 20,
+      const filters = {
         unread: notificationUnreadFilter === 'unread' ? true : undefined,
         type: notificationTypeFilter,
         project_id: notificationProjectFilter,
+      }
+      const includeReports = canIncludeReportNotifications(filters)
+      if (notificationTypeFilter === reportNotificationType) {
+        if (!includeReports) {
+          return emptyNotificationList(20, 0)
+        }
+        return getVisibleReportNotifications({
+          limit: 20,
+          unread: filters.unread,
+        }, t)
+      }
+      const base = await getVisibleBaseNotifications({
+        limit: 20,
+        ...filters,
       })
-      if (env.runtimeRole !== 'main_server' || notificationProjectFilter || (notificationTypeFilter && notificationTypeFilter !== 'report.job')) {
+      if (!includeReports) {
         return base
       }
-      const report = await getMainReportNotifications({
+      const report = await getVisibleReportNotifications({
         limit: 20,
-        unread: notificationUnreadFilter === 'unread' ? true : undefined,
-      })
-      const reportItems = report.items.map(reportNotificationToUserNotification)
-      const items = sortNotifications([...base.items, ...reportItems]).slice(0, 20)
+        unread: filters.unread,
+      }, t)
+      const items = sortNotifications([...base.items, ...report.items]).slice(0, 20)
       return { ...base, items, total: base.total + report.total }
     },
     enabled: notificationOpen,
@@ -177,6 +144,7 @@ export function ShellLayout() {
   const stationProjects = projectsQuery.data ?? []
   const activeProjectId = new URLSearchParams(location.search).get('project_id')
   const visibleNavItems = navItems.filter((item) => hasAnyPermission(item.permissions))
+  const canOpenMainSite = env.runtimeRole === 'edge' && hasAnyPermission(['sso_handoff'])
   const displayProjectName = (project: Pick<Project, 'project_code' | 'name' | 'display_name' | 'display_name_en' | 'display_name_ja'>) => {
     const currentLanguage = languageCode(i18n.resolvedLanguage)
     if (currentLanguage === 'en') return project.display_name_en || project.project_code
@@ -214,9 +182,9 @@ export function ShellLayout() {
   })
   const markAllReadMutation = useMutation({
     mutationFn: async () => {
-      const base = await markAllNotificationsRead()
-      if (env.runtimeRole !== 'main_server') return base
-      const report = await markAllMainReportNotificationsRead()
+      const base = await markVisibleBaseNotificationsRead()
+      if (!canIncludeReportNotifications({})) return base
+      const report = await markVisibleReportNotificationsRead()
       return { updated: base.updated + report.updated }
     },
     onSuccess: async () => {
@@ -234,37 +202,13 @@ export function ShellLayout() {
   }, [])
 
   useEffect(() => {
-    let reconnectTimer = 0
-    let disposed = false
-    let unsubscribe: (() => void) | undefined
-
-    const connect = () => {
-      const scheduleReconnect = () => {
-        if (disposed || reconnectTimer) return
-        reconnectTimer = window.setTimeout(() => {
-          reconnectTimer = 0
-          connect()
-        }, 3000)
-      }
-
-      unsubscribe = subscribeRealtimeWebSocket({
-        subscription: { topics: ['notifications'] },
-        onMessage: (message) => {
-          if (message.type !== 'notification.event') return
-          void queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] })
-        },
-        onClose: scheduleReconnect,
-        onError: scheduleReconnect,
-      })
-    }
-
-    connect()
-
-    return () => {
-      disposed = true
-      if (reconnectTimer) window.clearTimeout(reconnectTimer)
-      unsubscribe?.()
-    }
+    return subscribeRealtimeWebSocket({
+      subscription: { topics: ['notifications'] },
+      onMessage: (message) => {
+        if (message.type !== 'notification.event') return
+        void queryClient.invalidateQueries({ queryKey: ['shell', 'notifications'] })
+      },
+    })
   }, [])
 
   function notificationTitle(notification: UserNotification) {
@@ -415,6 +359,8 @@ export function ShellLayout() {
             const historyActive = isHistoryNav && location.pathname.startsWith('/history')
             const isReportSettingsNav = item.key === 'reportSettings'
             const reportSettingsActive = isReportSettingsNav && location.pathname.startsWith('/report-settings')
+            const isDebugNav = item.key === 'debug'
+            const debugActive = isDebugNav && location.pathname.startsWith('/debug')
 
             return (
               <div className="nav-group" key={item.path}>
@@ -472,6 +418,19 @@ export function ShellLayout() {
                       {reportSettingsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </span>
                   </button>
+                ) : isDebugNav ? (
+                  <button
+                    className={debugActive ? 'nav-link nav-button active' : 'nav-link nav-button'}
+                    type="button"
+                    onClick={() => setDebugExpanded((value) => !value)}
+                    aria-expanded={debugExpanded}
+                  >
+                    <item.icon size={18} />
+                    <span>{t('nav.debug')}</span>
+                    <span className="nav-expand-icon">
+                      {debugExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
+                  </button>
                 ) : (
                   <NavLink
                     to={item.path}
@@ -503,12 +462,6 @@ export function ShellLayout() {
                 ) : null}
                 {isCockpitNav && cockpitExpanded ? (
                   <div className="nav-subtree">
-                    <NavLink
-                      className={({ isActive }) => (isActive ? 'nav-sublink active' : 'nav-sublink')}
-                      to="/model-cockpit/debug"
-                    >
-                      <span>{t('nav.modelCockpitDebug')}</span>
-                    </NavLink>
                     {stationProjects.map((project) => {
                       const search = `?project_id=${project.id}`
                       const active = cockpitActive && activeProjectId === String(project.id)
@@ -560,6 +513,23 @@ export function ShellLayout() {
                     ))}
                   </div>
                 ) : null}
+                {isDebugNav && debugExpanded ? (
+                  <div className="nav-subtree">
+                    {[
+                      { path: '/debug', key: 'runtime' },
+                      { path: '/debug/model-cockpit', key: 'modelCockpit' },
+                    ].map((subItem) => (
+                      <NavLink
+                        className={({ isActive }) => (isActive ? 'nav-sublink active' : 'nav-sublink')}
+                        end={subItem.path === '/debug'}
+                        key={subItem.path}
+                        to={subItem.path}
+                      >
+                        <span>{t(`nav.debugChildren.${subItem.key}`)}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )
           })}
@@ -602,7 +572,7 @@ export function ShellLayout() {
                 <Button className="icon-button" icon={<Bell size={16} />} aria-label={t('notifications.title')} />
               </Badge>
             </Popover>
-            {hasAnyPermission(['sso_handoff']) ? (
+            {canOpenMainSite ? (
               <Tooltip title={t('auth.openMainSite')}>
                 <Button
                   className="icon-button"

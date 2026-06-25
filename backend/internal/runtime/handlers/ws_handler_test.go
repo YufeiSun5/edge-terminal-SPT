@@ -57,6 +57,25 @@ func TestRealtimeWSHandlerClientMessages(t *testing.T) {
 	}
 }
 
+func TestRealtimeWSHandlerSnapshotIntervalInjection(t *testing.T) {
+	handler := NewRealtimeWSHandler(services.NewRealtimeWSService(pipeline.NewTagManager(), pipeline.NewTaskManager()), nil, nil)
+	if handler.interval != defaultWSSnapshotInterval {
+		t.Fatalf("unexpected default interval: %s", handler.interval)
+	}
+	handler.WithSnapshotInterval(120 * time.Millisecond)
+	if handler.interval != minimumWSSnapshotInterval {
+		t.Fatalf("expected lower clamp, got %s", handler.interval)
+	}
+	handler.WithSnapshotInterval(6 * time.Second)
+	if handler.interval != maximumWSSnapshotInterval {
+		t.Fatalf("expected upper clamp, got %s", handler.interval)
+	}
+	handler.WithSnapshotInterval(750 * time.Millisecond)
+	if handler.interval != 750*time.Millisecond {
+		t.Fatalf("expected injected interval, got %s", handler.interval)
+	}
+}
+
 func TestRealtimeWSHandlerWriteVariableErrorIncludesPartialResult(t *testing.T) {
 	projectID := uint(7)
 	tags := pipeline.NewTagManager()

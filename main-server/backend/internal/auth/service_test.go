@@ -67,6 +67,7 @@ func TestLoginMeUsersAndPermission(t *testing.T) {
 	protected := router.Group("/")
 	protected.Use(svc.RequireUser())
 	protected.GET("/me", svc.Me)
+	protected.POST("/refresh", svc.Refresh)
 	protected.GET("/users", svc.RequirePermission(PermManageUsers), svc.ListUsers)
 
 	login := performJSON(router, http.MethodPost, "/login", "", `{"username":"admin","password":"Admin@12345"}`)
@@ -79,6 +80,9 @@ func TestLoginMeUsersAndPermission(t *testing.T) {
 	}
 	if me := performJSON(router, http.MethodGet, "/me", token, ""); me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"username":"admin"`) {
 		t.Fatalf("me status=%d body=%s", me.Code, me.Body.String())
+	}
+	if refresh := performJSON(router, http.MethodPost, "/refresh", token, ""); refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"access_token"`) {
+		t.Fatalf("refresh status=%d body=%s", refresh.Code, refresh.Body.String())
 	}
 	if users := performJSON(router, http.MethodGet, "/users", token, ""); users.Code != http.StatusOK || !strings.Contains(users.Body.String(), `"permissions"`) {
 		t.Fatalf("users status=%d body=%s", users.Code, users.Body.String())

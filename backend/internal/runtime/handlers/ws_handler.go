@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	wsReadLimit        = 256 * 1024
-	wsWriteWait        = 5 * time.Second
-	wsPongWait         = 45 * time.Second
-	wsPingPeriod       = 15 * time.Second
-	wsSnapshotInterval = time.Second
+	wsReadLimit               = 256 * 1024
+	wsWriteWait               = 5 * time.Second
+	wsPongWait                = 45 * time.Second
+	wsPingPeriod              = 15 * time.Second
+	defaultWSSnapshotInterval = 500 * time.Millisecond
+	minimumWSSnapshotInterval = 250 * time.Millisecond
+	maximumWSSnapshotInterval = 5 * time.Second
 )
 
 type RealtimeWSHandler struct {
@@ -33,6 +35,7 @@ type RealtimeWSHandler struct {
 	notify    *services.NotificationHub
 	audit     wsAuditStore
 	upgrader  websocket.Upgrader
+	interval  time.Duration
 }
 
 type wsClientMessage struct {
@@ -61,12 +64,24 @@ func NewRealtimeWSHandler(service *services.RealtimeWSService, detection *servic
 		detection: detection,
 		variables: variableWriter,
 		audit:     audit,
+		interval:  defaultWSSnapshotInterval,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return true
 			},
 		},
 	}
+}
+
+func (h *RealtimeWSHandler) WithSnapshotInterval(interval time.Duration) *RealtimeWSHandler {
+	if interval < minimumWSSnapshotInterval {
+		interval = minimumWSSnapshotInterval
+	}
+	if interval > maximumWSSnapshotInterval {
+		interval = maximumWSSnapshotInterval
+	}
+	h.interval = interval
+	return h
 }
 
 func (h *RealtimeWSHandler) WithNotificationHub(hub *services.NotificationHub) *RealtimeWSHandler {
@@ -102,7 +117,7 @@ func (h *RealtimeWSHandler) connect(c *gin.Context) {
 	done := make(chan struct{})
 	go readWSMessages(conn, incoming, done)
 
-	snapshotTicker := time.NewTicker(wsSnapshotInterval)
+	snapshotTicker := time.NewTicker(h.interval)
 	heartbeatTicker := time.NewTicker(wsPingPeriod)
 	defer snapshotTicker.Stop()
 	defer heartbeatTicker.Stop()

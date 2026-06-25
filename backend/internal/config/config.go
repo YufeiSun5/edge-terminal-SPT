@@ -14,6 +14,7 @@ type Config struct {
 	Database   DatabaseConfig `json:"database"`
 	Auth       AuthConfig     `json:"auth"`
 	Sync       SyncConfig     `json:"sync"`
+	Realtime   RealtimeConfig `json:"realtime"`
 	Gateways   []GatewaySeed  `json:"gateways"`
 }
 
@@ -48,6 +49,10 @@ type SyncConfig struct {
 	NodeID                     uint64 `json:"node_id"`
 	IDBlockSize                uint64 `json:"id_block_size"`
 	ConfigWatchIntervalSeconds int    `json:"config_watch_interval_seconds"`
+}
+
+type RealtimeConfig struct {
+	WSSnapshotIntervalMS int `json:"ws_snapshot_interval_ms"`
 }
 
 type ServiceClientSeed struct {
@@ -148,6 +153,9 @@ func Default() *Config {
 			IDBlockSize:                1000000000000,
 			ConfigWatchIntervalSeconds: 5,
 		},
+		Realtime: RealtimeConfig{
+			WSSnapshotIntervalMS: 500,
+		},
 	}
 }
 
@@ -202,6 +210,15 @@ func normalize(cfg *Config) {
 	}
 	if cfg.Sync.ConfigWatchIntervalSeconds <= 0 {
 		cfg.Sync.ConfigWatchIntervalSeconds = 5
+	}
+	if cfg.Realtime.WSSnapshotIntervalMS <= 0 {
+		cfg.Realtime.WSSnapshotIntervalMS = 500
+	}
+	if cfg.Realtime.WSSnapshotIntervalMS < 250 {
+		cfg.Realtime.WSSnapshotIntervalMS = 250
+	}
+	if cfg.Realtime.WSSnapshotIntervalMS > 5000 {
+		cfg.Realtime.WSSnapshotIntervalMS = 5000
 	}
 }
 
@@ -266,6 +283,12 @@ func applyEnv(cfg *Config) {
 			cfg.Sync.ConfigWatchIntervalSeconds = interval
 		}
 	}
+	if value := os.Getenv("EDGE_WS_SNAPSHOT_INTERVAL_MS"); value != "" {
+		if interval, err := strconv.Atoi(value); err == nil {
+			cfg.Realtime.WSSnapshotIntervalMS = interval
+		}
+	}
+	normalize(cfg)
 	if value := os.Getenv("EDGE_MAIN_SERVICE_TOKEN"); value != "" {
 		clientID := os.Getenv("EDGE_MAIN_SERVICE_CLIENT_ID")
 		if clientID == "" {
